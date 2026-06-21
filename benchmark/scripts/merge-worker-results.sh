@@ -183,11 +183,13 @@ jq -s \
   ($server_iterations | map(.probeRttP99Millis // 0)) as $server_p99_values |
   (spread_pct($receiver_iteration_gbps)) as $delivered_gbps_spread_pct |
   (spread_pct($server_p99_values)) as $probe_p99_spread_pct |
+  ($receiver_iteration_gbps | max_or_zero) as $max_receiver_gbps |
   (
     []
     + (if $server_iteration_count < 3 then ["insufficient-iterations"] else [] end)
     + (if $delivered_gbps_spread_pct > 10 then ["throughput-spread"] else [] end)
     + (if $probe_p99_spread_pct > 10 then ["p99-spread"] else [] end)
+    + (if $max_receiver_gbps <= 0 then ["zero-delivery"] else [] end)
   ) as $unstable_reasons |
   ($receiver_iterations | map(.bulkReceivedBytes // 0) | sum_or_zero) as $receiver_bytes |
   ($receiver_iterations | map(.bulkReceivedMessages // 0) | sum_or_zero) as $receiver_messages |

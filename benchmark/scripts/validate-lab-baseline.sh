@@ -501,6 +501,9 @@ jq -n \
         + (if (($allowUnstable | not) and (($row.unstable // false) == true)) then
             [issue("unstable-row"; "aggregate row is marked unstable"; $row; {unstableReasons: ($row.unstableReasons // [])})]
           else [] end)
+        + (if n($row.deliveredGbps) <= 0 then
+            [issue("zero-delivery"; "aggregate row has zero delivered throughput"; $row; {deliveredGbps: n($row.deliveredGbps)})]
+          else [] end)
         + (if (($allowDisconnects | not) and ((scenario($row) == "curve") or (scenario($row) == "multi-client-fanout")) and n($row.disconnects) > 0) then
             [issue("unexpected-disconnects"; "curve and fanout rows must not have disconnects"; $row; {disconnects: n($row.disconnects)})]
           else [] end)

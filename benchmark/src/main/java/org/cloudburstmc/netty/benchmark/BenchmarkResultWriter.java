@@ -156,7 +156,7 @@ public final class BenchmarkResultWriter {
                     .append("` |\n");
         }
         summary.append('\n');
-        summary.append("Rows with fewer than three measured iterations or spread above 10% should be treated as unstable and repeated with longer duration or less host contention.\n");
+        summary.append("Rows with zero delivered throughput, fewer than three measured iterations, or spread above 10% should be treated as unstable and repeated with longer duration or less host contention.\n");
         return summary.toString();
     }
 
@@ -192,6 +192,9 @@ public final class BenchmarkResultWriter {
         }
         if (p99SpreadPct > 10.0D) {
             unstableReasons.add("p99-spread");
+        }
+        if (!throughput.isEmpty() && Collections.max(throughput) <= 0.0D) {
+            unstableReasons.add("zero-delivery");
         }
         return new StabilityRow(name, iterations.size(), throughputSpreadPct, p99SpreadPct, !unstableReasons.isEmpty(), unstableReasons);
     }

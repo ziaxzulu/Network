@@ -241,6 +241,17 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testStabilitySummaryRejectsZeroDelivery() {
+        String summary = BenchmarkResultWriter.stabilitySummary(Arrays.asList(
+                iteration("case-zero", 1, 0, 0.0D),
+                iteration("case-zero", 2, 0, 0.0D),
+                iteration("case-zero", 3, 0, 0.0D)
+        ));
+
+        Assertions.assertTrue(summary.contains("| case-zero | 3 | 0.000000% | 0.000000% | true | `zero-delivery` |"));
+    }
+
+    @Test
     public void testNetemPlannerDryRunCommands() {
         List<String> apply = NetemCommandPlanner.apply("eth0", "50ms", "5ms", "2%");
         Assertions.assertEquals("tc qdisc replace dev eth0 root netem delay 50ms 5ms loss 2%", apply.get(0));

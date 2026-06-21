@@ -358,11 +358,13 @@ write_suite_aggregates() {
     ($rows | map(.probeRttP99Millis)) as $p99 |
     (spread_pct($throughput)) as $throughputSpread |
     (spread_pct($p99)) as $p99Spread |
+    ($throughput | max) as $maxDeliveredGbps |
     (
       []
       + (if ($rows | length) < 3 then ["insufficient-iterations"] else [] end)
       + (if $throughputSpread > $stabilityThreshold then ["throughput-spread"] else [] end)
       + (if $p99Spread > $stabilityThreshold then ["p99-spread"] else [] end)
+      + (if $maxDeliveredGbps <= 0 then ["zero-delivery"] else [] end)
     ) as $unstableReasons |
     {
       summaryKind: "aggregate",
@@ -487,7 +489,7 @@ write_suite_aggregates() {
     echo
     echo "## Aggregate Stability"
     echo
-    echo "- Stability threshold: fewer than \`3\` measured iterations, or \`$stability_threshold_pct%\` relative spread for delivered throughput or p99 probe RTT."
+    echo "- Stability threshold: zero delivered throughput, fewer than \`3\` measured iterations, or \`$stability_threshold_pct%\` relative spread for delivered throughput or p99 probe RTT."
     echo "- Aggregate JSONL: \`$suite_aggregate_jsonl\`"
     echo "- Aggregate CSV: \`$suite_aggregate_csv\`"
     echo

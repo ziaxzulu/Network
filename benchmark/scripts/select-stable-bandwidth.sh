@@ -153,6 +153,7 @@ jq -c -s \
     []
     + (if (($allowUnstable | not) and (($row.unstable // false) == true)) then ["unstable"] else [] end)
     + (if n($row.measuredIterations) < $minIterations then ["insufficient-iterations"] else [] end)
+    + (if n($row.deliveredGbps) <= 0 then ["zero-delivery"] else [] end)
     + (if n($row.disconnects) > 0 then ["disconnects"] else [] end)
     + (if $maxP99Millis > 0 and n($row.probeRttP99Millis) > $maxP99Millis then ["p99-rtt"] else [] end)
     + (if $maxQueueBytes > 0 and n($row.maxQueuedBytes) > $maxQueueBytes then ["queue-bytes"] else [] end)

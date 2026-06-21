@@ -58,7 +58,7 @@ Benchmark implications:
 
 ## Baseline Matrix
 
-Run each baseline with at least `3` measured iterations after warmup. Treat a run as unstable when it has fewer than `3` measured iterations, delivered throughput spread exceeds `10%`, or p99 probe RTT spread exceeds `10%`.
+Run each baseline with at least `3` measured iterations after warmup. Treat a run as unstable when it has zero delivered throughput, fewer than `3` measured iterations, delivered throughput spread exceeds `10%`, or p99 probe RTT spread exceeds `10%`.
 
 ### 1. Best-Case Bandwidth
 
@@ -391,7 +391,7 @@ The merged directory exposes a `suite-aggregate.jsonl` row, so it can be compare
 
 For a full lab baseline campaign, prefer `benchmark/scripts/plan-lab-baseline.sh`. It composes the remote bandwidth curve and contention planners, writes host-capture commands and a topology template, schedules non-overlapping case starts, and produces a combined `suite-aggregate.jsonl` for baseline-of-record comparisons.
 
-Use `benchmark/scripts/validate-lab-baseline.sh` on the combined output before accepting a lab run as the baseline of record. The validator checks required scenario families, planned manifest rows when manifests are supplied, manifest-to-aggregate client/payload/per-client-rate consistency, measured iteration counts, unstable flags, unexpected curve/fanout disconnects, retry-pressure signals in disappearance rows, selected bandwidth-capacity rows, topology metadata, host reports, and optional contention gates for minimum client count, per-client offered Mbps, healthy-client fairness, healthy-client send work, affected-client send work, and contention p99 latency. `plan-lab-baseline.sh` enables planned contention scale/rate, healthy fairness, and send-work gates by default.
+Use `benchmark/scripts/validate-lab-baseline.sh` on the combined output before accepting a lab run as the baseline of record. The validator checks required scenario families, planned manifest rows when manifests are supplied, manifest-to-aggregate client/payload/per-client-rate consistency, measured iteration counts, unstable flags, zero-delivery rows, unexpected curve/fanout disconnects, retry-pressure signals in disappearance rows, selected bandwidth-capacity rows, topology metadata, host reports, and optional contention gates for minimum client count, per-client offered Mbps, healthy-client fairness, healthy-client send work, affected-client send work, and contention p99 latency. `plan-lab-baseline.sh` enables planned contention scale/rate, healthy fairness, and send-work gates by default.
 
 After validation passes, use `benchmark/scripts/promote-lab-baseline.sh` to create the durable comparison package. It copies the comparable aggregate, validation reports, capacity selector artifacts, topology/host evidence, and planning manifests into a named baseline directory and updates a `latest` symlink for candidate comparisons.
 
