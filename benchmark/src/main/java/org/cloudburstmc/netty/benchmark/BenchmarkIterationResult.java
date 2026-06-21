@@ -30,6 +30,7 @@ public final class BenchmarkIterationResult {
     public final RakReliability reliability;
     public final double targetMbps;
     public final double targetClientMbps;
+    public final DisappearanceMode disappearanceMode;
     public final long elapsedMillis;
     public final long bulkSentMessages;
     public final long bulkSentBytes;
@@ -55,8 +56,9 @@ public final class BenchmarkIterationResult {
     public final List<PeerStats.Snapshot> peers;
 
     public BenchmarkIterationResult(String name, int iteration, int clients, int payloadSize, RakReliability reliability,
-                                    double targetMbps, double targetClientMbps, long elapsedMillis,
-                                    LatencyHistogram.Snapshot probeRtt, List<PeerStats.Snapshot> peers) {
+                                    double targetMbps, double targetClientMbps, DisappearanceMode disappearanceMode,
+                                    long elapsedMillis, LatencyHistogram.Snapshot probeRtt,
+                                    List<PeerStats.Snapshot> peers) {
         this.name = name;
         this.iteration = iteration;
         this.clients = clients;
@@ -64,6 +66,7 @@ public final class BenchmarkIterationResult {
         this.reliability = reliability;
         this.targetMbps = targetMbps;
         this.targetClientMbps = targetClientMbps;
+        this.disappearanceMode = disappearanceMode;
         this.elapsedMillis = elapsedMillis;
         this.probeRtt = probeRtt;
         this.peers = Collections.unmodifiableList(new ArrayList<>(peers));

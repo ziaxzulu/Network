@@ -16,9 +16,26 @@
 
 package org.cloudburstmc.netty.benchmark;
 
-import org.cloudburstmc.netty.channel.raknet.RakReliability;
+public enum DisappearanceMode {
+    CLOSE("close"),
+    STOP_READING("stop-reading");
 
-record BenchmarkCase(String name, int clients, int impairedClients, int disappearingClients, int payloadSize,
-                     RakReliability reliability, double targetMbps, double targetClientMbps, long disappearAfterMillis,
-                     DisappearanceMode disappearanceMode) {
+    private final String cliName;
+
+    DisappearanceMode(String cliName) {
+        this.cliName = cliName;
+    }
+
+    public String cliName() {
+        return this.cliName;
+    }
+
+    public static DisappearanceMode parse(String value) {
+        for (DisappearanceMode mode : values()) {
+            if (mode.cliName.equalsIgnoreCase(value) || mode.name().equalsIgnoreCase(value.replace('-', '_'))) {
+                return mode;
+            }
+        }
+        throw new IllegalArgumentException("Unknown disappearance mode: " + value);
+    }
 }

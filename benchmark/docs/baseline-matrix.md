@@ -16,13 +16,13 @@ The current RakNet runner is a useful starting synthetic for established-channel
 - It supports local loopback runs for regression checks and remote server/client worker roles for lab runs.
 - It can sweep payload size, reliability mode, offered rate, and client count.
 - It supports `--per-client-mbps` so fanout and fairness runs can express production-style per-client pull targets directly.
-- It includes an initial close-mode `disappearing-clients` scenario where selected established clients close during the measured window.
+- It includes a `disappearing-clients` scenario where selected established clients either close or stop reading during the measured window.
 
 It should not yet be treated as a complete production synthetic:
 
 - The `fairness` scenario currently labels impaired clients but does not itself apply per-client impairment. Use Linux `tc netem` or remote workers to create real impairment until the harness grows per-client impairment support.
 - The current workload is fixed-size synthetic payloads. It does not yet model Bedrock packet mix, packet bursts, compression batches, or gameplay event distribution.
-- The client-disappearance scenario currently covers close-mode only. It does not yet cover stop-reading or blackholed clients that can keep retransmission pressure alive.
+- The client-disappearance scenario covers close-mode and local stop-reading mode. True blackhole behavior still needs external `tc`/routing rules or remote worker support.
 - Local loopback is only a repeatable development baseline. Line-rate claims require separate machines, pinned CPU/NIC setup, and controlled network impairment.
 
 ## Production Usage Signals
@@ -46,7 +46,7 @@ Benchmark implications:
 - Prefer payload sizes near real RakNet/Bedrock shapes: small control packets, threshold-adjacent packets around `512B`, near-MTU batches around `1200-1400B`, and split-heavy chunk/resource-pack payloads.
 - Add a future batch-shape workload that sends bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
 - Add a future Bedrock-like workload layer that length-frames logical packets, optionally compresses batches with thresholds `1`, `256`, and `512`, and then sends over RakNet.
-- Add grouped fanout plus blackhole/stop-reading disappearance modes before treating the suite as production-representative.
+- Add grouped fanout plus true blackhole disappearance profiles before treating the suite as production-representative.
 - Add a later proxy profile with one downstream and one upstream RakNet channel per user to represent pass-through deployments.
 
 ## Baseline Matrix
@@ -172,20 +172,21 @@ Purpose: reproduce production behavior where clients vanish, stop reading, or be
 The harness now includes a close-mode starting point:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode close --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode stop-reading --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5"
 ```
 
 The scenario can:
 
 - close a configurable percentage of clients after warmup
+- stop reads on a configurable percentage of local clients after warmup while leaving server peers active
 - keep healthy clients on the same configured per-client target
 - report all-client fairness, healthy-client fairness, disconnects, queue growth, retransmits, stale datagrams, and channel state
 
-The remaining required gap is harsher disappearance behavior:
+The remaining required gap is harsher blackhole behavior:
 
 - blackhole a configurable percentage of client traffic with `tc` or worker-side drop behavior
-- stop reading without a clean close
-- keep retry pressure alive long enough to measure retransmit storms and queue drain behavior
+- keep retry pressure alive under real packet drops long enough to measure retransmit storms and queue drain behavior
 
 Initial target shape:
 
@@ -193,7 +194,7 @@ Initial target shape:
 | --- | --- |
 | Clients | `100`, `500`, `1000` |
 | Disappearing clients | `1%`, `5%`, `10%` |
-| Disappearance mode | close now; stop reading and blackhole later |
+| Disappearance mode | close, stop reading; blackhole later |
 | Per-client target | `1Mbps`, `5Mbps` |
 | Runtime | `10s` warmup, `60s` measured |
 
@@ -257,7 +258,8 @@ Use this smaller set as the first recurring baseline before expanding the full m
 | `fairness-100-10poor` | `100` | `512` | `reliable_ordered` | 10 poor clients | `5Mbps` per client |
 | `loss-1c-50ms-2pct` | `1` | `1200` | `reliable_ordered` | `50ms`, `2%` loss | ramp |
 | `loss-100-50ms-2pct` | `100` | `512` | `reliable_ordered` | `50ms`, `2%` loss | `5Mbps` per client |
-| `disappear-100-10pct` | `100` | `512` | `reliable_ordered` | close 10 clients now; blackhole later | `5Mbps` per client |
+| `disappear-100-10pct-close` | `100` | `512` | `reliable_ordered` | close 10 clients | `5Mbps` per client |
+| `disappear-100-10pct-stopread` | `100` | `512` | `reliable_ordered` | stop reads on 10 clients | `5Mbps` per client |
 | `batch-fanout-100` | `100` | mixed | `reliable_ordered` | perfect | `10ms`, `20ms`, `50ms` burst cadence |
 
 ## Interpretation Rules

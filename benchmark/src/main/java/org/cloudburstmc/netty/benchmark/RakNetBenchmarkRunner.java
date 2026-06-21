@@ -92,7 +92,7 @@ public final class RakNetBenchmarkRunner {
         double targetClientMbps = config.effectiveTargetClientMbps(targetMbps, config.clients());
         int affectedClients = Math.max(config.impairedClients(), config.disappearingClients());
         return new BenchmarkCase(name, config.clients(), affectedClients, config.disappearingClients(), payloadSize,
-                reliability, targetMbps, targetClientMbps, config.disappearAfterMillis());
+                reliability, targetMbps, targetClientMbps, config.disappearAfterMillis(), config.disappearanceMode());
     }
 
     private void runLocal(BenchmarkConfig config, BenchmarkCase benchmarkCase, BenchmarkRunResult result) throws Exception {
@@ -168,6 +168,7 @@ public final class RakNetBenchmarkRunner {
                 benchmarkCase.reliability(),
                 benchmarkCase.targetMbps(),
                 benchmarkCase.targetClientMbps(),
+                benchmarkCase.disappearanceMode(),
                 elapsedMillis,
                 session.probeRtt.snapshot(),
                 session.metrics.peerSnapshots()
@@ -206,6 +207,7 @@ public final class RakNetBenchmarkRunner {
                         benchmarkCase.reliability(),
                         benchmarkCase.targetMbps(),
                         benchmarkCase.targetClientMbps(),
+                        benchmarkCase.disappearanceMode(),
                         elapsedMillis,
                         probeRtt.snapshot(),
                         metrics.peerSnapshots()
@@ -263,6 +265,7 @@ public final class RakNetBenchmarkRunner {
                     benchmarkCase.reliability(),
                     benchmarkCase.targetMbps(),
                     benchmarkCase.targetClientMbps(),
+                    benchmarkCase.disappearanceMode(),
                     elapsedMillis,
                     new LatencyHistogram().snapshot(),
                     snapshots
@@ -374,7 +377,7 @@ public final class RakNetBenchmarkRunner {
         while (System.nanoTime() < endNanos) {
             long now = System.nanoTime();
             if (!disappeared && now >= disappearAtNanos) {
-                closeDisappearingClients(clientChannels, peers, benchmarkCase.disappearingClients());
+                applyDisappearance(clientChannels, peers, benchmarkCase);
                 disappeared = true;
             }
 
@@ -401,6 +404,26 @@ public final class RakNetBenchmarkRunner {
             long sleepNanos = Math.min(Math.min(nextBulkNanos, nextProbeNanos) - now, TimeUnit.MILLISECONDS.toNanos(1L));
             if (sleepNanos > 0L) {
                 LockSupport.parkNanos(sleepNanos);
+            }
+        }
+    }
+
+    private static void applyDisappearance(List<Channel> clientChannels, List<ServerPeer> peers, BenchmarkCase benchmarkCase) {
+        if (benchmarkCase.disappearanceMode() == DisappearanceMode.STOP_READING) {
+            stopReadingClients(clientChannels, benchmarkCase.disappearingClients());
+            return;
+        }
+        closeDisappearingClients(clientChannels, peers, benchmarkCase.disappearingClients());
+    }
+
+    private static void stopReadingClients(List<Channel> clientChannels, int count) {
+        int limit = Math.min(count, clientChannels.size());
+        for (int i = 0; i < limit; i++) {
+            Channel channel = clientChannels.get(i);
+            channel.config().setAutoRead(false);
+            Channel transport = channel.parent();
+            if (transport != null) {
+                transport.config().setAutoRead(false);
             }
         }
     }

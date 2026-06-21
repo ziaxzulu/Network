@@ -52,6 +52,7 @@ public final class BenchmarkMain {
         System.out.println("  --reliability reliable_ordered|reliable|unreliable");
         System.out.println("  --rate-mbps 1000 --per-client-mbps 5 --target-gbps 1 --rates-mbps 100,500,1000,unlimited");
         System.out.println("  --warmup 5s --duration 10s --iterations 3 --probe-interval 100ms --disappear-after 5s");
+        System.out.println("  --disappear-mode close|stop-reading");
         System.out.println("  --out build/benchmark-results --run-id my-run");
     }
 }

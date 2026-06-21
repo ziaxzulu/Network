@@ -37,12 +37,13 @@ Local loopback runs are useful for regression checks, but they are not proof of 
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --rates-mbps 100,500,1000,unlimited"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="multi-client-fanout --clients 100 --warmup 2s --duration 10s --payload-size 256 --per-client-mbps 5"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="fairness --clients 100 --impaired-clients 10 --warmup 2s --duration 15s --per-client-mbps 5"
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --warmup 2s --duration 15s --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode close --warmup 2s --duration 15s --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode stop-reading --warmup 2s --duration 15s --per-client-mbps 5"
 ```
 
 Use `--rate-mbps 0` or `--rates-mbps unlimited` for an uncapped sender. Use `--target-gbps 1` as shorthand for `--rate-mbps 1000`. For production-style fanout, prefer `--per-client-mbps 5`; the runner converts that to aggregate offered rate from the established client count.
 
-The `disappearing-clients` scenario currently implements the close mode: all clients connect and warm up, then the first `--disappearing-clients` established clients close during the measured window. Blackhole and stop-reading modes still need external `tc`/worker support.
+The `disappearing-clients` scenario supports `--disappear-mode close` for clean disconnect churn and `--disappear-mode stop-reading` for local retry-pressure smoke runs where selected clients stop reading while the server keeps sending. Use external `tc`/routing rules or remote workers for true blackhole profiles.
 
 ## Remote Worker Runs
 
@@ -92,6 +93,7 @@ Important fields:
 - `deliveredGbps`: receiver-observed payload throughput
 - `offeredGbps`: benchmark sender payload rate
 - `targetClientMbps`: configured or derived per-client offered target
+- `disappearanceMode`: clean close or stop-reading behavior for disappearance runs
 - `probeRttP95Millis` and `probeRttP99Millis`: latency under bulk load
 - `fairnessIndex`: Jain fairness index across clients, where `1.0` is perfectly even delivery
 - `healthyFairnessIndex`: Jain fairness for clients not marked impaired/disappearing

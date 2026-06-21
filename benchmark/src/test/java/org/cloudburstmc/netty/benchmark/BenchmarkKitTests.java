@@ -69,6 +69,7 @@ public class BenchmarkKitTests {
                 "--clients", "100",
                 "--per-client-mbps", "5",
                 "--disappearing-clients", "10",
+                "--disappear-mode", "stop-reading",
                 "--disappear-after", "250ms",
                 "--duration", "1s",
                 "--payload-size", "500"
@@ -76,6 +77,7 @@ public class BenchmarkKitTests {
 
         Assertions.assertEquals(BenchmarkScenario.DISAPPEARING_CLIENTS, config.scenario());
         Assertions.assertEquals(10, config.disappearingClients());
+        Assertions.assertEquals(DisappearanceMode.STOP_READING, config.disappearanceMode());
         Assertions.assertEquals(250, config.disappearAfterMillis());
         Assertions.assertEquals(500.0D, config.effectiveTargetMbps(config.rateMbps(), config.clients()), 0.001D);
         Assertions.assertEquals(5.0D, config.effectiveTargetClientMbps(500.0D, config.clients()), 0.001D);
@@ -141,6 +143,7 @@ public class BenchmarkKitTests {
                 RakReliability.RELIABLE_ORDERED,
                 0.0D,
                 0.0D,
+                DisappearanceMode.CLOSE,
                 1000,
                 histogram.snapshot(),
                 Arrays.asList(peer.snapshot())
@@ -156,8 +159,10 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("unit", summary.path("runId").asText());
         Assertions.assertTrue(summary.has("perClientTargetMbps"));
         Assertions.assertTrue(summary.has("disappearingClients"));
+        Assertions.assertEquals("close", summary.path("disappearanceMode").asText());
         Assertions.assertEquals(1, summary.path("iterations").size());
         Assertions.assertTrue(summary.path("iterations").get(0).has("deliveredGbps"));
+        Assertions.assertEquals("close", summary.path("iterations").get(0).path("disappearanceMode").asText());
         Assertions.assertTrue(summary.path("iterations").get(0).has("healthyFairnessIndex"));
         Assertions.assertTrue(summary.path("iterations").get(0).has("disconnects"));
         Assertions.assertTrue(summary.path("iterations").get(0).path("peers").get(0).has("serverBytesOut"));
@@ -173,6 +178,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("RELIABLE_ORDERED", rows.get(0).get("reliability"));
         Assertions.assertTrue(rows.get(0).containsKey("delivered_gbps"));
         Assertions.assertTrue(rows.get(0).containsKey("target_client_mbps"));
+        Assertions.assertEquals("close", rows.get(0).get("disappearance_mode"));
         Assertions.assertTrue(rows.get(0).containsKey("healthy_fairness"));
         Assertions.assertTrue(rows.get(0).containsKey("disconnects"));
         Assertions.assertTrue(rows.get(0).containsKey("max_queued_bytes"));

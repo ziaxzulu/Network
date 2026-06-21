@@ -85,8 +85,8 @@ public final class BenchmarkResultWriter {
             writer.write("- Role: `" + result.config().role().name().toLowerCase(Locale.ROOT) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
-            writer.write("| Name | Iteration | Clients | Payload | Target Mbps | Target/client Mbps | Delivered Gbps | Healthy Gbps | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Disconnects | Stale | NACK In | Max Queue |\n");
-            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+            writer.write("| Name | Iteration | Clients | Payload | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Healthy Gbps | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Disconnects | Stale | NACK In | Max Queue |\n");
+            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
                 writer.write("| " + iteration.name
                         + " | " + iteration.iteration
@@ -94,6 +94,7 @@ public final class BenchmarkResultWriter {
                         + " | " + iteration.payloadSize
                         + " | " + format(iteration.targetMbps)
                         + " | " + format(iteration.targetClientMbps)
+                        + " | " + iteration.disappearanceMode.cliName()
                         + " | " + format(iteration.deliveredGbps)
                         + " | " + format(iteration.healthyDeliveredGbps)
                         + " | " + format(iteration.probeRtt.percentileMillis(95.0D))
@@ -159,6 +160,7 @@ public final class BenchmarkResultWriter {
             "reliability",
             "target_mbps",
             "target_client_mbps",
+            "disappearance_mode",
             "elapsed_ms",
             "offered_gbps",
             "delivered_gbps",
@@ -187,6 +189,7 @@ public final class BenchmarkResultWriter {
             String reliability,
             @JsonProperty("target_mbps") double targetMbps,
             @JsonProperty("target_client_mbps") double targetClientMbps,
+            @JsonProperty("disappearance_mode") String disappearanceMode,
             @JsonProperty("elapsed_ms") long elapsedMillis,
             @JsonProperty("offered_gbps") double offeredGbps,
             @JsonProperty("delivered_gbps") double deliveredGbps,
@@ -216,6 +219,7 @@ public final class BenchmarkResultWriter {
                     iteration.reliability.name(),
                     iteration.targetMbps,
                     iteration.targetClientMbps,
+                    iteration.disappearanceMode.cliName(),
                     iteration.elapsedMillis,
                     iteration.offeredGbps,
                     iteration.deliveredGbps,
@@ -248,6 +252,7 @@ public final class BenchmarkResultWriter {
             int disappearingClients,
             Double perClientTargetMbps,
             long disappearAfterMillis,
+            String disappearanceMode,
             long warmupMillis,
             long durationMillis,
             int iterationsRequested,
@@ -269,6 +274,7 @@ public final class BenchmarkResultWriter {
                     config.disappearingClients(),
                     config.perClientRateMbps() >= 0.0D ? config.perClientRateMbps() : null,
                     config.disappearAfterMillis(),
+                    config.disappearanceMode().cliName(),
                     config.warmupMillis(),
                     config.durationMillis(),
                     config.iterations(),
@@ -312,6 +318,7 @@ public final class BenchmarkResultWriter {
             String reliability,
             double targetMbps,
             double targetClientMbps,
+            String disappearanceMode,
             long elapsedMillis,
             long bulkSentMessages,
             long bulkSentBytes,
@@ -353,6 +360,7 @@ public final class BenchmarkResultWriter {
                     iteration.reliability.name(),
                     iteration.targetMbps,
                     iteration.targetClientMbps,
+                    iteration.disappearanceMode.cliName(),
                     iteration.elapsedMillis,
                     iteration.bulkSentMessages,
                     iteration.bulkSentBytes,

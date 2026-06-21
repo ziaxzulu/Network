@@ -39,6 +39,7 @@ public final class BenchmarkConfig {
     private long warmupMillis = 5000;
     private long durationMillis = 10000;
     private long disappearAfterMillis = -1L;
+    private DisappearanceMode disappearanceMode = DisappearanceMode.CLOSE;
     private long startDelayMillis = 3000;
     private int iterations = 3;
     private int workers = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
@@ -120,6 +121,8 @@ public final class BenchmarkConfig {
             this.durationMillis = parseDurationMillis(value);
         } else if ("disappear-after".equals(key) || "disconnect-after".equals(key)) {
             this.disappearAfterMillis = parseDurationMillis(value);
+        } else if ("disappear-mode".equals(key) || "disappearance-mode".equals(key) || "disconnect-mode".equals(key)) {
+            this.disappearanceMode = DisappearanceMode.parse(value);
         } else if ("start-delay".equals(key)) {
             this.startDelayMillis = parseDurationMillis(value);
         } else if ("iterations".equals(key)) {
@@ -262,6 +265,10 @@ public final class BenchmarkConfig {
             return this.disappearAfterMillis;
         }
         return Math.max(1L, this.durationMillis / 2L);
+    }
+
+    public DisappearanceMode disappearanceMode() {
+        return this.disappearanceMode;
     }
 
     public long startDelayMillis() {
