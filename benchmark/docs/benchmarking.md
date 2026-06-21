@@ -4,7 +4,7 @@ This benchmark kit measures established RakNet channel behavior. It does not mea
 
 The primary benchmark shape is server-to-client bulk traffic with a separate small probe stream. Bulk messages load the RakNet stack; probes are echoed by clients so the server can report probe RTT while the bulk stream is active.
 
-See [`baseline-matrix.md`](baseline-matrix.md) for the recommended recurring baseline matrix and current production-synthetic gaps.
+See [`baseline-matrix.md`](baseline-matrix.md) for the recommended recurring baseline matrix and current production-synthetic gaps. See [`production-usage-evidence.md`](production-usage-evidence.md) for the source evidence behind the synthetic, and [`lab-baseline-runbook.md`](lab-baseline-runbook.md) for the lab workflow that captures host state, remote-worker topology, impairment profiles, and baseline-versus-candidate comparison artifacts.
 
 ## Build
 
@@ -75,6 +75,8 @@ benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/ben
 ```
 
 `smoke` is short and intended for local regression. `local` is longer but still loopback-only. `lab` matches the recurring baseline matrix and should be used on controlled hosts/NICs, optionally with `tc netem` applied outside the JVM.
+
+For baseline-of-record runs, follow [`lab-baseline-runbook.md`](lab-baseline-runbook.md) and capture host reports with `benchmark/scripts/capture-lab-host.sh` before running the suite.
 
 To compare an optimization branch against a saved baseline, run the same suite shape twice and compare the generated `suite-summary.jsonl` files:
 

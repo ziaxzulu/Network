@@ -2,6 +2,8 @@
 
 This document defines the baseline benchmark coverage we want before optimizing the RakNet transport or adding future transports such as WebRTC.
 
+Source evidence for the production traffic shape is recorded in [`production-usage-evidence.md`](production-usage-evidence.md). This matrix is derived from that evidence plus the current benchmark implementation.
+
 The benchmark suite is meant to answer two different questions:
 
 - What is the best-case capacity of the transport stack when the network is not the bottleneck?
