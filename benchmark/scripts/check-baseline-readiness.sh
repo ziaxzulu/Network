@@ -218,6 +218,7 @@ jq -n \
   '{
     checkedAt: $checkedAt,
     ready: (($issues | length) == 0),
+    issueCount: ($issues | length),
     labBaseline: {
       path: $labBaseline,
       validation: ($labValidation[0] // null)
@@ -235,6 +236,7 @@ jq -n \
   echo
   echo "- Checked: \`$(jq -r '.checkedAt' "$readiness_json")\`"
   echo "- Result: \`$(jq -r 'if .ready then "ready" else "not-ready" end' "$readiness_json")\`"
+  echo "- Issues: \`$(jq -r '.issueCount' "$readiness_json")\`"
   echo "- Lab baseline: \`$lab_baseline\`"
   echo "- Impairment baseline: \`$impairment_baseline\`"
   echo

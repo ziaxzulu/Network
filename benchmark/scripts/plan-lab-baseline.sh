@@ -111,6 +111,7 @@ Outputs:
   curve-plan/                      Plan from plan-remote-worker-curve.sh.
   contention-plan/                 Plan from plan-remote-contention.sh.
   host-capture-commands.sh         Read-only host capture helper.
+  check-plan-freshness.sh          Fails when scheduled start times are expired or too close.
   merge-all.sh                     Runs both merge scripts and writes combined/suite-aggregate.jsonl.
   topology-template.md             Baseline metadata template.
   README.md                        Run order and acceptance notes.
@@ -484,6 +485,7 @@ curve_plan="$output_root/curve-plan"
 raised_curve_plan="$output_root/curve-raised-plan"
 contention_plan="$output_root/contention-plan"
 host_capture_script="$output_root/host-capture-commands.sh"
+freshness_script="$output_root/check-plan-freshness.sh"
 merge_all_script="$output_root/merge-all.sh"
 topology_template="$output_root/topology-template.md"
 readme="$output_root/README.md"
@@ -791,6 +793,81 @@ sed -i "s#__MAX_CONTENTION_P99_MS__#$max_contention_p99_ms#g" "$merge_all_script
 sed -i "s#__MIN_CONTENTION_CLIENTS__#$validation_min_contention_clients#g" "$merge_all_script"
 sed -i "s#__MIN_CONTENTION_TARGET_CLIENT_MBPS__#$per_client_mbps#g" "$merge_all_script"
 
+cat >"$freshness_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+MIN_LEAD_SECONDS="\${MIN_LEAD_SECONDS:-60}"
+
+if ! [[ "\$MIN_LEAD_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "MIN_LEAD_SECONDS must be a non-negative integer" >&2
+  exit 2
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required to check lab plan freshness" >&2
+  exit 2
+fi
+
+iso_from_ms() {
+  local millis="\$1"
+  date -u -d "@\$((millis / 1000))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%sms' "\$millis"
+}
+
+now_seconds="\$(date +%s)"
+threshold_ms=\$(((now_seconds + MIN_LEAD_SECONDS) * 1000))
+status=0
+manifests=(
+  "$curve_plan/manifest.jsonl"
+EOF
+
+if [[ -n "$raised_packet_limit" ]]; then
+  cat >>"$freshness_script" <<EOF
+  "$raised_curve_plan/manifest.jsonl"
+EOF
+fi
+
+cat >>"$freshness_script" <<EOF
+  "$contention_plan/manifest.jsonl"
+)
+
+echo "# Lab Plan Freshness"
+echo "now=\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "minimum_lead_seconds=\$MIN_LEAD_SECONDS"
+echo
+
+for manifest in "\${manifests[@]}"; do
+  if [[ ! -s "\$manifest" ]]; then
+    echo "missing manifest: \$manifest" >&2
+    status=1
+    continue
+  fi
+
+  count="\$(jq -s 'length' "\$manifest")"
+  earliest="\$(jq -s 'map(.startAtEpochMillis // empty) | min // empty' "\$manifest")"
+  latest="\$(jq -s 'map(.startAtEpochMillis // empty) | max // empty' "\$manifest")"
+  if [[ -z "\$earliest" || -z "\$latest" ]]; then
+    echo "stale: \$manifest has no startAtEpochMillis values" >&2
+    status=1
+    continue
+  fi
+
+  echo "manifest=\$manifest"
+  echo "cases=\$count"
+  echo "earliest_start=\$(iso_from_ms "\$earliest")"
+  echo "latest_start=\$(iso_from_ms "\$latest")"
+  if [[ "\$earliest" -le "\$threshold_ms" ]]; then
+    echo "result=stale-or-too-close"
+    echo "reason=earliest start is less than MIN_LEAD_SECONDS from now; regenerate the lab plan before running workers"
+    status=1
+  else
+    echo "result=fresh"
+  fi
+  echo
+done
+
+exit "\$status"
+EOF
+
 cat >"$topology_template" <<EOF
 # Lab Baseline Topology
 
@@ -847,6 +924,7 @@ EOF
   fi
   echo "- Contention plan: \`$contention_plan\`"
   echo "- Max queued bytes cap: \`${max_queued_bytes:-library default}\`"
+  echo "- Freshness check: \`$freshness_script\`"
   echo "- Combined merge: \`$merge_all_script\`"
   echo "- Host capture: \`$host_capture_script\`"
   echo "- Topology template: \`$topology_template\`"
@@ -855,33 +933,35 @@ EOF
   echo
   echo "## Run Order"
   echo
-  echo "1. Copy or fill \`topology-template.md\` as \`topology.md\` next to the final artifacts."
-  echo "2. Run \`host-capture-commands.sh\` on the server and each receiver host with \`HOST_ROLE\` set, for example \`HOST_ROLE=server INTERFACE=$interface ./host-capture-commands.sh\`."
-  echo "3. Start \`curve-plan/server-commands.sh\` on the server host, then run the curve receiver scripts once the server is listening."
-  echo "4. Copy curve receiver artifacts back under \`$curve_artifact_root\` on the merge host."
+  echo "1. Run \`check-plan-freshness.sh\` on the merge host. Regenerate the plan if it reports \`stale-or-too-close\`."
+  echo "2. Copy or fill \`topology-template.md\` as \`topology.md\` next to the final artifacts."
+  echo "3. Run \`host-capture-commands.sh\` on the server and each receiver host with \`HOST_ROLE\` set, for example \`HOST_ROLE=server INTERFACE=$interface ./host-capture-commands.sh\`."
+  echo "4. Start \`curve-plan/server-commands.sh\` on the server host, then run the curve receiver scripts once the server is listening."
+  echo "5. Copy curve receiver artifacts back under \`$curve_artifact_root\` on the merge host."
   if [[ -n "$raised_packet_limit" ]]; then
-    echo "5. Start \`curve-raised-plan/server-commands.sh\` on the server host, then run the raised-limiter curve receiver scripts once the server is listening."
-    echo "6. Copy raised-limiter curve receiver artifacts back under \`$raised_curve_artifact_root\` on the merge host."
-    echo "7. Start \`contention-plan/server-commands.sh\` on the server host, then run the contention receiver scripts once the server is listening."
-    echo "8. Copy contention receiver artifacts back under \`$contention_artifact_root\` on the merge host."
-    echo "9. Run \`merge-all.sh\` to produce \`combined/suite-aggregate.jsonl\`, combined curve \`bandwidth-capacity.*\` selector files, and validation reports. Validation expects \`topology.md\` and host reports under the artifact root."
+    echo "6. Start \`curve-raised-plan/server-commands.sh\` on the server host, then run the raised-limiter curve receiver scripts once the server is listening."
+    echo "7. Copy raised-limiter curve receiver artifacts back under \`$raised_curve_artifact_root\` on the merge host."
+    echo "8. Start \`contention-plan/server-commands.sh\` on the server host, then run the contention receiver scripts once the server is listening."
+    echo "9. Copy contention receiver artifacts back under \`$contention_artifact_root\` on the merge host."
+    echo "10. Run \`merge-all.sh\` to produce \`combined/suite-aggregate.jsonl\`, combined curve \`bandwidth-capacity.*\` selector files, and validation reports. Validation expects \`topology.md\` and host reports under the artifact root."
   else
-    echo "5. Start \`contention-plan/server-commands.sh\` on the server host, then run the contention receiver scripts once the server is listening."
-    echo "6. Copy contention receiver artifacts back under \`$contention_artifact_root\` on the merge host."
-    echo "7. Run \`merge-all.sh\` to produce \`combined/suite-aggregate.jsonl\`, curve \`bandwidth-capacity.*\` selector files, and validation reports. Validation expects \`topology.md\` and host reports under the artifact root."
+    echo "6. Start \`contention-plan/server-commands.sh\` on the server host, then run the contention receiver scripts once the server is listening."
+    echo "7. Copy contention receiver artifacts back under \`$contention_artifact_root\` on the merge host."
+    echo "8. Run \`merge-all.sh\` to produce \`combined/suite-aggregate.jsonl\`, curve \`bandwidth-capacity.*\` selector files, and validation reports. Validation expects \`topology.md\` and host reports under the artifact root."
   fi
   echo
-  echo "The generated start times are non-overlapping by default. Regenerate this plan shortly before lab execution if the scheduled timestamps have passed."
+  echo "The generated start times are non-overlapping by default. Regenerate this plan shortly before lab execution if \`check-plan-freshness.sh\` fails. Set \`MIN_LEAD_SECONDS\` to require a larger scheduling buffer."
   echo
   echo "For exact healthy/affected server splits in multi-host contention runs, keep impaired or disappearing clients isolated to one receiver host. Otherwise server-side affected splits are accept-order based and advisory."
 } >"$readme"
 
-chmod +x "$host_capture_script" "$merge_all_script"
+chmod +x "$host_capture_script" "$freshness_script" "$merge_all_script"
 
 echo "Lab baseline plan: $output_root"
 echo "Curve plan: $curve_plan"
 echo "Contention plan: $contention_plan"
 echo "Host capture commands: $host_capture_script"
+echo "Freshness check: $freshness_script"
 echo "Merge all: $merge_all_script"
 echo "Topology template: $topology_template"
 echo "README: $readme"

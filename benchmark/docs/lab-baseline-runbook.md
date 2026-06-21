@@ -111,7 +111,7 @@ benchmark/scripts/plan-lab-baseline.sh \
   --raised-global-packet-limit 1000000
 ```
 
-Run the generated host-capture script on every host, then run the generated curve and contention worker scripts in the order shown in the plan README. After receiver artifacts are copied back, run `merge-all.sh`; it writes `combined/suite-aggregate.jsonl` and combined curve `bandwidth-capacity.*` selector artifacts beside it.
+Run the generated `check-plan-freshness.sh` before starting workers. It fails when scheduled start timestamps have passed or are too close to now; set `MIN_LEAD_SECONDS` when the lab needs a larger setup buffer. Then run the generated host-capture script on every host, followed by the curve and contention worker scripts in the order shown in the plan README. After receiver artifacts are copied back, run `merge-all.sh`; it writes `combined/suite-aggregate.jsonl` and combined curve `bandwidth-capacity.*` selector artifacts beside it.
 
 Start the server worker first:
 
