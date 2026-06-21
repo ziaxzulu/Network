@@ -140,16 +140,28 @@ When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggreg
 For lab validation, run the server and receiver workers on separate machines. Start the server first:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --warmup 5s --duration 30s --iterations 3 --payload-size 512 --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --warmup 5s --duration 30s --iterations 3 --payload-size 512 --per-client-mbps 5 --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-1000x5"
 ```
 
 Then start receivers from one or more client machines:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --warmup 5s --duration 120s"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --warmup 5s --duration 120s --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
 ```
 
-The server report contains send-side RakNet metrics and probe RTTs. Receiver reports contain delivered bytes/messages from that worker. For line-rate work, pin JVMs and interrupts consistently between runs and keep other host traffic quiet.
+The server report contains send-side RakNet metrics and probe RTTs. Receiver reports contain delivered bytes/messages from that worker. Use absolute `--out` paths for direct `raknetBenchmark` invocations so artifacts land in the same place regardless of the Gradle task working directory.
+
+After copying receiver summaries back to the server-side checkout, merge the worker reports into a comparable lab artifact:
+
+```bash
+benchmark/scripts/merge-worker-results.sh \
+  --server benchmark/build/benchmark-results/lab-server/server-1000x5 \
+  --receiver benchmark/build/benchmark-results/lab-receiver-a/receiver-a-250 \
+  --out benchmark/build/benchmark-results/lab-merged/server-1000x5 \
+  --case server-1000x5
+```
+
+Repeat `--receiver` for each receiver host. The merge writes `lab-summary.json`, `lab-summary.csv`, `README.md`, and a `suite-aggregate.jsonl` row that can be passed to `compare-baseline-suite.sh`. For line-rate work, pin JVMs and interrupts consistently between runs and keep other host traffic quiet.
 
 ## Matrix Profiles
 

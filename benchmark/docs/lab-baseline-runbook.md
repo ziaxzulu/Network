@@ -78,20 +78,42 @@ For line-rate validation, prefer explicit server and receiver workers instead of
 Start the server worker first:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --out benchmark/build/benchmark-results/lab-server --run-id server-1000x5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-1000x5"
 ```
 
 Start receivers on one or more receiver hosts:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --warmup 10s --duration 60s --disappearing-clients 0 --out benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --warmup 10s --duration 60s --disappearing-clients 0 --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
 ```
 
 When using `--disappear-mode blackhole`, pass matching affected-client settings to receiver workers and server worker so reports label the same client set:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 100 --start-delay 30s --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out benchmark/build/benchmark-results/lab-server --run-id server-blackhole-100x5"
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 100 --warmup 10s --duration 60s --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out benchmark/build/benchmark-results/lab-receiver --run-id receiver-blackhole-100x5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 100 --start-delay 30s --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-blackhole-100x5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 100 --warmup 10s --duration 60s --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-receiver --run-id receiver-blackhole-100x5"
+```
+
+Direct `raknetBenchmark` runs should use absolute `--out` paths. The Gradle task runs from the benchmark module directory, so relative output paths can otherwise land under `benchmark/benchmark/...`.
+
+After each remote-worker run, copy receiver artifact directories back to the server-side checkout and merge them:
+
+```bash
+benchmark/scripts/merge-worker-results.sh \
+  --server benchmark/build/benchmark-results/lab-server/server-1000x5 \
+  --receiver benchmark/build/benchmark-results/lab-receiver-a/receiver-a-250 \
+  --receiver benchmark/build/benchmark-results/lab-receiver-b/receiver-b-250 \
+  --out benchmark/build/benchmark-results/lab-merged/server-1000x5 \
+  --case server-1000x5
+```
+
+The merged directory contains `lab-summary.json`, `lab-summary.csv`, `README.md`, and `suite-aggregate.jsonl`. Compare merged baseline and candidate directories with the normal comparison script:
+
+```bash
+benchmark/scripts/compare-baseline-suite.sh \
+  --baseline benchmark/build/benchmark-results/lab-merged-baseline/server-1000x5 \
+  --candidate benchmark/build/benchmark-results/lab-merged-candidate/server-1000x5 \
+  --out benchmark/build/benchmark-results/lab-remote-comparison.md
 ```
 
 ## Impairment Profiles

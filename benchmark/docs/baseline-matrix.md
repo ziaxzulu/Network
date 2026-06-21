@@ -305,6 +305,18 @@ benchmark/scripts/compare-baseline-suite.sh \
 
 The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run or when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds.
 
+For remote server/receiver worker runs, merge the server and receiver artifact directories first:
+
+```bash
+benchmark/scripts/merge-worker-results.sh \
+  --server benchmark/build/benchmark-results/lab-server/server-1000x5 \
+  --receiver benchmark/build/benchmark-results/lab-receiver-a/receiver-a-250 \
+  --out benchmark/build/benchmark-results/lab-merged/server-1000x5 \
+  --case server-1000x5
+```
+
+The merged directory exposes a `suite-aggregate.jsonl` row, so it can be compared with `compare-baseline-suite.sh` like any other suite artifact.
+
 For quick local verification of the runner itself:
 
 ```bash
