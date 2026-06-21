@@ -350,6 +350,8 @@ benchmark/scripts/plan-lab-impairment.sh \
   --raised-global-packet-limit 1000000
 ```
 
+The generated netem scripts write timestamped `tc` command output under each profile artifact root's `netem/` directory. The generated `validate-all.sh` requires `<profile>-status-*.txt` evidence by default, so keep those files with the merged benchmark artifacts before promoting the adverse-network run to a baseline.
+
 After running the same profile on a candidate branch, compare the suite summaries:
 
 ```bash

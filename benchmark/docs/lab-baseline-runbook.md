@@ -242,7 +242,7 @@ benchmark/scripts/plan-lab-impairment.sh \
   --raised-global-packet-limit 1000000
 ```
 
-The generated campaign contains one `plan-lab-baseline.sh` output per impairment profile plus `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, and `netem/<profile>-clear.sh`. Run those netem scripts on the shaped receiver host or namespace before and after the matching profile plan, and keep the status output beside the profile artifacts.
+The generated campaign contains one `plan-lab-baseline.sh` output per impairment profile plus `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, and `netem/<profile>-clear.sh`. Run those netem scripts on the shaped receiver host or namespace before and after the matching profile plan. Each script writes timestamped command output under `<profile artifact root>/netem/`; copy that directory back with the profile artifacts so the final baseline records the actual qdisc state. The generated `validate-all.sh` requires `<profile>-status-*.txt` evidence by default; use `REQUIRE_NETEM_EVIDENCE=false` only for non-baseline smoke validation.
 
 Start with this impairment set:
 

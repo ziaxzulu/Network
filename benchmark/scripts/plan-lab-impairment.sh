@@ -172,37 +172,80 @@ profile_spec() {
 
 write_netem_script() {
   local path="$1"
-  local action="$2"
-  local latency="$3"
-  local jitter="$4"
-  local loss="$5"
-  local prefix=()
-  if "$sudo_netem"; then
-    prefix=(sudo)
+  local profile="$2"
+  local action="$3"
+  local latency="$4"
+  local jitter="$5"
+  local loss="$6"
+  local profile_artifact_root="$7"
+  local profile_artifact_root_default
+  if [[ "$profile_artifact_root" == /* ]]; then
+    profile_artifact_root_default="$profile_artifact_root"
+  else
+    profile_artifact_root_default="\$REPO_ROOT/$profile_artifact_root"
+  fi
+  local netem_action="$action"
+  local allow_failure=false
+  if [[ "$action" == "apply" && "$latency" == "0ms" && "$jitter" == "0ms" && "$loss" == "0%" ]]; then
+    netem_action="clear"
+    allow_failure=true
+  elif [[ "$action" == "clear" ]]; then
+    allow_failure=true
   fi
   cat >"$path" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
 REPO_ROOT="\${REPO_ROOT:-\$(pwd)}"
+PROFILE_ARTIFACT_ROOT="\${PROFILE_ARTIFACT_ROOT:-$profile_artifact_root_default}"
+NETEM_EVIDENCE_DIR="\${NETEM_EVIDENCE_DIR:-\$PROFILE_ARTIFACT_ROOT/netem}"
 cd "\$REPO_ROOT"
+mkdir -p "\$NETEM_EVIDENCE_DIR"
+
+PROFILE="$profile"
+REQUESTED_ACTION="$action"
+NETEM_ACTION="$netem_action"
+INTERFACE="$interface"
+LATENCY="$latency"
+JITTER="$jitter"
+LOSS="$loss"
+ALLOW_FAILURE="$allow_failure"
+USE_SUDO="$sudo_netem"
+EVIDENCE_FILE="\$NETEM_EVIDENCE_DIR/\$PROFILE-\$REQUESTED_ACTION-\$(date -u +%Y%m%dT%H%M%SZ).txt"
+
+cmd=(benchmark/scripts/raknet-netem.sh --interface "\$INTERFACE" --action "\$NETEM_ACTION")
+if [[ "\$NETEM_ACTION" == "apply" ]]; then
+  cmd+=(--latency "\$LATENCY" --jitter "\$JITTER" --loss "\$LOSS")
+fi
+if [[ "\$USE_SUDO" == "true" ]]; then
+  cmd=(sudo "\${cmd[@]}")
+fi
+
+status=0
+{
+  echo "# RakNet Benchmark Netem Evidence"
+  echo "profile=\$PROFILE"
+  echo "requested_action=\$REQUESTED_ACTION"
+  echo "netem_action=\$NETEM_ACTION"
+  echo "interface=\$INTERFACE"
+  echo "latency=\$LATENCY"
+  echo "jitter=\$JITTER"
+  echo "loss=\$LOSS"
+  echo "utc=\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'command='
+  printf '%q ' "\${cmd[@]}"
+  echo
+  echo
+  "\${cmd[@]}"
+} >"\$EVIDENCE_FILE" 2>&1 || status="\$?"
+
+cat "\$EVIDENCE_FILE"
+echo "Netem evidence: \$EVIDENCE_FILE"
+if [[ "\$status" -ne 0 && "\$ALLOW_FAILURE" == "true" ]]; then
+  exit 0
+fi
+exit "\$status"
 EOF
-  if [[ "$action" == "apply" ]]; then
-    if [[ "$latency" == "0ms" && "$jitter" == "0ms" && "$loss" == "0%" ]]; then
-      printf '%q ' "${prefix[@]}" benchmark/scripts/raknet-netem.sh --interface "$interface" --action clear >>"$path"
-      printf '|| true\n' >>"$path"
-    else
-      printf '%q ' "${prefix[@]}" benchmark/scripts/raknet-netem.sh --interface "$interface" --action apply --latency "$latency" --jitter "$jitter" --loss "$loss" >>"$path"
-      printf '\n' >>"$path"
-    fi
-  else
-    printf '%q ' "${prefix[@]}" benchmark/scripts/raknet-netem.sh --interface "$interface" --action "$action" >>"$path"
-    if [[ "$action" == "clear" ]]; then
-      printf '|| true\n' >>"$path"
-    else
-      printf '\n' >>"$path"
-    fi
-  fi
   chmod +x "$path"
 }
 
@@ -228,11 +271,11 @@ for raw_profile in "${selected_profiles[@]}"; do
     --case "$case_prefix-$profile" \
     "${baseline_args[@]}"
 
-  write_netem_script "$apply_script" apply "$latency" "$jitter" "$loss"
-  write_netem_script "$status_script" status "$latency" "$jitter" "$loss"
-  write_netem_script "$clear_script" clear "$latency" "$jitter" "$loss"
+  write_netem_script "$apply_script" "$profile" apply "$latency" "$jitter" "$loss" "$profile_artifact_root"
+  write_netem_script "$status_script" "$profile" status "$latency" "$jitter" "$loss" "$profile_artifact_root"
+  write_netem_script "$clear_script" "$profile" clear "$latency" "$jitter" "$loss" "$profile_artifact_root"
 
-  printf '{"profile":"%s","latency":"%s","jitter":"%s","loss":"%s","targetHostRole":"%s","interface":"%s","plan":"%s","artifactRoot":"%s","applyScript":"%s","statusScript":"%s","clearScript":"%s"}\n' \
+  printf '{"profile":"%s","latency":"%s","jitter":"%s","loss":"%s","targetHostRole":"%s","interface":"%s","plan":"%s","artifactRoot":"%s","netemEvidenceDir":"%s","applyScript":"%s","statusScript":"%s","clearScript":"%s"}\n' \
     "$(json_escape "$profile")" \
     "$(json_escape "$latency")" \
     "$(json_escape "$jitter")" \
@@ -241,6 +284,7 @@ for raw_profile in "${selected_profiles[@]}"; do
     "$(json_escape "$interface")" \
     "$(json_escape "$profile_plan")" \
     "$(json_escape "$profile_artifact_root")" \
+    "$(json_escape "$profile_artifact_root/netem")" \
     "$(json_escape "$apply_script")" \
     "$(json_escape "$status_script")" \
     "$(json_escape "$clear_script")" >>"$manifest"
@@ -256,11 +300,39 @@ cat >"$validate_all_script" <<EOF
 set -euo pipefail
 
 REPO_ROOT="\${REPO_ROOT:-\$(pwd)}"
+REQUIRE_NETEM_EVIDENCE="\${REQUIRE_NETEM_EVIDENCE:-true}"
+MANIFEST="$manifest"
 cd "\$REPO_ROOT"
 EOF
 for profile in "${profile_names[@]}"; do
   printf '%q\n' "$output_root/$profile-plan/merge-all.sh" >>"$validate_all_script"
 done
+cat >>"$validate_all_script" <<'EOF'
+
+if [[ "$REQUIRE_NETEM_EVIDENCE" == "true" ]]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq is required to validate netem evidence" >&2
+    exit 2
+  fi
+  missing=0
+  while IFS=$'\t' read -r profile evidence_dir; do
+    if [[ -z "$profile" || -z "$evidence_dir" ]]; then
+      continue
+    fi
+    if [[ "$evidence_dir" != /* ]]; then
+      evidence_dir="$REPO_ROOT/$evidence_dir"
+    fi
+    if ! compgen -G "$evidence_dir/$profile-status-*.txt" >/dev/null; then
+      echo "Missing netem status evidence for profile '$profile': $evidence_dir/$profile-status-*.txt" >&2
+      missing=1
+    fi
+  done < <(jq -r '[.profile, .netemEvidenceDir] | @tsv' "$MANIFEST")
+  if [[ "$missing" -ne 0 ]]; then
+    echo "Copy generated netem evidence directories back with the profile artifacts, or set REQUIRE_NETEM_EVIDENCE=false for non-baseline smoke validation." >&2
+    exit 1
+  fi
+fi
+EOF
 chmod +x "$validate_all_script"
 
 {
@@ -277,18 +349,19 @@ chmod +x "$validate_all_script"
   echo
   echo "## Run Order"
   echo
-  echo "For each profile, run the netem apply script on the \`$target_host_role\` host or network namespace before starting that profile's generated remote-worker plan. Run the status script after applying and save its output with the host report or topology notes. Run the clear script after the profile completes."
+  echo "For each profile, run the netem apply script on the \`$target_host_role\` host or network namespace before starting that profile's generated remote-worker plan. Run the status script after applying, then run the clear script after the profile completes. Each script prints its command output and also writes timestamped evidence under that profile's artifact root."
   echo
-  echo "| Profile | Latency | Jitter | Loss | Plan | Netem apply | Netem status | Netem clear |"
-  echo "| --- | ---: | ---: | ---: | --- | --- | --- | --- |"
-  jq -r '. | "| `\(.profile)` | `\(.latency)` | `\(.jitter)` | `\(.loss)` | `\(.plan)` | `\(.applyScript)` | `\(.statusScript)` | `\(.clearScript)` |"' "$manifest"
+  echo "| Profile | Latency | Jitter | Loss | Plan | Evidence dir | Netem apply | Netem status | Netem clear |"
+  echo "| --- | ---: | ---: | ---: | --- | --- | --- | --- | --- |"
+  jq -r '. | "| `\(.profile)` | `\(.latency)` | `\(.jitter)` | `\(.loss)` | `\(.plan)` | `\(.netemEvidenceDir)` | `\(.applyScript)` | `\(.statusScript)` | `\(.clearScript)` |"' "$manifest"
   echo
   echo "## Notes"
   echo
   echo "- Use the \`perfect\` profile to clear qdisc state and capture the no-impairment baseline."
+  echo "- Each generated netem script writes a timestamped evidence file under \`<profile artifact root>/netem/\`; copy that directory back with the benchmark artifacts."
   echo "- Keep impaired or disappearing clients isolated to the shaped receiver host when exact healthy/affected attribution matters."
   echo "- Copy receiver artifacts back under each profile artifact root, then run that profile's \`merge-all.sh\`."
-  echo "- After every profile is merged, run \`validate-all.sh\` as a convenience check over all generated profile plans."
+  echo "- After every profile is merged, run \`validate-all.sh\` as a convenience check over all generated profile plans. It requires \`<profile>-status-*.txt\` evidence by default; set \`REQUIRE_NETEM_EVIDENCE=false\` only for non-baseline smoke validation."
   echo "- \`ARTIFACT_ROOT\` can override the default artifact root when running generated merge scripts. Default: \`$artifact_root_default\`."
 } >"$readme"
 
