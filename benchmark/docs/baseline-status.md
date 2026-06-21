@@ -96,6 +96,7 @@ The generated plan schedules:
 Before promotion, the lab output must include:
 
 - server and receiver host reports
+- at least two distinct captured hostnames
 - topology metadata
 - complete server and receiver artifacts
 - merged `suite-aggregate.jsonl`

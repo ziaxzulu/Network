@@ -12,6 +12,7 @@ allow_missing_capacity=false
 allow_unselected_capacity=false
 allow_missing_host_context=false
 min_host_reports="2"
+min_distinct_hostnames="2"
 min_healthy_fairness="0"
 max_healthy_send_deliver_ratio="0"
 max_affected_send_deliver_ratio="0"
@@ -41,6 +42,7 @@ Options:
   --allow-unselected-capacity      Do not fail capacity rows without a selected stable candidate.
   --allow-missing-host-context     Do not require topology.md and host reports.
   --min-host-reports N             Minimum host-report.md files when host context is required. Default: 2.
+  --min-distinct-hostnames N        Minimum distinct captured hostnames when host context is required. Default: 2.
   --min-healthy-fairness N         Fail fairness/disappearance rows below this healthy-client Jain fairness. Default: 0, disabled.
   --max-healthy-send-deliver-ratio N Fail fairness/disappearance rows above this healthy-client send/deliver ratio. Default: 0, disabled.
   --max-affected-send-deliver-ratio N Fail affected-client rows above this send/deliver ratio. Default: 0, disabled.
@@ -101,6 +103,10 @@ while [[ $# -gt 0 ]]; do
       min_host_reports="$2"
       shift 2
       ;;
+    --min-distinct-hostnames)
+      min_distinct_hostnames="$2"
+      shift 2
+      ;;
     --min-healthy-fairness)
       min_healthy_fairness="$2"
       shift 2
@@ -147,6 +153,10 @@ if [[ ! "$min_iterations" =~ ^[0-9]+$ || "$min_iterations" -le 0 ]]; then
 fi
 if [[ ! "$min_host_reports" =~ ^[0-9]+$ ]]; then
   echo "--min-host-reports must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ ! "$min_distinct_hostnames" =~ ^[0-9]+$ ]]; then
+  echo "--min-distinct-hostnames must be a non-negative integer" >&2
   exit 2
 fi
 if [[ ! "$min_contention_clients" =~ ^[0-9]+$ ]]; then
@@ -211,8 +221,23 @@ if [[ -s "$artifact_root/topology.md" ]]; then
   topology_file="$artifact_root/topology.md"
 fi
 host_report_count="0"
+host_report_paths=()
+host_report_hostnames=()
 if [[ -d "$artifact_root" ]]; then
-  host_report_count="$(find "$artifact_root" -maxdepth 2 -type f -name host-report.md 2>/dev/null | wc -l | tr -d ' ')"
+  while IFS= read -r -d '' host_report; do
+    host_report_paths+=("$host_report")
+    hostname="$(sed -n 's/^- Hostname: `\(.*\)`/\1/p' "$host_report" | head -n 1)"
+    if [[ -n "$hostname" ]]; then
+      host_report_hostnames+=("$hostname")
+    fi
+  done < <(find "$artifact_root" -maxdepth 2 -type f -name host-report.md -print0 2>/dev/null | sort -z)
+  host_report_count="${#host_report_paths[@]}"
+fi
+distinct_hostname_count="0"
+hostnames_json="[]"
+if [[ "${#host_report_hostnames[@]}" -gt 0 ]]; then
+  distinct_hostname_count="$(printf '%s\n' "${host_report_hostnames[@]}" | sort -u | wc -l | tr -d ' ')"
+  hostnames_json="$(printf '%s\n' "${host_report_hostnames[@]}" | sort -u | jq -R -s 'split("\n") | map(select(length > 0))')"
 fi
 if [[ -z "$out_dir" ]]; then
   out_dir="$suite_dir"
@@ -361,7 +386,10 @@ jq -n \
   --arg requiredScenarios "$required_scenarios" \
   --argjson minIterations "$min_iterations" \
   --argjson minHostReports "$min_host_reports" \
+  --argjson minDistinctHostnames "$min_distinct_hostnames" \
   --argjson hostReportCount "$host_report_count" \
+  --argjson distinctHostnameCount "$distinct_hostname_count" \
+  --argjson hostnames "$hostnames_json" \
   --argjson minHealthyFairness "$min_healthy_fairness" \
   --argjson maxHealthySendDeliverRatio "$max_healthy_send_deliver_ratio" \
   --argjson maxAffectedSendDeliverRatio "$max_affected_send_deliver_ratio" \
@@ -448,6 +476,9 @@ jq -n \
       else [] end)
     + (if (($allowMissingHostContext | not) and ($hostReportCount < $minHostReports)) then
         [issue("missing-host-reports"; "not enough host reports were captured"; null; {artifactRoot: $artifactRoot, hostReportCount: $hostReportCount, minHostReports: $minHostReports})]
+      else [] end)
+    + (if (($allowMissingHostContext | not) and ($distinctHostnameCount < $minDistinctHostnames)) then
+        [issue("missing-distinct-hosts"; "not enough distinct hostnames were captured"; null; {artifactRoot: $artifactRoot, hostnames: $hostnames, distinctHostnameCount: $distinctHostnameCount, minDistinctHostnames: $minDistinctHostnames})]
       else [] end)
     + (if ($aggregateRows | length) == 0 then
         [issue("missing-suite-aggregate-rows"; "suite-aggregate.jsonl has no rows"; null; {})]
@@ -559,6 +590,9 @@ jq -n \
     manifestRowCount: ($manifestRows | length),
     hostReportCount: $hostReportCount,
     minHostReports: $minHostReports,
+    distinctHostnameCount: $distinctHostnameCount,
+    minDistinctHostnames: $minDistinctHostnames,
+    hostnames: $hostnames,
     minIterations: $minIterations,
     minHealthyFairness: $minHealthyFairness,
     maxHealthySendDeliverRatio: $maxHealthySendDeliverRatio,
@@ -592,6 +626,7 @@ jq -n \
     echo "- Topology: missing"
   fi
   echo "- Host reports: \`$host_report_count\`"
+  echo "- Distinct hostnames: \`$(jq -r '.distinctHostnameCount' "$validation_json")\`"
   echo "- Manifest rows: \`$(jq -r '.manifestRowCount' "$validation_json")\`"
   if [[ -n "$capacity_jsonl" ]]; then
     echo "- Capacity file: \`$capacity_jsonl\`"
