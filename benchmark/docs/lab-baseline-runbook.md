@@ -322,4 +322,15 @@ benchmark/scripts/promote-lab-baseline.sh \
 
 The promoted baseline directory contains the comparable `suite-aggregate.jsonl`, validation reports, capacity selector artifacts, copied host/topology evidence, copied planning manifests, and a `baseline-manifest.json` with source paths and validation metadata. Use that promoted directory, or the `benchmark/build/benchmark-baselines/latest` symlink, as the `--baseline` input for future candidate comparisons, and pass `--require-validation` so unvalidated candidates fail comparison.
 
+After both the perfect-network baseline and adverse-network impairment campaign have been promoted, run the readiness check:
+
+```bash
+benchmark/scripts/check-baseline-readiness.sh \
+  --lab-baseline benchmark/build/benchmark-baselines/lab-<date>-<topology> \
+  --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
+  --out benchmark/build/benchmark-results/baseline-readiness
+```
+
+The readiness report is the final artifact-level gate for accepting the baseline package set. It requires passing lab validation, separate-host evidence, required scenario families, selected capacity groups, passing impairment profile validation, required netem status evidence, and the expected impairment profiles.
+
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.

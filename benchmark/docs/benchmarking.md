@@ -213,6 +213,17 @@ benchmark/scripts/compare-lab-impairment.sh \
 
 The promotion script refuses failed campaign summaries and summaries generated without required netem evidence by default. The campaign comparator fails when a candidate profile or planned capacity/contention row is missing, when profile network shape differs, when either campaign summary failed, when netem status evidence was not required, or when delivered throughput, p99 probe RTT, or max queued bytes breaches the configured thresholds. Extra candidate rows are reported but do not fail the comparison.
 
+After promoting both the perfect-network lab baseline and adverse-network impairment campaign, run the readiness gate before treating the package set as the baseline of record:
+
+```bash
+benchmark/scripts/check-baseline-readiness.sh \
+  --lab-baseline benchmark/build/benchmark-baselines/lab-<date>-<topology> \
+  --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
+  --out benchmark/build/benchmark-results/baseline-readiness
+```
+
+The readiness gate fails when promoted artifacts are missing, validation did not pass, separate host evidence is absent, required scenario families are missing, capacity groups are unselected, required impairment profiles are missing, or netem status evidence was not captured.
+
 ## Remote Worker Runs
 
 For lab validation, run the server and receiver workers on separate machines. Start the server first:

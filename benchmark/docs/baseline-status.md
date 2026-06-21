@@ -117,6 +117,17 @@ benchmark/scripts/promote-lab-baseline.sh \
 
 Use the promoted directory, or `benchmark/build/benchmark-baselines/latest`, as the baseline input for candidate comparisons with `--require-validation`.
 
+After the perfect-network baseline and adverse-network campaign are both promoted, run the final readiness gate:
+
+```bash
+benchmark/scripts/check-baseline-readiness.sh \
+  --lab-baseline benchmark/build/benchmark-baselines/lab-<date>-<topology> \
+  --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
+  --out benchmark/build/benchmark-results/baseline-readiness
+```
+
+The baseline is not accepted as the comparison baseline until this readiness check passes.
+
 ## Adverse-Network Lab Plan
 
 The current host/NIC-level impairment campaign is generated with:
