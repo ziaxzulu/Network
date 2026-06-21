@@ -329,6 +329,8 @@ benchmark/scripts/merge-worker-results.sh \
 
 The merged directory exposes a `suite-aggregate.jsonl` row, so it can be compared with `compare-baseline-suite.sh` like any other suite artifact.
 
+For a full lab baseline campaign, prefer `benchmark/scripts/plan-lab-baseline.sh`. It composes the remote bandwidth curve and contention planners, writes host-capture commands and a topology template, schedules non-overlapping case starts, and produces a combined `suite-aggregate.jsonl` for baseline-of-record comparisons.
+
 For multi-rate remote bandwidth curves, prefer `benchmark/scripts/plan-remote-worker-curve.sh`. It generates per-host server/receiver scripts, fixed `--start-at-epoch-ms` values, merge commands, a campaign `suite-aggregate.jsonl`, and `bandwidth-capacity.*` selector artifacts.
 
 For production-like fanout, fairness, and disappearing-client campaigns, prefer `benchmark/scripts/plan-remote-contention.sh`. It uses the same remote worker scheduling and merge model, records affected-client distribution in `manifest.jsonl`, and keeps fanout, fairness, and disappearance artifacts comparable through one campaign-level `suite-aggregate.jsonl`.

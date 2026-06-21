@@ -75,6 +75,29 @@ The comparison script uses `suite-aggregate.jsonl` automatically when comparing 
 
 For line-rate validation, prefer explicit server and receiver workers instead of single-process local mode.
 
+For a baseline-of-record campaign, start with the lab planner. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
+
+```bash
+benchmark/scripts/plan-lab-baseline.sh \
+  --out benchmark/build/benchmark-results/lab-baseline-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-baseline \
+  --server-host <server-ip> \
+  --interface <nic> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=100 \
+  --curve-payload-sizes 1200,1340 \
+  --curve-rates-mbps 100,250,500,750,1000,1500,2000,unlimited \
+  --contention-cases fanout,fairness,disappear-blackhole \
+  --contention-payload-size 512 \
+  --per-client-mbps 5 \
+  --warmup 10s \
+  --duration 60s \
+  --iterations 3 \
+  --start-delay 90s
+```
+
+Run the generated host-capture script on every host, then run the generated curve and contention worker scripts in the order shown in the plan README. After receiver artifacts are copied back, run `merge-all.sh`; it writes `combined/suite-aggregate.jsonl` and copies the curve `bandwidth-capacity.*` selector artifacts beside it.
+
 Start the server worker first:
 
 ```bash
