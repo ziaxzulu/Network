@@ -201,6 +201,8 @@ jq -s \
   ($server_iterations | map(.disconnects // 0) | sum_or_zero) as $server_disconnects |
   ($server_iterations | map(.blackholedDatagramsIn // 0) | sum_or_zero) as $server_blackholed_in |
   ($server_iterations | map(.blackholedDatagramsOut // 0) | sum_or_zero) as $server_blackholed_out |
+  ($receiver_iterations | map(.blackholedDatagramsIn // 0) | sum_or_zero) as $receiver_blackholed_in |
+  ($receiver_iterations | map(.blackholedDatagramsOut // 0) | sum_or_zero) as $receiver_blackholed_out |
   (
     [
       $receivers[] as $receiver |
@@ -304,8 +306,8 @@ jq -s \
       affectedFairnessIndex: fairness($affected_peer_bytes),
       affectedClients: $receiver_affected_clients,
       disconnects: $server_disconnects,
-      blackholedDatagramsIn: $server_blackholed_in,
-      blackholedDatagramsOut: $server_blackholed_out,
+      blackholedDatagramsIn: ($server_blackholed_in + $receiver_blackholed_in),
+      blackholedDatagramsOut: ($server_blackholed_out + $receiver_blackholed_out),
       staleDatagrams: $server_stale_datagrams,
       staleDatagramsPerSecond: (if $server_elapsed_ms <= 0 then 0 else ($server_stale_datagrams * 1000 / $server_elapsed_ms) end),
       nackIn: $server_nack_in,

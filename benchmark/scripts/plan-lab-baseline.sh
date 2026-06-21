@@ -11,7 +11,7 @@ curve_receivers=("receiver-a:1")
 contention_receivers=()
 contention_clients="100"
 case_prefix="lab-baseline"
-curve_payload_sizes="1200,1340"
+curve_payload_sizes="1200,1340,1400"
 curve_rates_mbps="100,250,500,750,1000,1500,2000,unlimited"
 contention_cases="fanout,fairness,disappear-blackhole"
 contention_payload_size="512"
@@ -64,7 +64,7 @@ Options:
   --contention-clients N            Total contention clients when no contention receiver is supplied. Default: 100.
   --case-prefix NAME                Prefix for generated case names. Default: lab-baseline.
   --case NAME                       Alias for --case-prefix.
-  --curve-payload-sizes CSV         Payload sizes for bandwidth curve. Default: 1200,1340.
+  --curve-payload-sizes CSV         Payload sizes for bandwidth curve. Default: 1200,1340,1400.
   --curve-rates-mbps CSV            Offered Mbps points for bandwidth curve. Default: 100,250,500,750,1000,1500,2000,unlimited.
   --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole.
   --contention-payload-size N       Payload size for contention cases. Default: 512.
@@ -576,7 +576,7 @@ This directory combines the remote bandwidth-curve and remote contention campaig
 - Keep the sibling curve/, contention/, and host report directories with this combined output.
 REPORT
 
-benchmark/scripts/validate-lab-baseline.sh --input "\$ARTIFACT_ROOT" --out "\$COMBINED_OUT" --min-iterations "$iterations" --required-scenarios "$required_validation_scenarios"
+benchmark/scripts/validate-lab-baseline.sh --input "\$ARTIFACT_ROOT" --out "\$COMBINED_OUT" --manifest "$curve_plan/manifest.jsonl" --manifest "$contention_plan/manifest.jsonl" --min-iterations "$iterations" --required-scenarios "$required_validation_scenarios"
 
 echo "Combined suite aggregate: \$COMBINED_OUT/suite-aggregate.jsonl"
 EOF
@@ -641,7 +641,7 @@ EOF
   echo "4. Copy curve receiver artifacts back under \`$curve_artifact_root\` on the merge host."
   echo "5. Run the contention receiver scripts, then \`contention-plan/server-commands.sh\` on the server host."
   echo "6. Copy contention receiver artifacts back under \`$contention_artifact_root\` on the merge host."
-  echo "7. Run \`merge-all.sh\` to produce \`combined/suite-aggregate.jsonl\`, curve \`bandwidth-capacity.*\` selector files, and validation reports."
+  echo "7. Run \`merge-all.sh\` to produce \`combined/suite-aggregate.jsonl\`, curve \`bandwidth-capacity.*\` selector files, and validation reports. Validation expects \`topology.md\` and host reports under the artifact root."
   echo
   echo "The generated start times are non-overlapping by default. Regenerate this plan shortly before lab execution if the scheduled timestamps have passed."
   echo

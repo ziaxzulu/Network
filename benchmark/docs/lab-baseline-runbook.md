@@ -85,7 +85,7 @@ benchmark/scripts/plan-lab-baseline.sh \
   --interface <nic> \
   --curve-receiver receiver-a=1 \
   --contention-receiver receiver-a=100 \
-  --curve-payload-sizes 1200,1340 \
+  --curve-payload-sizes 1200,1340,1400 \
   --curve-rates-mbps 100,250,500,750,1000,1500,2000,unlimited \
   --contention-cases fanout,fairness,disappear-blackhole \
   --contention-payload-size 512 \
@@ -242,6 +242,6 @@ benchmark/scripts/validate-lab-baseline.sh \
   --input benchmark/build/benchmark-results/lab-baseline
 ```
 
-The lab planner's generated `merge-all.sh` runs the same validation automatically after it creates the combined aggregate.
+The lab planner's generated `merge-all.sh` runs the same validation automatically after it creates the combined aggregate, passing the curve and contention manifests so missing planned cases fail validation. Validation fails by default when `topology.md` is missing or fewer than two host reports were captured under the artifact root.
 
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.

@@ -3,12 +3,15 @@ set -euo pipefail
 
 input_path=""
 out_dir=""
+manifest_paths=()
 min_iterations="3"
 required_scenarios="curve,multi-client-fanout,fairness,disappearing-clients"
 allow_unstable=false
 allow_disconnects=false
 allow_missing_capacity=false
 allow_unselected_capacity=false
+allow_missing_host_context=false
+min_host_reports="2"
 
 usage() {
   cat <<'USAGE'
@@ -21,12 +24,17 @@ signals needed to become a baseline of record.
 Options:
   --input PATH                     Lab artifact root, combined dir, or suite-aggregate.jsonl.
   --out DIR                        Output directory. Default: directory containing the resolved suite aggregate.
+  --manifest PATH                  Planned manifest.jsonl. May be repeated.
+  --curve-manifest PATH            Alias for --manifest.
+  --contention-manifest PATH       Alias for --manifest.
   --min-iterations N               Minimum measured iterations per aggregate row. Default: 3.
   --required-scenarios CSV         Required scenario families. Default: curve,multi-client-fanout,fairness,disappearing-clients.
   --allow-unstable                 Do not fail rows marked unstable.
   --allow-disconnects              Do not fail disconnects in curve or fanout rows.
   --allow-missing-capacity         Do not require bandwidth-capacity.jsonl.
   --allow-unselected-capacity      Do not fail capacity rows without a selected stable candidate.
+  --allow-missing-host-context     Do not require topology.md and host reports.
+  --min-host-reports N             Minimum host-report.md files when host context is required. Default: 2.
   --help                           Show this help.
 
 Outputs:
@@ -43,6 +51,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out)
       out_dir="$2"
+      shift 2
+      ;;
+    --manifest|--curve-manifest|--contention-manifest)
+      manifest_paths+=("$2")
       shift 2
       ;;
     --min-iterations)
@@ -69,6 +81,14 @@ while [[ $# -gt 0 ]]; do
       allow_unselected_capacity=true
       shift
       ;;
+    --allow-missing-host-context)
+      allow_missing_host_context=true
+      shift
+      ;;
+    --min-host-reports)
+      min_host_reports="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -89,6 +109,10 @@ if [[ ! "$min_iterations" =~ ^[0-9]+$ || "$min_iterations" -le 0 ]]; then
   echo "--min-iterations must be a positive integer" >&2
   exit 2
 fi
+if [[ ! "$min_host_reports" =~ ^[0-9]+$ ]]; then
+  echo "--min-host-reports must be a non-negative integer" >&2
+  exit 2
+fi
 if [[ -z "$required_scenarios" || "$required_scenarios" == *, || "$required_scenarios" == ,* ]]; then
   echo "--required-scenarios must be a non-empty CSV value" >&2
   exit 2
@@ -103,6 +127,15 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 if [[ "$input_path" != /* ]]; then
   input_path="$repo_root/$input_path"
 fi
+for i in "${!manifest_paths[@]}"; do
+  if [[ "${manifest_paths[$i]}" != /* ]]; then
+    manifest_paths[$i]="$repo_root/${manifest_paths[$i]}"
+  fi
+  if [[ ! -s "${manifest_paths[$i]}" ]]; then
+    echo "manifest not found or empty: ${manifest_paths[$i]}" >&2
+    exit 2
+  fi
+done
 
 suite_aggregate=""
 if [[ -f "$input_path" ]]; then
@@ -117,6 +150,21 @@ else
 fi
 
 suite_dir="$(cd "$(dirname "$suite_aggregate")" && pwd)"
+artifact_root="$suite_dir"
+if [[ "$(basename "$suite_dir")" == "combined" ]]; then
+  artifact_root="$(cd "$suite_dir/.." && pwd)"
+elif [[ -d "$input_path/combined" ]]; then
+  artifact_root="$input_path"
+fi
+
+topology_file=""
+if [[ -s "$artifact_root/topology.md" ]]; then
+  topology_file="$artifact_root/topology.md"
+fi
+host_report_count="0"
+if [[ -d "$artifact_root" ]]; then
+  host_report_count="$(find "$artifact_root" -maxdepth 2 -type f -name host-report.md 2>/dev/null | wc -l | tr -d ' ')"
+fi
 if [[ -z "$out_dir" ]]; then
   out_dir="$suite_dir"
 elif [[ "$out_dir" != /* ]]; then
@@ -137,13 +185,101 @@ done
 
 suite_array="$(mktemp)"
 capacity_array="$(mktemp)"
-trap 'rm -f "$suite_array" "$capacity_array"' EXIT
+manifest_array="$(mktemp)"
+artifact_issues_jsonl="$(mktemp)"
+artifact_issues_array="$(mktemp)"
+trap 'rm -f "$suite_array" "$capacity_array" "$manifest_array" "$artifact_issues_jsonl" "$artifact_issues_array"' EXIT
 
 jq -s '.' "$suite_aggregate" >"$suite_array"
 if [[ -n "$capacity_jsonl" ]]; then
   jq -s '.' "$capacity_jsonl" >"$capacity_array"
 else
   printf '[]\n' >"$capacity_array"
+fi
+if [[ "${#manifest_paths[@]}" -gt 0 ]]; then
+  jq -s '.' "${manifest_paths[@]}" >"$manifest_array"
+else
+  printf '[]\n' >"$manifest_array"
+fi
+
+: >"$artifact_issues_jsonl"
+append_artifact_issue() {
+  local code="$1"
+  local message="$2"
+  local case_name="$3"
+  local benchmark_name="$4"
+  local artifact="$5"
+  local extra="${6:-{}}"
+  jq -n \
+    --arg code "$code" \
+    --arg message "$message" \
+    --arg case "$case_name" \
+    --arg benchmarkName "$benchmark_name" \
+    --arg artifact "$artifact" \
+    --argjson extra "$extra" \
+    '{code:$code,message:$message,case:$case,benchmarkName:$benchmarkName,scenario:null,artifact:$artifact} + $extra' >>"$artifact_issues_jsonl"
+}
+
+while IFS=$'\t' read -r case_name benchmark_name artifact; do
+  if [[ -z "$artifact" || "$artifact" == "null" ]]; then
+    append_artifact_issue "missing-artifact-path" "aggregate row does not include an artifact path" "$case_name" "$benchmark_name" ""
+    continue
+  fi
+  artifact_path="$artifact"
+  if [[ "$artifact_path" != /* ]]; then
+    artifact_path="$repo_root/$artifact_path"
+  fi
+  if [[ ! -d "$artifact_path" ]]; then
+    append_artifact_issue "missing-artifact" "aggregate artifact directory is missing" "$case_name" "$benchmark_name" "$artifact_path"
+    continue
+  fi
+  if [[ -s "$artifact_path/lab-summary.json" ]]; then
+    missing_files=()
+    for file in lab-summary.csv README.md suite-aggregate.jsonl; do
+      [[ -s "$artifact_path/$file" ]] || missing_files+=("$file")
+    done
+    if [[ "${#missing_files[@]}" -gt 0 ]]; then
+      missing_json="$(printf '%s\n' "${missing_files[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+      append_artifact_issue "missing-merged-artifact-files" "merged artifact directory is incomplete" "$case_name" "$benchmark_name" "$artifact_path" "{\"missingFiles\":$missing_json}"
+    fi
+    warnings_json="$(jq -c '.warnings // []' "$artifact_path/lab-summary.json")"
+    warning_count="$(jq 'length' <<<"$warnings_json")"
+    if [[ "$warning_count" -gt 0 ]]; then
+      append_artifact_issue "merge-warnings" "remote worker merge produced warnings" "$case_name" "$benchmark_name" "$artifact_path" "{\"warnings\":$warnings_json}"
+    fi
+    while IFS= read -r summary_path; do
+      [[ -z "$summary_path" || "$summary_path" == "null" ]] && continue
+      if [[ "$summary_path" != /* ]]; then
+        summary_path="$repo_root/$summary_path"
+      fi
+      summary_dir="$(dirname "$summary_path")"
+      raw_missing=()
+      for file in summary.json timeseries.csv latency.hdr report.md; do
+        [[ -s "$summary_dir/$file" ]] || raw_missing+=("$file")
+      done
+      if [[ "${#raw_missing[@]}" -gt 0 ]]; then
+        raw_missing_json="$(printf '%s\n' "${raw_missing[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+        append_artifact_issue "missing-raw-worker-artifact-files" "raw worker artifact directory is incomplete" "$case_name" "$benchmark_name" "$summary_dir" "{\"missingFiles\":$raw_missing_json}"
+      fi
+    done < <(jq -r '([.serverSummary] + (.receiverSummaries // []))[]?' "$artifact_path/lab-summary.json")
+  elif [[ -s "$artifact_path/summary.json" ]]; then
+    missing_files=()
+    for file in timeseries.csv latency.hdr report.md; do
+      [[ -s "$artifact_path/$file" ]] || missing_files+=("$file")
+    done
+    if [[ "${#missing_files[@]}" -gt 0 ]]; then
+      missing_json="$(printf '%s\n' "${missing_files[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+      append_artifact_issue "missing-raw-artifact-files" "benchmark artifact directory is incomplete" "$case_name" "$benchmark_name" "$artifact_path" "{\"missingFiles\":$missing_json}"
+    fi
+  else
+    append_artifact_issue "missing-artifact-summary" "artifact directory has neither lab-summary.json nor summary.json" "$case_name" "$benchmark_name" "$artifact_path"
+  fi
+done < <(jq -r '.[] | [(.case // ""), (.benchmarkName // ""), (.artifact // "")] | @tsv' "$suite_array")
+
+if [[ -s "$artifact_issues_jsonl" ]]; then
+  jq -s '.' "$artifact_issues_jsonl" >"$artifact_issues_array"
+else
+  printf '[]\n' >"$artifact_issues_array"
 fi
 
 validation_json="$out_dir/validation.json"
@@ -152,23 +288,33 @@ allow_unstable_json=false
 allow_disconnects_json=false
 allow_missing_capacity_json=false
 allow_unselected_capacity_json=false
+allow_missing_host_context_json=false
 "$allow_unstable" && allow_unstable_json=true
 "$allow_disconnects" && allow_disconnects_json=true
 "$allow_missing_capacity" && allow_missing_capacity_json=true
 "$allow_unselected_capacity" && allow_unselected_capacity_json=true
+"$allow_missing_host_context" && allow_missing_host_context_json=true
 
 jq -n \
   --slurpfile rows "$suite_array" \
   --slurpfile capacities "$capacity_array" \
+  --slurpfile manifests "$manifest_array" \
+  --slurpfile artifactIssues "$artifact_issues_array" \
   --arg input "$input_path" \
   --arg suiteAggregate "$suite_aggregate" \
+  --arg artifactRoot "$artifact_root" \
   --arg capacityFile "$capacity_jsonl" \
+  --arg topologyFile "$topology_file" \
+  --argjson manifestPaths "$(printf '%s\n' "${manifest_paths[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')" \
   --arg requiredScenarios "$required_scenarios" \
   --argjson minIterations "$min_iterations" \
+  --argjson minHostReports "$min_host_reports" \
+  --argjson hostReportCount "$host_report_count" \
   --argjson allowUnstable "$allow_unstable_json" \
   --argjson allowDisconnects "$allow_disconnects_json" \
   --argjson allowMissingCapacity "$allow_missing_capacity_json" \
   --argjson allowUnselectedCapacity "$allow_unselected_capacity_json" \
+  --argjson allowMissingHostContext "$allow_missing_host_context_json" \
   --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
   def n($value): ($value // 0) | tonumber;
   def scenario($row):
@@ -223,14 +369,36 @@ jq -n \
 
   ($rows[0] // []) as $aggregateRows |
   ($capacities[0] // []) as $capacityRows |
+  ($manifests[0] // []) as $manifestRows |
+  ($artifactIssues[0] // []) as $artifactIssueRows |
   ($requiredScenarios | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $required |
   (reduce $aggregateRows[] as $row ({}; .[scenario($row)] = ((.[scenario($row)] // 0) + 1))) as $scenarioCounts |
+  ($manifestRows | map(select((.benchmarkName // "") | startswith("curve-")) | .case) | unique) as $plannedCurveCases |
   (
     []
+    + $artifactIssueRows
+    + (if (($allowMissingHostContext | not) and ($topologyFile == "")) then
+        [issue("missing-topology"; "topology.md is required for lab baselines"; null; {artifactRoot: $artifactRoot})]
+      else [] end)
+    + (if (($allowMissingHostContext | not) and ($hostReportCount < $minHostReports)) then
+        [issue("missing-host-reports"; "not enough host reports were captured"; null; {artifactRoot: $artifactRoot, hostReportCount: $hostReportCount, minHostReports: $minHostReports})]
+      else [] end)
     + (if ($aggregateRows | length) == 0 then
         [issue("missing-suite-aggregate-rows"; "suite-aggregate.jsonl has no rows"; null; {})]
       else [] end)
     + ($required | map(select(($scenarioCounts[.] // 0) == 0) | issue("missing-required-scenario"; "required scenario family is missing"; null; {requiredScenario: .})))
+    + (
+      $manifestRows |
+      map(. as $planned |
+        if any($aggregateRows[]; (.case == ($planned.case // "") and .benchmarkName == ($planned.benchmarkName // ""))) then empty
+        else issue("missing-planned-row"; "planned manifest row is missing from suite aggregate"; null; {
+          plannedCase: ($planned.case // null),
+          plannedBenchmarkName: ($planned.benchmarkName // null),
+          plannedRunId: ($planned.runId // null)
+        })
+        end
+      )
+    )
     + (
       $aggregateRows |
       map(. as $row |
@@ -256,6 +424,13 @@ jq -n \
     + (if (($allowMissingCapacity | not) and ($capacityRows | length) == 0) then
         [issue("missing-capacity"; "bandwidth-capacity.jsonl is required for lab baselines"; null; {})]
       else [] end)
+    + (if (($allowMissingCapacity | not) and ($plannedCurveCases | length) > 0) then
+        ($plannedCurveCases | map(. as $plannedCase |
+          if any($capacityRows[]; (.case // "") == $plannedCase) then empty
+          else issue("missing-capacity-case"; "planned curve case has no capacity selection row"; null; {capacityCase: $plannedCase})
+          end
+        ))
+      else [] end)
     + (if (($allowUnselectedCapacity | not) and ($capacityRows | length) > 0) then
         ($capacityRows | map(select((.selected // false) != true) | issue("unselected-capacity"; "capacity group has no selected stable candidate"; null; {
           capacityCase: (.case // null),
@@ -268,13 +443,20 @@ jq -n \
     checkedAt: $checkedAt,
     input: $input,
     suiteAggregate: $suiteAggregate,
+    artifactRoot: $artifactRoot,
     capacityFile: (if $capacityFile == "" then null else $capacityFile end),
+    topologyFile: (if $topologyFile == "" then null else $topologyFile end),
+    manifests: $manifestPaths,
+    manifestRowCount: ($manifestRows | length),
+    hostReportCount: $hostReportCount,
+    minHostReports: $minHostReports,
     minIterations: $minIterations,
     requiredScenarios: $required,
     allowUnstable: $allowUnstable,
     allowDisconnects: $allowDisconnects,
     allowMissingCapacity: $allowMissingCapacity,
     allowUnselectedCapacity: $allowUnselectedCapacity,
+    allowMissingHostContext: $allowMissingHostContext,
     rowCount: ($aggregateRows | length),
     capacityRowCount: ($capacityRows | length),
     scenarioCounts: $scenarioCounts,
@@ -288,6 +470,14 @@ jq -n \
   echo
   echo "- Checked: \`$(jq -r '.checkedAt' "$validation_json")\`"
   echo "- Suite aggregate: \`$suite_aggregate\`"
+  echo "- Artifact root: \`$artifact_root\`"
+  if [[ -n "$topology_file" ]]; then
+    echo "- Topology: \`$topology_file\`"
+  else
+    echo "- Topology: missing"
+  fi
+  echo "- Host reports: \`$host_report_count\`"
+  echo "- Manifest rows: \`$(jq -r '.manifestRowCount' "$validation_json")\`"
   if [[ -n "$capacity_jsonl" ]]; then
     echo "- Capacity file: \`$capacity_jsonl\`"
   else
