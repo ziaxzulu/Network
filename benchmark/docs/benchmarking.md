@@ -157,7 +157,7 @@ benchmark/scripts/plan-lab-impairment.sh \
   --raised-global-packet-limit 1000000
 ```
 
-The impairment planner writes per-profile `plan-lab-baseline.sh` outputs plus `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, and `netem/<profile>-clear.sh` for the shaped receiver host or network namespace. Each generated netem script writes timestamped command output under `<profile artifact root>/netem/`; copy that directory back with the receiver artifacts so the baseline records the actual qdisc state. The generated `validate-all.sh` requires `<profile>-status-*.txt` evidence by default; use `REQUIRE_NETEM_EVIDENCE=false` only for non-baseline smoke validation. After profile merge and validation, `summarize-campaign.sh` writes `campaign-summary/impairment-summary.json`, `impairment-summary.jsonl`, and `impairment-summary.md` with per-profile validation status, capacity selections, contention rows, and netem evidence counts. Use it when you need the same remote worker baseline under perfect, near-loss, regional-loss, poor, and severe host/NIC conditions.
+The impairment planner writes per-profile `plan-lab-baseline.sh` outputs plus `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, and `netem/<profile>-clear.sh` for the shaped receiver host or network namespace. Each generated netem script writes timestamped command output under `<profile artifact root>/netem/`; copy that directory back with the receiver artifacts so the baseline records the actual qdisc state. The generated `validate-all.sh` requires `<profile>-status-*.txt` evidence by default; use `REQUIRE_NETEM_EVIDENCE=false` only for non-baseline smoke validation. After profile merge and validation, `summarize-campaign.sh` writes `campaign-summary/impairment-summary.json`, `impairment-summary.jsonl`, and `impairment-summary.md` with per-profile validation status, capacity selections, contention rows, and netem evidence counts. Promote a passing campaign summary with `promote-lab-impairment.sh` before using it as the saved adverse-network baseline. Use it when you need the same remote worker baseline under perfect, near-loss, regional-loss, poor, and severe host/NIC conditions.
 
 To repeat a baseline suite under a stable set of host-level impairments, use the impairment matrix wrapper. It defaults to a dry-run plan so the selected NIC and commands can be reviewed before changing host qdisc state:
 
@@ -200,13 +200,18 @@ When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggreg
 For host-level impairment campaigns, compare the campaign summaries after every profile has been merged, validated, and summarized:
 
 ```bash
+benchmark/scripts/promote-lab-impairment.sh \
+  --input benchmark/build/benchmark-results/lab-impairment-baseline/campaign-summary \
+  --out benchmark/build/benchmark-baselines \
+  --name lab-impairment-<date>-<topology>
+
 benchmark/scripts/compare-lab-impairment.sh \
-  --baseline benchmark/build/benchmark-results/lab-impairment-baseline/campaign-summary \
+  --baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
   --candidate benchmark/build/benchmark-results/lab-impairment-candidate/campaign-summary \
   --out benchmark/build/benchmark-results/lab-impairment-comparison.md
 ```
 
-The campaign comparator fails when a candidate profile or planned capacity/contention row is missing, when profile network shape differs, when either campaign summary failed, when netem status evidence was not required, or when delivered throughput, p99 probe RTT, or max queued bytes breaches the configured thresholds. Extra candidate rows are reported but do not fail the comparison.
+The promotion script refuses failed campaign summaries and summaries generated without required netem evidence by default. The campaign comparator fails when a candidate profile or planned capacity/contention row is missing, when profile network shape differs, when either campaign summary failed, when netem status evidence was not required, or when delivered throughput, p99 probe RTT, or max queued bytes breaches the configured thresholds. Extra candidate rows are reported but do not fail the comparison.
 
 ## Remote Worker Runs
 

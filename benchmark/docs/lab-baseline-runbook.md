@@ -255,13 +255,20 @@ benchmark/scripts/plan-lab-impairment.sh \
   --raised-global-packet-limit 1000000
 ```
 
-The generated campaign contains one `plan-lab-baseline.sh` output per impairment profile plus `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, and `netem/<profile>-clear.sh`. Run those netem scripts on the shaped receiver host or namespace before and after the matching profile plan. Each script writes timestamped command output under `<profile artifact root>/netem/`; copy that directory back with the profile artifacts so the final baseline records the actual qdisc state. The generated `validate-all.sh` requires `<profile>-status-*.txt` evidence by default; use `REQUIRE_NETEM_EVIDENCE=false` only for non-baseline smoke validation. After profile merge and validation, `summarize-campaign.sh` writes `campaign-summary/impairment-summary.json`, `impairment-summary.jsonl`, and `impairment-summary.md` with per-profile validation status, capacity selections, contention rows, and netem evidence counts.
+The generated campaign contains one `plan-lab-baseline.sh` output per impairment profile plus `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, and `netem/<profile>-clear.sh`. Run those netem scripts on the shaped receiver host or namespace before and after the matching profile plan. Each script writes timestamped command output under `<profile artifact root>/netem/`; copy that directory back with the profile artifacts so the final baseline records the actual qdisc state. The generated `validate-all.sh` requires `<profile>-status-*.txt` evidence by default; use `REQUIRE_NETEM_EVIDENCE=false` only for non-baseline smoke validation. After profile merge and validation, `summarize-campaign.sh` writes `campaign-summary/impairment-summary.json`, `impairment-summary.jsonl`, and `impairment-summary.md` with per-profile validation status, capacity selections, contention rows, and netem evidence counts. Promote the passing campaign summary before treating it as a baseline of record:
+
+```bash
+benchmark/scripts/promote-lab-impairment.sh \
+  --input benchmark/build/benchmark-results/lab-impairment-baseline/campaign-summary \
+  --out benchmark/build/benchmark-baselines \
+  --name lab-impairment-<date>-<topology>
+```
 
 Compare candidate adverse-network campaigns against the saved baseline campaign summary:
 
 ```bash
 benchmark/scripts/compare-lab-impairment.sh \
-  --baseline benchmark/build/benchmark-results/lab-impairment-baseline/campaign-summary \
+  --baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
   --candidate benchmark/build/benchmark-results/lab-impairment-candidate/campaign-summary \
   --out benchmark/build/benchmark-results/lab-impairment-comparison.md
 ```
