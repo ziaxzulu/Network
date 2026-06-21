@@ -78,23 +78,26 @@ For line-rate validation, prefer explicit server and receiver workers instead of
 Start the server worker first:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-1000x5"
+start_at_ms=$((($(date +%s) + 60) * 1000))
+echo "$start_at_ms"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-1000x5"
 ```
 
 Start receivers on one or more receiver hosts:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --warmup 10s --duration 60s --iterations 3 --disappearing-clients 0 --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
+start_at_ms=<same-value-used-by-server>
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --disappearing-clients 0 --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
 ```
 
 When using `--disappear-mode blackhole`, pass matching affected-client settings to receiver workers and server worker so reports label the same client set:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 100 --start-delay 30s --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-blackhole-100x5"
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 100 --warmup 10s --duration 60s --iterations 3 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-receiver --run-id receiver-blackhole-100x5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 100 --start-delay 30s --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-blackhole-100x5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 100 --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-receiver --run-id receiver-blackhole-100x5"
 ```
 
-Direct `raknetBenchmark` runs should use absolute `--out` paths. The Gradle task runs from the benchmark module directory, so relative output paths can otherwise land under `benchmark/benchmark/...`. Keep `--iterations`, `--warmup`, and `--duration` aligned between server and receiver workers; the merge script warns when iteration counts differ.
+Direct `raknetBenchmark` runs should use absolute `--out` paths. The Gradle task runs from the benchmark module directory, so relative output paths can otherwise land under `benchmark/benchmark/...`. Keep `--iterations`, `--warmup`, `--duration`, and `--start-at-epoch-ms` aligned between server and receiver workers; the merge script warns when iteration counts or coordinated start timestamps differ. Hosts should be NTP-synchronized, and the start timestamp should be far enough in the future for all receiver clients to establish before warmup begins.
 
 For disappearance runs, receiver workers apply `--disappear-mode` during the first measurement window and later windows measure the resulting post-disappearance state. If each iteration must repeat the disappearance event from fresh connections, run separate worker campaigns with unique `--run-id` values instead of one multi-iteration worker run.
 

@@ -41,6 +41,7 @@ public final class BenchmarkConfig {
     private long disappearAfterMillis = -1L;
     private DisappearanceMode disappearanceMode = DisappearanceMode.CLOSE;
     private long startDelayMillis = 3000;
+    private long startAtEpochMillis;
     private int iterations = 3;
     private int workers = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
     private int packetLimit;
@@ -136,6 +137,8 @@ public final class BenchmarkConfig {
             this.disappearanceMode = DisappearanceMode.parse(value);
         } else if ("start-delay".equals(key)) {
             this.startDelayMillis = parseDurationMillis(value);
+        } else if ("start-at-epoch-ms".equals(key) || "start-at-epoch-millis".equals(key)) {
+            this.startAtEpochMillis = parseNonNegativeLong(key, value);
         } else if ("iterations".equals(key)) {
             this.iterations = parsePositiveInt(key, value);
         } else if ("workers".equals(key)) {
@@ -313,6 +316,10 @@ public final class BenchmarkConfig {
 
     public long startDelayMillis() {
         return this.startDelayMillis;
+    }
+
+    public long startAtEpochMillis() {
+        return this.startAtEpochMillis;
     }
 
     public int iterations() {

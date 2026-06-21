@@ -88,6 +88,7 @@ public final class BenchmarkResultWriter {
             writer.write("- Packet limit: `" + optionalLimit(result.config().packetLimit()) + "`\n");
             writer.write("- Global packet limit: `" + optionalLimit(result.config().globalPacketLimit()) + "`\n");
             writer.write("- Impairment: `" + impairmentSummary(result.config()) + "`\n");
+            writer.write("- Start at epoch ms: `" + startAt(result.config()) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
             writer.write("| Name | Iteration | Clients | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | Send/Deliver | Affected Send/Deliver | Datagram Out/s | Stale/s | NACK Out/s | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Max Queue |\n");
@@ -217,6 +218,10 @@ public final class BenchmarkResultWriter {
 
     private static String optionalLimit(int value) {
         return value > 0 ? Integer.toString(value) : "library default";
+    }
+
+    private static String startAt(BenchmarkConfig config) {
+        return config.startAtEpochMillis() > 0L ? Long.toString(config.startAtEpochMillis()) : "not configured";
     }
 
     private static String impairmentSummary(BenchmarkConfig config) {
@@ -465,6 +470,7 @@ public final class BenchmarkResultWriter {
             List<Integer> batchPayloadSizes,
             long warmupMillis,
             long durationMillis,
+            long startAtEpochMillis,
             int iterationsRequested,
             EnvironmentJson environment,
             List<StabilityJson> stability,
@@ -501,6 +507,7 @@ public final class BenchmarkResultWriter {
                     config.batchPayloadSizes(),
                     config.warmupMillis(),
                     config.durationMillis(),
+                    config.startAtEpochMillis(),
                     config.iterations(),
                     EnvironmentJson.from(result.environment()),
                     stability,

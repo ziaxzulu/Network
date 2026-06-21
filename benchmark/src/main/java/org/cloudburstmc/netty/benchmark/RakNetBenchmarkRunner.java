@@ -194,6 +194,7 @@ public final class RakNetBenchmarkRunner {
                 Thread.sleep(50L);
             }
             waitForServerPeers(serverPeers, Math.min(config.clients(), Math.max(1, serverPeers.size())));
+            waitUntilStartAt(config, "server worker");
             for (int iteration = 1; iteration <= config.iterations(); iteration++) {
                 runTraffic(config, benchmarkCase, serverPeers, probeRtt, metrics, config.warmupMillis());
                 drainWarmup(config);
@@ -259,6 +260,7 @@ public final class RakNetBenchmarkRunner {
                 throw new IllegalStateException("Timed out waiting for client worker connections");
             }
             enableImpairments(impairments);
+            waitUntilStartAt(config, "receiver worker");
             for (int iteration = 1; iteration <= config.iterations(); iteration++) {
                 Thread.sleep(config.warmupMillis());
                 drainWarmup(config);
@@ -295,6 +297,24 @@ public final class RakNetBenchmarkRunner {
                 channel.close().awaitUninterruptibly();
             }
             group.shutdownGracefully().awaitUninterruptibly();
+        }
+    }
+
+    private static void waitUntilStartAt(BenchmarkConfig config, String role) throws InterruptedException {
+        long startAtEpochMillis = config.startAtEpochMillis();
+        if (startAtEpochMillis <= 0L) {
+            return;
+        }
+
+        long remainingMillis = startAtEpochMillis - System.currentTimeMillis();
+        if (remainingMillis <= 0L) {
+            System.out.println("Configured start-at timestamp for " + role + " is in the past; starting immediately");
+            return;
+        }
+
+        System.out.println("Waiting " + remainingMillis + "ms for coordinated " + role + " start at epoch ms " + startAtEpochMillis);
+        while ((remainingMillis = startAtEpochMillis - System.currentTimeMillis()) > 0L) {
+            Thread.sleep(Math.min(remainingMillis, 250L));
         }
     }
 

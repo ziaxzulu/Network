@@ -56,6 +56,7 @@ public class BenchmarkKitTests {
                 "--batch-groups", "4",
                 "--packet-limit", "1000",
                 "--global-packet-limit", "1000000",
+                "--start-at-epoch-ms", "1767225600000",
                 "--impairment-latency", "50ms",
                 "--impairment-jitter", "5ms",
                 "--impairment-loss", "2%",
@@ -77,6 +78,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(4, config.batchGroups());
         Assertions.assertEquals(1000, config.packetLimit());
         Assertions.assertEquals(1_000_000, config.globalPacketLimit());
+        Assertions.assertEquals(1_767_225_600_000L, config.startAtEpochMillis());
         Assertions.assertEquals(50, config.impairmentLatencyMillis());
         Assertions.assertEquals(5, config.impairmentJitterMillis());
         Assertions.assertEquals(2.0D, config.impairmentLossPercent(), 0.001D);
@@ -302,6 +304,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summary.has("perClientTargetMbps"));
         Assertions.assertTrue(summary.has("packetLimit"));
         Assertions.assertTrue(summary.has("globalPacketLimit"));
+        Assertions.assertTrue(summary.has("startAtEpochMillis"));
         Assertions.assertTrue(summary.has("impairmentLatencyMillis"));
         Assertions.assertTrue(summary.has("impairmentJitterMillis"));
         Assertions.assertTrue(summary.has("impairmentLossPercent"));

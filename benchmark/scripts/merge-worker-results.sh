@@ -148,6 +148,7 @@ jq -s \
   ([$receivers[] | .runId // "receiver"] ) as $receiver_run_ids |
   ($server_iterations | length) as $server_iteration_count |
   ($receivers | map((.iterations // []) | length)) as $receiver_iteration_counts |
+  ([$server.startAtEpochMillis // 0] + [$receivers[] | (.startAtEpochMillis // 0)] | unique) as $start_at_epoch_values |
   (elapsed_by_iteration($receiver_iterations)) as $receiver_elapsed_ms |
   (elapsed_by_iteration($server_iterations)) as $server_elapsed_ms |
   ($receiver_iterations | map(.bulkReceivedBytes // 0) | sum_or_zero) as $receiver_bytes |
@@ -228,6 +229,7 @@ jq -s \
       batched: ($server_iterations[0].batched // false),
       targetMbps: ($server_iterations[0].targetMbps // 0),
       targetClientMbps: ($server_iterations[0].targetClientMbps // 0),
+      startAtEpochMillis: ($server.startAtEpochMillis // 0),
       impairmentProfile: ((($server.impairmentLatencyMillis // 0) | tostring) + "ms/" + (($server.impairmentJitterMillis // 0) | tostring) + "ms/" + (($server.impairmentLossPercent // 0) | tostring) + "%"),
       impairmentLatencyMillis: ($server.impairmentLatencyMillis // 0),
       impairmentJitterMillis: ($server.impairmentJitterMillis // 0),
@@ -291,6 +293,7 @@ jq -s \
       role: ($server.role // null),
       iterations: ($server_iterations | length),
       connectedClients: ($aggregate.serverConnectedClients // 0),
+      startAtEpochMillis: ($server.startAtEpochMillis // 0),
       gitRevision: ($server.environment.gitRevision // null),
       javaVersion: ($server.environment.javaVersion // null),
       osName: ($server.environment.osName // null)
@@ -302,6 +305,7 @@ jq -s \
         role: (.role // null),
         iterations: ((.iterations // []) | length),
         clients: ((.iterations // []) | map(.clients // 0) | max_or_zero),
+        startAtEpochMillis: (.startAtEpochMillis // 0),
         gitRevision: (.environment.gitRevision // null),
         javaVersion: (.environment.javaVersion // null),
         osName: (.environment.osName // null)
@@ -315,6 +319,7 @@ jq -s \
       + (if ($aggregate.serverConnectedClients // 0) != ($aggregate.receiverClients // 0) then ["server-receiver-client-count-mismatch"] else [] end)
       + (if ($receiver_clients_rollup | length) != $receiver_clients then ["receiver-peer-client-count-mismatch"] else [] end)
       + (if ($receiver_iteration_counts | map(select(. != $server_iteration_count)) | length) > 0 then ["server-receiver-iteration-count-mismatch"] else [] end)
+      + (if ($start_at_epoch_values | length) > 1 then ["server-receiver-start-at-epoch-mismatch"] else [] end)
       + (if (($receiver_iterations | length) == 0) then ["no-receiver-iterations"] else [] end)
       + (if (($server_iterations | length) == 0) then ["no-server-iterations"] else [] end)
   }
@@ -323,7 +328,7 @@ jq -s \
 jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
 
 {
-  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,target_mbps,target_client_mbps,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
+  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,target_mbps,target_client_mbps,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
   jq -r '
     .aggregate as $a |
     [
@@ -337,6 +342,7 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.reliability,
       $a.targetMbps,
       $a.targetClientMbps,
+      $a.startAtEpochMillis,
       $a.deliveredGbps,
       $a.healthyDeliveredGbps,
       $a.affectedDeliveredGbps,
@@ -366,6 +372,7 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
     "- Case: `" + .case + "`\n" +
     "- Server run: `" + (.server.runId // "unknown") + "` (`" + (.server.gitRevision // "unknown") + "`)\n" +
     "- Receiver runs: `" + (.receivers | map(.runId // "unknown") | join(", ")) + "`\n" +
+    "- Start at epoch ms: `" + (($a.startAtEpochMillis // 0) | tostring) + "`\n" +
     "- Warnings: `" + ((.warnings // []) | if length == 0 then "none" else join(",") end) + "`\n"
   ' "$lab_summary"
   echo "| Metric | Value |"
