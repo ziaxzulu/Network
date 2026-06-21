@@ -31,11 +31,17 @@ public final class BenchmarkIterationResult {
     public final double targetMbps;
     public final double targetClientMbps;
     public final DisappearanceMode disappearanceMode;
+    public final boolean batched;
+    public final long batchIntervalMillis;
+    public final int logicalPacketsPerBatch;
+    public final int batchGroups;
     public final long elapsedMillis;
     public final long bulkSentMessages;
     public final long bulkSentBytes;
+    public final long logicalPacketsSent;
     public final long bulkReceivedMessages;
     public final long bulkReceivedBytes;
+    public final long logicalPacketsReceived;
     public final long probesSent;
     public final long probesAcked;
     public final long staleDatagrams;
@@ -47,6 +53,7 @@ public final class BenchmarkIterationResult {
     public final double healthyDeliveredGbps;
     public final double affectedDeliveredGbps;
     public final double deliveredMessagesPerSecond;
+    public final double deliveredLogicalPacketsPerSecond;
     public final double offeredGbps;
     public final int affectedClients;
     public final double fairnessIndex;
@@ -57,7 +64,8 @@ public final class BenchmarkIterationResult {
 
     public BenchmarkIterationResult(String name, int iteration, int clients, int payloadSize, RakReliability reliability,
                                     double targetMbps, double targetClientMbps, DisappearanceMode disappearanceMode,
-                                    long elapsedMillis, LatencyHistogram.Snapshot probeRtt,
+                                    boolean batched, long batchIntervalMillis, int logicalPacketsPerBatch,
+                                    int batchGroups, long elapsedMillis, LatencyHistogram.Snapshot probeRtt,
                                     List<PeerStats.Snapshot> peers) {
         this.name = name;
         this.iteration = iteration;
@@ -67,14 +75,20 @@ public final class BenchmarkIterationResult {
         this.targetMbps = targetMbps;
         this.targetClientMbps = targetClientMbps;
         this.disappearanceMode = disappearanceMode;
+        this.batched = batched;
+        this.batchIntervalMillis = batchIntervalMillis;
+        this.logicalPacketsPerBatch = logicalPacketsPerBatch;
+        this.batchGroups = batchGroups;
         this.elapsedMillis = elapsedMillis;
         this.probeRtt = probeRtt;
         this.peers = Collections.unmodifiableList(new ArrayList<>(peers));
 
         long sentMessages = 0L;
         long sentBytes = 0L;
+        long sentLogicalPackets = 0L;
         long receivedMessages = 0L;
         long receivedBytes = 0L;
+        long receivedLogicalPackets = 0L;
         long sentProbes = 0L;
         long ackedProbes = 0L;
         long stale = 0L;
@@ -92,8 +106,10 @@ public final class BenchmarkIterationResult {
         for (PeerStats.Snapshot peer : peers) {
             sentMessages += peer.bulkSentMessages;
             sentBytes += peer.bulkSentBytes;
+            sentLogicalPackets += peer.logicalPacketsSent;
             receivedMessages += peer.bulkReceivedMessages;
             receivedBytes += peer.bulkReceivedBytes;
+            receivedLogicalPackets += peer.logicalPacketsReceived;
             sentProbes += peer.probesSent;
             ackedProbes += peer.probesAcked;
             stale += peer.staleDatagrams;
@@ -114,8 +130,10 @@ public final class BenchmarkIterationResult {
 
         this.bulkSentMessages = sentMessages;
         this.bulkSentBytes = sentBytes;
+        this.logicalPacketsSent = sentLogicalPackets;
         this.bulkReceivedMessages = receivedMessages;
         this.bulkReceivedBytes = receivedBytes;
+        this.logicalPacketsReceived = receivedLogicalPackets;
         this.probesSent = sentProbes;
         this.probesAcked = ackedProbes;
         this.staleDatagrams = stale;
@@ -127,6 +145,7 @@ public final class BenchmarkIterationResult {
         this.healthyDeliveredGbps = BenchmarkMath.gigabitsPerSecond(healthyReceivedBytes, elapsedMillis);
         this.affectedDeliveredGbps = BenchmarkMath.gigabitsPerSecond(affectedReceivedBytes, elapsedMillis);
         this.deliveredMessagesPerSecond = BenchmarkMath.messagesPerSecond(receivedMessages, elapsedMillis);
+        this.deliveredLogicalPacketsPerSecond = BenchmarkMath.messagesPerSecond(receivedLogicalPackets, elapsedMillis);
         this.offeredGbps = BenchmarkMath.gigabitsPerSecond(sentBytes, elapsedMillis);
         this.affectedClients = affected;
         this.fairnessIndex = BenchmarkMath.jainFairness(perClientReceived);

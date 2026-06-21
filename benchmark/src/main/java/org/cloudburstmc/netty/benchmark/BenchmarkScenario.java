@@ -22,6 +22,7 @@ public enum BenchmarkScenario {
     MULTI_CLIENT_FANOUT("multi-client-fanout"),
     FAIRNESS("fairness"),
     DISAPPEARING_CLIENTS("disappearing-clients"),
+    BATCHED_GAME_TRAFFIC("batched-game-traffic"),
     MATRIX("matrix"),
     RECEIVER_WORKER("receiver-worker"),
     SERVER_WORKER("server-worker");

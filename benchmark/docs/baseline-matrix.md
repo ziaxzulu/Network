@@ -17,11 +17,12 @@ The current RakNet runner is a useful starting synthetic for established-channel
 - It can sweep payload size, reliability mode, offered rate, and client count.
 - It supports `--per-client-mbps` so fanout and fairness runs can express production-style per-client pull targets directly.
 - It includes a `disappearing-clients` scenario where selected established clients either close or stop reading during the measured window.
+- It includes a `batched-game-traffic` scenario for fixed-cadence grouped fanout with synthetic length-framed batches.
 
 It should not yet be treated as a complete production synthetic:
 
 - The `fairness` scenario currently labels impaired clients but does not itself apply per-client impairment. Use Linux `tc netem` or remote workers to create real impairment until the harness grows per-client impairment support.
-- The current workload is fixed-size synthetic payloads. It does not yet model Bedrock packet mix, packet bursts, compression batches, or gameplay event distribution.
+- The batch workload is still synthetic. It models burst cadence, grouped fanout, logical packet counts, and encoded batch sizes, but not compression algorithms or real Bedrock packet distributions.
 - The client-disappearance scenario covers close-mode and local stop-reading mode. True blackhole behavior still needs external `tc`/routing rules or remote worker support.
 - Local loopback is only a repeatable development baseline. Line-rate claims require separate machines, pinned CPU/NIC setup, and controlled network impairment.
 
@@ -44,8 +45,8 @@ Benchmark implications:
 
 - Keep `RELIABLE_ORDERED` channel `0` as the primary recurring baseline.
 - Prefer payload sizes near real RakNet/Bedrock shapes: small control packets, threshold-adjacent packets around `512B`, near-MTU batches around `1200-1400B`, and split-heavy chunk/resource-pack payloads.
-- Add a future batch-shape workload that sends bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
-- Add a future Bedrock-like workload layer that length-frames logical packets, optionally compresses batches with thresholds `1`, `256`, and `512`, and then sends over RakNet.
+- Use `batched-game-traffic` for bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
+- Add a future Bedrock-like workload layer that uses captured logical packet distributions and optionally compresses batches with thresholds `1`, `256`, and `512`.
 - Add grouped fanout plus true blackhole disappearance profiles before treating the suite as production-representative.
 - Add a later proxy profile with one downstream and one upstream RakNet channel per user to represent pass-through deployments.
 
@@ -202,14 +203,27 @@ Initial target shape:
 
 Purpose: approximate how Bedrock traffic is usually delivered: bursts of length-framed packets grouped into batches and flushed periodically.
 
-This is a required benchmark gap. The harness should add a workload profile that can:
+The harness includes a first executable batch profile:
+
+```bash
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="batched-game-traffic --clients 100 --warmup 10s --duration 60s --iterations 3 --batch-interval 10ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="batched-game-traffic --clients 100 --warmup 10s --duration 60s --iterations 3 --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="batched-game-traffic --clients 100 --warmup 10s --duration 60s --iterations 3 --batch-interval 50ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5"
+```
+
+The current workload can:
 
 - send a configurable burst every `10ms`, `20ms`, or `50ms`
 - vary the number of logical packets per batch
-- vary compressed-batch payload sizes instead of sending one uniform payload size
-- model compression-threshold-adjacent traffic around `1B`, `256B`, and `512B`
+- vary encoded batch payload sizes instead of sending one uniform payload size
 - reuse the same payload for broadcast fanout and send a small number of payload variants for grouped fanout
-- record batch-size histograms in addition to aggregate bytes/messages
+- record logical packet counts in addition to aggregate bytes/messages
+
+Remaining batch gaps:
+
+- captured gameplay packet-size distributions
+- compression threshold and algorithm modeling around `1B`, `256B`, and `512B`
+- batch-size histograms beyond the configured payload-size list
 
 Initial target shape:
 
@@ -218,7 +232,7 @@ Initial target shape:
 | Clients | `20`, `100`, `500`, `1000` |
 | Flush cadence | `10ms`, `20ms`, `50ms`, immediate |
 | Batch payloads | small control, `512B` threshold-adjacent, mixed gameplay, near-MTU, split/chunk/resource-pack-like |
-| Compression threshold | `1`, `256`, `512`, disabled |
+| Compression threshold | future: `1`, `256`, `512`, disabled |
 | Group count | `1`, `4`, `16` payload variants |
 | Per-client target | `1Mbps`, `5Mbps` |
 
@@ -260,7 +274,9 @@ Use this smaller set as the first recurring baseline before expanding the full m
 | `loss-100-50ms-2pct` | `100` | `512` | `reliable_ordered` | `50ms`, `2%` loss | `5Mbps` per client |
 | `disappear-100-10pct-close` | `100` | `512` | `reliable_ordered` | close 10 clients | `5Mbps` per client |
 | `disappear-100-10pct-stopread` | `100` | `512` | `reliable_ordered` | stop reads on 10 clients | `5Mbps` per client |
-| `batch-fanout-100` | `100` | mixed | `reliable_ordered` | perfect | `10ms`, `20ms`, `50ms` burst cadence |
+| `batch-fanout-100-10ms` | `100` | mixed | `reliable_ordered` | perfect | `10ms`, `5Mbps` per client |
+| `batch-fanout-100-20ms` | `100` | mixed | `reliable_ordered` | perfect | `20ms`, `5Mbps` per client |
+| `batch-fanout-100-50ms` | `100` | mixed | `reliable_ordered` | perfect | `50ms`, `5Mbps` per client |
 
 ## Interpretation Rules
 

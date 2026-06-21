@@ -18,7 +18,10 @@ package org.cloudburstmc.netty.benchmark;
 
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 
+import java.util.List;
+
 record BenchmarkCase(String name, int clients, int impairedClients, int disappearingClients, int payloadSize,
                      RakReliability reliability, double targetMbps, double targetClientMbps, long disappearAfterMillis,
-                     DisappearanceMode disappearanceMode) {
+                     DisappearanceMode disappearanceMode, boolean batched, long batchIntervalMillis,
+                     int logicalPacketsPerBatch, int batchGroups, List<Integer> batchPayloadSizes) {
 }

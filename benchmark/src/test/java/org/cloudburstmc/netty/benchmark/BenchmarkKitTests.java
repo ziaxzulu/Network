@@ -21,6 +21,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.csv.CsvMapper;
 import com.fasterxml.jackson.dataformat.csv.CsvSchema;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.UnpooledByteBufAllocator;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -47,6 +49,10 @@ public class BenchmarkKitTests {
                 "--reliability", "unreliable",
                 "--target-gbps", "1.5",
                 "--per-client-mbps", "5",
+                "--batch-interval", "10ms",
+                "--logical-packets-per-batch", "4",
+                "--batch-payload-sizes", "64,512",
+                "--batch-groups", "4",
                 "--rates-mbps", "100,unlimited"
         });
 
@@ -59,6 +65,10 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(1500.0D, config.rateMbps(), 0.001D);
         Assertions.assertEquals(5.0D, config.perClientRateMbps(), 0.001D);
         Assertions.assertEquals(35.0D, config.effectiveTargetMbps(config.rateMbps(), config.clients()), 0.001D);
+        Assertions.assertEquals(10, config.batchIntervalMillis());
+        Assertions.assertEquals(4, config.logicalPacketsPerBatch());
+        Assertions.assertEquals(Arrays.asList(64, 512), config.batchPayloadSizes());
+        Assertions.assertEquals(4, config.batchGroups());
         Assertions.assertEquals(Arrays.asList(100.0D, 0.0D), config.ratesMbps());
     }
 
@@ -100,6 +110,19 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBatchPayloadEncoding() {
+        ByteBuf payload = BenchmarkPayload.batch(UnpooledByteBufAllocator.DEFAULT, 64, 42L, 4);
+        try {
+            Assertions.assertEquals(BenchmarkPayload.BATCH, BenchmarkPayload.type(payload));
+            Assertions.assertEquals(42L, BenchmarkPayload.sequence(payload));
+            Assertions.assertEquals(4, BenchmarkPayload.logicalPackets(payload));
+            Assertions.assertEquals(64, payload.readableBytes());
+        } finally {
+            payload.release();
+        }
+    }
+
+    @Test
     public void testFairnessCalculation() {
         Assertions.assertEquals(1.0D, BenchmarkMath.jainFairness(Arrays.asList(100L, 100L, 100L)), 0.001D);
         Assertions.assertTrue(BenchmarkMath.jainFairness(Arrays.asList(100L, 0L, 0L)) < 0.34D);
@@ -131,8 +154,8 @@ public class BenchmarkKitTests {
         histogram.record(1_000_000L);
         histogram.record(2_000_000L);
         PeerStats peer = new PeerStats(0, false);
-        peer.addBulkSent(64);
-        peer.addBulkReceived(64);
+        peer.addBulkSent(64, 4);
+        peer.addBulkReceived(64, 4);
         peer.addProbeSent();
         peer.addProbeAcked();
         run.add(new BenchmarkIterationResult(
@@ -144,6 +167,10 @@ public class BenchmarkKitTests {
                 0.0D,
                 0.0D,
                 DisappearanceMode.CLOSE,
+                true,
+                20,
+                4,
+                2,
                 1000,
                 histogram.snapshot(),
                 Arrays.asList(peer.snapshot())
@@ -160,11 +187,16 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summary.has("perClientTargetMbps"));
         Assertions.assertTrue(summary.has("disappearingClients"));
         Assertions.assertEquals("close", summary.path("disappearanceMode").asText());
+        Assertions.assertEquals(20, summary.path("batchIntervalMillis").asLong());
+        Assertions.assertEquals(8, summary.path("logicalPacketsPerBatch").asInt());
+        Assertions.assertTrue(summary.path("batchPayloadSizes").isArray());
         Assertions.assertEquals(1, summary.path("iterations").size());
         Assertions.assertTrue(summary.path("iterations").get(0).has("deliveredGbps"));
         Assertions.assertEquals("close", summary.path("iterations").get(0).path("disappearanceMode").asText());
+        Assertions.assertEquals(4, summary.path("iterations").get(0).path("logicalPacketsReceived").asLong());
         Assertions.assertTrue(summary.path("iterations").get(0).has("healthyFairnessIndex"));
         Assertions.assertTrue(summary.path("iterations").get(0).has("disconnects"));
+        Assertions.assertEquals(4, summary.path("iterations").get(0).path("peers").get(0).path("logicalPacketsReceived").asLong());
         Assertions.assertTrue(summary.path("iterations").get(0).path("peers").get(0).has("serverBytesOut"));
 
         List<Map<String, String>> rows = CSV
@@ -179,6 +211,9 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(rows.get(0).containsKey("delivered_gbps"));
         Assertions.assertTrue(rows.get(0).containsKey("target_client_mbps"));
         Assertions.assertEquals("close", rows.get(0).get("disappearance_mode"));
+        Assertions.assertEquals("true", rows.get(0).get("batched"));
+        Assertions.assertEquals("4", rows.get(0).get("logical_packets_received"));
+        Assertions.assertTrue(rows.get(0).containsKey("delivered_logical_packets_s"));
         Assertions.assertTrue(rows.get(0).containsKey("healthy_fairness"));
         Assertions.assertTrue(rows.get(0).containsKey("disconnects"));
         Assertions.assertTrue(rows.get(0).containsKey("max_queued_bytes"));

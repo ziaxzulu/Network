@@ -39,11 +39,14 @@ Local loopback runs are useful for regression checks, but they are not proof of 
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="fairness --clients 100 --impaired-clients 10 --warmup 2s --duration 15s --per-client-mbps 5"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode close --warmup 2s --duration 15s --per-client-mbps 5"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode stop-reading --warmup 2s --duration 15s --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="batched-game-traffic --clients 100 --warmup 2s --duration 10s --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5"
 ```
 
 Use `--rate-mbps 0` or `--rates-mbps unlimited` for an uncapped sender. Use `--target-gbps 1` as shorthand for `--rate-mbps 1000`. For production-style fanout, prefer `--per-client-mbps 5`; the runner converts that to aggregate offered rate from the established client count.
 
 The `disappearing-clients` scenario supports `--disappear-mode close` for clean disconnect churn and `--disappear-mode stop-reading` for local retry-pressure smoke runs where selected clients stop reading while the server keeps sending. Use external `tc`/routing rules or remote workers for true blackhole profiles.
+
+The `batched-game-traffic` scenario sends bursty, length-framed synthetic batches on a fixed flush cadence. Use `--batch-interval 10ms|20ms|50ms`, `--logical-packets-per-batch`, `--batch-payload-sizes`, and `--batch-groups` to approximate CubeCraft, Nukkit, Cloudburst, and Geyser-style grouped fanout. Compression is not modeled yet; batch payload sizes represent already-encoded batch bytes.
 
 ## Remote Worker Runs
 
@@ -93,6 +96,7 @@ Important fields:
 - `deliveredGbps`: receiver-observed payload throughput
 - `offeredGbps`: benchmark sender payload rate
 - `targetClientMbps`: configured or derived per-client offered target
+- `deliveredLogicalPacketsPerSecond`: synthetic logical game packets delivered per second for batch runs
 - `disappearanceMode`: clean close or stop-reading behavior for disappearance runs
 - `probeRttP95Millis` and `probeRttP99Millis`: latency under bulk load
 - `fairnessIndex`: Jain fairness index across clients, where `1.0` is perfectly even delivery

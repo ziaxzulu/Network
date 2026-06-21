@@ -40,8 +40,10 @@ public final class PeerStats {
     private final LongAdder nackOut = new LongAdder();
     private final LongAdder bulkSentMessages = new LongAdder();
     private final LongAdder bulkSentBytes = new LongAdder();
+    private final LongAdder logicalPacketsSent = new LongAdder();
     private final LongAdder bulkReceivedMessages = new LongAdder();
     private final LongAdder bulkReceivedBytes = new LongAdder();
+    private final LongAdder logicalPacketsReceived = new LongAdder();
     private final LongAdder probesSent = new LongAdder();
     private final LongAdder probesAcked = new LongAdder();
     private final LongAdder disconnects = new LongAdder();
@@ -67,8 +69,10 @@ public final class PeerStats {
         this.nackOut.reset();
         this.bulkSentMessages.reset();
         this.bulkSentBytes.reset();
+        this.logicalPacketsSent.reset();
         this.bulkReceivedMessages.reset();
         this.bulkReceivedBytes.reset();
+        this.logicalPacketsReceived.reset();
         this.probesSent.reset();
         this.probesAcked.reset();
         this.maxQueuedBytes.set(0L);
@@ -135,13 +139,23 @@ public final class PeerStats {
     }
 
     public void addBulkSent(int bytes) {
+        addBulkSent(bytes, 1);
+    }
+
+    public void addBulkSent(int bytes, int logicalPackets) {
         this.bulkSentMessages.increment();
         this.bulkSentBytes.add(bytes);
+        this.logicalPacketsSent.add(Math.max(1, logicalPackets));
     }
 
     public void addBulkReceived(int bytes) {
+        addBulkReceived(bytes, 1);
+    }
+
+    public void addBulkReceived(int bytes, int logicalPackets) {
         this.bulkReceivedMessages.increment();
         this.bulkReceivedBytes.add(bytes);
+        this.logicalPacketsReceived.add(Math.max(1, logicalPackets));
     }
 
     public void addProbeSent() {
@@ -188,8 +202,10 @@ public final class PeerStats {
                 this.nackOut.sum(),
                 this.bulkSentMessages.sum(),
                 this.bulkSentBytes.sum(),
+                this.logicalPacketsSent.sum(),
                 this.bulkReceivedMessages.sum(),
                 this.bulkReceivedBytes.sum(),
+                this.logicalPacketsReceived.sum(),
                 this.probesSent.sum(),
                 this.probesAcked.sum(),
                 this.disconnects.sum(),
@@ -215,8 +231,10 @@ public final class PeerStats {
         public final long nackOut;
         public final long bulkSentMessages;
         public final long bulkSentBytes;
+        public final long logicalPacketsSent;
         public final long bulkReceivedMessages;
         public final long bulkReceivedBytes;
+        public final long logicalPacketsReceived;
         public final long probesSent;
         public final long probesAcked;
         public final long disconnects;
@@ -226,7 +244,8 @@ public final class PeerStats {
         private Snapshot(int id, boolean impaired, InetSocketAddress address, long serverBytesIn, long serverBytesOut,
                          long serverDatagramsIn, long serverDatagramsOut, long encapsulatedIn, long encapsulatedOut,
                          long staleDatagrams, long ackIn, long ackOut, long nackIn, long nackOut,
-                         long bulkSentMessages, long bulkSentBytes, long bulkReceivedMessages, long bulkReceivedBytes,
+                         long bulkSentMessages, long bulkSentBytes, long logicalPacketsSent,
+                         long bulkReceivedMessages, long bulkReceivedBytes, long logicalPacketsReceived,
                          long probesSent, long probesAcked, long disconnects, long maxQueuedBytes, RakState lastState) {
             this.id = id;
             this.impaired = impaired;
@@ -244,8 +263,10 @@ public final class PeerStats {
             this.nackOut = nackOut;
             this.bulkSentMessages = bulkSentMessages;
             this.bulkSentBytes = bulkSentBytes;
+            this.logicalPacketsSent = logicalPacketsSent;
             this.bulkReceivedMessages = bulkReceivedMessages;
             this.bulkReceivedBytes = bulkReceivedBytes;
+            this.logicalPacketsReceived = logicalPacketsReceived;
             this.probesSent = probesSent;
             this.probesAcked = probesAcked;
             this.disconnects = disconnects;

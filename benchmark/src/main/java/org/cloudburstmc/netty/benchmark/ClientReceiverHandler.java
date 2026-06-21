@@ -50,6 +50,10 @@ final class ClientReceiverHandler extends SimpleChannelInboundHandler<RakMessage
             this.peer.addBulkReceived(content.readableBytes());
             return;
         }
+        if (type == BenchmarkPayload.BATCH) {
+            this.peer.addBulkReceived(content.readableBytes(), BenchmarkPayload.logicalPackets(content));
+            return;
+        }
         if (type == BenchmarkPayload.PROBE) {
             long sequence = BenchmarkPayload.sequence(content);
             long sentNanos = BenchmarkPayload.timestampNanos(content);

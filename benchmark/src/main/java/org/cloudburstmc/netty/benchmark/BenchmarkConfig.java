@@ -51,8 +51,12 @@ public final class BenchmarkConfig {
     private File outputRoot = new File("build/benchmark-results");
     private String runId;
     private List<Integer> payloadSizes = Arrays.asList(64, 512, 1200);
+    private List<Integer> batchPayloadSizes = Arrays.asList(128, 512, 1200);
     private List<Double> ratesMbps = Arrays.asList(100.0D, 500.0D, 1000.0D, 0.0D);
     private List<RakReliability> reliabilities = Arrays.asList(RakReliability.RELIABLE_ORDERED);
+    private long batchIntervalMillis = 20L;
+    private int logicalPacketsPerBatch = 8;
+    private int batchGroups = 1;
 
     private BenchmarkConfig() {
     }
@@ -115,6 +119,8 @@ public final class BenchmarkConfig {
             this.payloadSize = parsePositiveInt(key, value);
         } else if ("payload-sizes".equals(key)) {
             this.payloadSizes = parseIntegerList(key, value);
+        } else if ("batch-payload-sizes".equals(key)) {
+            this.batchPayloadSizes = parseIntegerList(key, value);
         } else if ("warmup".equals(key)) {
             this.warmupMillis = parseDurationMillis(value);
         } else if ("duration".equals(key)) {
@@ -141,6 +147,12 @@ public final class BenchmarkConfig {
             this.ratesMbps = parseRateList(key, value);
         } else if ("probe-interval".equals(key)) {
             this.probeIntervalMillis = parseDurationMillis(value);
+        } else if ("batch-interval".equals(key) || "flush-interval".equals(key)) {
+            this.batchIntervalMillis = parseDurationMillis(value);
+        } else if ("logical-packets-per-batch".equals(key) || "batch-logical-packets".equals(key)) {
+            this.logicalPacketsPerBatch = parsePositiveInt(key, value);
+        } else if ("batch-groups".equals(key) || "group-count".equals(key)) {
+            this.batchGroups = parsePositiveInt(key, value);
         } else if ("reliability".equals(key)) {
             this.reliability = parseReliability(value);
         } else if ("reliabilities".equals(key)) {
@@ -169,8 +181,18 @@ public final class BenchmarkConfig {
                 throw new IllegalArgumentException("--payload-sizes values must be at least " + BenchmarkPayload.MIN_BULK_PAYLOAD_SIZE + " bytes");
             }
         }
+        int minBatchPayloadSize = BenchmarkPayload.minBatchPayloadSize(this.logicalPacketsPerBatch);
+        for (Integer size : this.batchPayloadSizes) {
+            if (size < minBatchPayloadSize) {
+                throw new IllegalArgumentException("--batch-payload-sizes values must be at least " + minBatchPayloadSize
+                        + " bytes for " + this.logicalPacketsPerBatch + " logical packets");
+            }
+        }
         if (this.probeIntervalMillis <= 0) {
             throw new IllegalArgumentException("--probe-interval must be positive");
+        }
+        if (this.batchIntervalMillis <= 0) {
+            throw new IllegalArgumentException("--batch-interval must be positive");
         }
         if (this.disappearingClients > 0 && this.disappearAfterMillis() >= this.durationMillis) {
             throw new IllegalArgumentException("--disappear-after must be less than --duration");
@@ -315,12 +337,28 @@ public final class BenchmarkConfig {
         return Collections.unmodifiableList(this.payloadSizes);
     }
 
+    public List<Integer> batchPayloadSizes() {
+        return Collections.unmodifiableList(this.batchPayloadSizes);
+    }
+
     public List<Double> ratesMbps() {
         return Collections.unmodifiableList(this.ratesMbps);
     }
 
     public List<RakReliability> reliabilities() {
         return Collections.unmodifiableList(this.reliabilities);
+    }
+
+    public long batchIntervalMillis() {
+        return this.batchIntervalMillis;
+    }
+
+    public int logicalPacketsPerBatch() {
+        return this.logicalPacketsPerBatch;
+    }
+
+    public int batchGroups() {
+        return this.batchGroups;
     }
 
     public static long parseDurationMillis(String value) {
