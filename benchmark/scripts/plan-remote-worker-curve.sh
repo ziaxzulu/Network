@@ -529,7 +529,7 @@ chmod +x "$server_script" "$merge_script"
   echo
   echo "1. Generate this plan shortly before the run so scheduled start timestamps are still in the future."
   echo "2. Copy the generated receiver command scripts to receiver hosts so every host uses the same scheduled start timestamps."
-  echo "3. Start all receiver scripts first, then the server script. Hosts should be NTP-synchronized."
+  echo "3. Start the server script first, then start all receiver scripts once the server is listening. Hosts should be NTP-synchronized and the scheduled start timestamp should still be in the future."
   echo "4. Copy receiver artifacts back under the same artifact root on the merge host."
   echo "5. Run \`merge-commands.sh\` to create merged per-rate artifacts, a combined \`suite-aggregate.jsonl\`, and stable bandwidth capacity artifacts."
   echo

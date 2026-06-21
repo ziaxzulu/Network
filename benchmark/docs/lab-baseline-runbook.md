@@ -96,7 +96,21 @@ benchmark/scripts/plan-lab-baseline.sh \
   --start-delay 90s
 ```
 
-Run the generated host-capture script on every host, then run the generated curve and contention worker scripts in the order shown in the plan README. After receiver artifacts are copied back, run `merge-all.sh`; it writes `combined/suite-aggregate.jsonl` and copies the curve `bandwidth-capacity.*` selector artifacts beside it.
+Add a raised-limiter curve pass when you need to separate out-of-box packet-limit behavior from the established-channel capacity ceiling:
+
+```bash
+benchmark/scripts/plan-lab-baseline.sh \
+  --out benchmark/build/benchmark-results/lab-baseline-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-baseline \
+  --server-host <server-ip> \
+  --interface <nic> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=100 \
+  --raised-packet-limit 100000 \
+  --raised-global-packet-limit 1000000
+```
+
+Run the generated host-capture script on every host, then run the generated curve and contention worker scripts in the order shown in the plan README. After receiver artifacts are copied back, run `merge-all.sh`; it writes `combined/suite-aggregate.jsonl` and combined curve `bandwidth-capacity.*` selector artifacts beside it.
 
 Start the server worker first:
 
@@ -161,7 +175,7 @@ benchmark/scripts/plan-remote-worker-curve.sh \
   --start-delay 90s
 ```
 
-Run the generated receiver scripts on receiver hosts, run `server-commands.sh` on the server host, copy receiver artifacts back under the same artifact root, then run `merge-commands.sh`. The merge output includes a campaign-level `suite-aggregate.jsonl` and `bandwidth-capacity.*` files for highest-stable-capacity review.
+Run `server-commands.sh` on the server host first, start the generated receiver scripts once the server is listening, copy receiver artifacts back under the same artifact root, then run `merge-commands.sh`. The merge output includes a campaign-level `suite-aggregate.jsonl` and `bandwidth-capacity.*` files for highest-stable-capacity review.
 
 For remote contention campaigns, generate fanout, fairness, and disappearance cases together:
 

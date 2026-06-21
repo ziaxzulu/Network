@@ -31,6 +31,8 @@ contention_start_offset=""
 case_spacing=""
 packet_limit=""
 global_packet_limit=""
+raised_packet_limit=""
+raised_global_packet_limit=""
 workers=""
 reliability="reliable_ordered"
 common_args=""
@@ -84,6 +86,8 @@ Options:
   --case-spacing DURATION           Gap between scheduled case starts. Default: planner defaults.
   --packet-limit N                  Optional RakNet packet limit override.
   --global-packet-limit N           Optional RakNet global packet limit override.
+  --raised-packet-limit N           Add a second raised-limiter curve campaign with this packet limit.
+  --raised-global-packet-limit N    Raised-limiter curve global packet limit.
   --workers N                       Optional benchmark worker count.
   --reliability MODE                Reliability mode. Default: reliable_ordered.
   --common-args "..."               Extra benchmark args appended to every worker command.
@@ -228,6 +232,14 @@ while [[ $# -gt 0 ]]; do
       global_packet_limit="$2"
       shift 2
       ;;
+    --raised-packet-limit)
+      raised_packet_limit="$2"
+      shift 2
+      ;;
+    --raised-global-packet-limit)
+      raised_global_packet_limit="$2"
+      shift 2
+      ;;
     --workers)
       workers="$2"
       shift 2
@@ -350,6 +362,18 @@ if ! positive_int "$contention_payload_size"; then
   echo "--contention-payload-size must be a positive integer" >&2
   exit 2
 fi
+if [[ -n "$raised_packet_limit" ]] && ! positive_int "$raised_packet_limit"; then
+  echo "--raised-packet-limit must be a positive integer" >&2
+  exit 2
+fi
+if [[ -n "$raised_global_packet_limit" ]] && ! positive_int "$raised_global_packet_limit"; then
+  echo "--raised-global-packet-limit must be a positive integer" >&2
+  exit 2
+fi
+if [[ -n "$raised_packet_limit" && -z "$raised_global_packet_limit" ]] || [[ -z "$raised_packet_limit" && -n "$raised_global_packet_limit" ]]; then
+  echo "--raised-packet-limit and --raised-global-packet-limit must be supplied together" >&2
+  exit 2
+fi
 for value in "$curve_payload_sizes" "$curve_rates_mbps" "$contention_cases"; do
   if ! non_empty_csv "$value"; then
     echo "CSV options must be non-empty and cannot start or end with a comma: $value" >&2
@@ -391,13 +415,18 @@ if [[ "$curve_case_count" -le 0 ]]; then
   echo "curve case count must be positive" >&2
   exit 2
 fi
+curve_campaign_count=1
+if [[ -n "$raised_packet_limit" ]]; then
+  curve_campaign_count=2
+fi
 if [[ -z "$contention_start_offset" ]]; then
-  contention_start_offset="$((start_offset_ms + (curve_case_count * case_spacing_ms) + 60000))ms"
+  contention_start_offset="$((start_offset_ms + (curve_campaign_count * curve_case_count * case_spacing_ms) + 60000))ms"
 fi
 
 mkdir -p "$output_root"
 
 curve_plan="$output_root/curve-plan"
+raised_curve_plan="$output_root/curve-raised-plan"
 contention_plan="$output_root/contention-plan"
 host_capture_script="$output_root/host-capture-commands.sh"
 merge_all_script="$output_root/merge-all.sh"
@@ -405,6 +434,7 @@ topology_template="$output_root/topology-template.md"
 readme="$output_root/README.md"
 
 curve_artifact_root="$artifact_root/curve"
+raised_curve_artifact_root="$artifact_root/curve-raised"
 contention_artifact_root="$artifact_root/contention"
 
 curve_cmd=(
@@ -446,6 +476,46 @@ if [[ -n "$workers" ]]; then
 fi
 if [[ -n "$common_args" ]]; then
   curve_cmd+=(--common-args "$common_args")
+fi
+
+if [[ -n "$raised_packet_limit" ]]; then
+  raised_curve_start_offset="$((start_offset_ms + (curve_case_count * case_spacing_ms) + 60000))ms"
+  raised_curve_cmd=(
+    "$script_dir/plan-remote-worker-curve.sh"
+    --out "$raised_curve_plan"
+    --artifact-root "$raised_curve_artifact_root"
+    --case "$case_prefix-curve-raised"
+    --server-host "$server_host"
+    --server-bind-host "$bind_host"
+    --port "$port"
+    --payload-sizes "$curve_payload_sizes"
+    --rates-mbps "$curve_rates_mbps"
+    --warmup "$warmup"
+    --duration "$duration"
+    --iterations "$iterations"
+    --start-delay "$start_delay"
+    --start-offset "$raised_curve_start_offset"
+    --reliability "$reliability"
+    --max-p99-ms "$max_p99_ms"
+    --max-queue-bytes "$max_queue_bytes"
+    --max-send-deliver-ratio "$max_send_deliver_ratio"
+    --max-nack-out-s "$max_nack_out_s"
+    --selector-min-iterations "$iterations"
+    --packet-limit "$raised_packet_limit"
+    --global-packet-limit "$raised_global_packet_limit"
+  )
+  for receiver in "${curve_receivers[@]}"; do
+    raised_curve_cmd+=(--receiver "$receiver")
+  done
+  if [[ -n "$case_spacing" ]]; then
+    raised_curve_cmd+=(--case-spacing "$case_spacing")
+  fi
+  if [[ -n "$workers" ]]; then
+    raised_curve_cmd+=(--workers "$workers")
+  fi
+  if [[ -n "$common_args" ]]; then
+    raised_curve_cmd+=(--common-args "$common_args")
+  fi
 fi
 
 contention_cmd=(
@@ -492,6 +562,9 @@ if [[ -n "$common_args" ]]; then
 fi
 
 "${curve_cmd[@]}"
+if [[ -n "$raised_packet_limit" ]]; then
+  "${raised_curve_cmd[@]}"
+fi
 "${contention_cmd[@]}"
 
 add_required_scenario() {
@@ -548,38 +621,105 @@ COMBINED_OUT="\${COMBINED_OUT:-\$ARTIFACT_ROOT/combined}"
 
 cd "\$REPO_ROOT"
 ARTIFACT_ROOT="\$ARTIFACT_ROOT/curve" "$curve_plan/merge-commands.sh"
+EOF
+
+if [[ -n "$raised_packet_limit" ]]; then
+  cat >>"$merge_all_script" <<EOF
+ARTIFACT_ROOT="\$ARTIFACT_ROOT/curve-raised" "$raised_curve_plan/merge-commands.sh"
+EOF
+fi
+
+cat >>"$merge_all_script" <<EOF
 ARTIFACT_ROOT="\$ARTIFACT_ROOT/contention" "$contention_plan/merge-commands.sh"
 
 mkdir -p "\$COMBINED_OUT"
 rm -f "\$COMBINED_OUT/suite-aggregate.jsonl"
-for aggregate in "\$ARTIFACT_ROOT/curve/merged/suite-aggregate.jsonl" "\$ARTIFACT_ROOT/contention/merged/suite-aggregate.jsonl"; do
-  if [[ ! -s "\$aggregate" ]]; then
-    echo "Missing aggregate: \$aggregate" >&2
+aggregate_inputs=(
+  "\$ARTIFACT_ROOT/curve/merged/suite-aggregate.jsonl"
+EOF
+
+if [[ -n "$raised_packet_limit" ]]; then
+  cat >>"$merge_all_script" <<'EOF'
+  "$ARTIFACT_ROOT/curve-raised/merged/suite-aggregate.jsonl"
+EOF
+fi
+
+cat >>"$merge_all_script" <<'EOF'
+  "$ARTIFACT_ROOT/contention/merged/suite-aggregate.jsonl"
+)
+
+for aggregate in "${aggregate_inputs[@]}"; do
+  if [[ ! -s "$aggregate" ]]; then
+    echo "Missing aggregate: $aggregate" >&2
     exit 1
   fi
-  cat "\$aggregate" >>"\$COMBINED_OUT/suite-aggregate.jsonl"
+  cat "$aggregate" >>"$COMBINED_OUT/suite-aggregate.jsonl"
 done
 
-for file in bandwidth-capacity.jsonl bandwidth-capacity.csv bandwidth-capacity.md; do
-  if [[ -s "\$ARTIFACT_ROOT/curve/merged/\$file" ]]; then
-    cp "\$ARTIFACT_ROOT/curve/merged/\$file" "\$COMBINED_OUT/\$file"
+capacity_roots=(
+  "$ARTIFACT_ROOT/curve/merged"
+EOF
+
+if [[ -n "$raised_packet_limit" ]]; then
+  cat >>"$merge_all_script" <<'EOF'
+  "$ARTIFACT_ROOT/curve-raised/merged"
+EOF
+fi
+
+cat >>"$merge_all_script" <<'EOF'
+)
+
+rm -f "$COMBINED_OUT/bandwidth-capacity.jsonl" "$COMBINED_OUT/bandwidth-capacity.csv" "$COMBINED_OUT/bandwidth-capacity.md"
+for capacity_root in "${capacity_roots[@]}"; do
+  if [[ -s "$capacity_root/bandwidth-capacity.jsonl" ]]; then
+    cat "$capacity_root/bandwidth-capacity.jsonl" >>"$COMBINED_OUT/bandwidth-capacity.jsonl"
+  fi
+  if [[ -s "$capacity_root/bandwidth-capacity.csv" ]]; then
+    if [[ ! -s "$COMBINED_OUT/bandwidth-capacity.csv" ]]; then
+      cat "$capacity_root/bandwidth-capacity.csv" >>"$COMBINED_OUT/bandwidth-capacity.csv"
+    else
+      tail -n +2 "$capacity_root/bandwidth-capacity.csv" >>"$COMBINED_OUT/bandwidth-capacity.csv"
+    fi
   fi
 done
+if [[ -s "$COMBINED_OUT/bandwidth-capacity.jsonl" ]]; then
+  {
+    echo "# Combined Bandwidth Capacity"
+    for capacity_root in "${capacity_roots[@]}"; do
+      if [[ -s "$capacity_root/bandwidth-capacity.md" ]]; then
+        echo
+        echo "## $capacity_root"
+        echo
+        cat "$capacity_root/bandwidth-capacity.md"
+      fi
+    done
+  } >"$COMBINED_OUT/bandwidth-capacity.md"
+fi
 
-cat >"\$COMBINED_OUT/README.md" <<'REPORT'
+cat >"$COMBINED_OUT/README.md" <<'REPORT'
 # Combined Lab Baseline
 
 This directory combines the remote bandwidth-curve and remote contention campaign aggregates.
 
 - suite-aggregate.jsonl contains all comparable baseline rows.
-- bandwidth-capacity.* files are copied from the curve campaign when present.
-- Keep the sibling curve/, contention/, and host report directories with this combined output.
+- bandwidth-capacity.* files combine capacity selections from each curve campaign.
+- Keep the sibling curve/, optional curve-raised/, contention/, and host report directories with this combined output.
 REPORT
 
-benchmark/scripts/validate-lab-baseline.sh --input "\$ARTIFACT_ROOT" --out "\$COMBINED_OUT" --manifest "$curve_plan/manifest.jsonl" --manifest "$contention_plan/manifest.jsonl" --min-iterations "$iterations" --required-scenarios "$required_validation_scenarios"
+benchmark/scripts/validate-lab-baseline.sh --input "$ARTIFACT_ROOT" --out "$COMBINED_OUT" __CURVE_MANIFEST_ARG__ __RAISED_MANIFEST_ARG__ __CONTENTION_MANIFEST_ARG__ --min-iterations __MIN_ITERATIONS__ --required-scenarios __REQUIRED_SCENARIOS__
 
-echo "Combined suite aggregate: \$COMBINED_OUT/suite-aggregate.jsonl"
+echo "Combined suite aggregate: $COMBINED_OUT/suite-aggregate.jsonl"
 EOF
+
+sed -i "s#__CURVE_MANIFEST_ARG__#--manifest $curve_plan/manifest.jsonl#g" "$merge_all_script"
+if [[ -n "$raised_packet_limit" ]]; then
+  sed -i "s#__RAISED_MANIFEST_ARG__#--manifest $raised_curve_plan/manifest.jsonl#g" "$merge_all_script"
+else
+  sed -i "s#__RAISED_MANIFEST_ARG__##g" "$merge_all_script"
+fi
+sed -i "s#__CONTENTION_MANIFEST_ARG__#--manifest $contention_plan/manifest.jsonl#g" "$merge_all_script"
+sed -i "s#__MIN_ITERATIONS__#$iterations#g" "$merge_all_script"
+sed -i "s#__REQUIRED_SCENARIOS__#$required_validation_scenarios#g" "$merge_all_script"
 
 cat >"$topology_template" <<EOF
 # Lab Baseline Topology
@@ -627,6 +767,10 @@ EOF
   echo "- Generated: \`$timestamp\`"
   echo "- Artifact root: \`$artifact_root\`"
   echo "- Curve plan: \`$curve_plan\`"
+  if [[ -n "$raised_packet_limit" ]]; then
+    echo "- Raised-limiter curve plan: \`$raised_curve_plan\`"
+    echo "- Raised-limiter curve packet limits: \`$raised_packet_limit/$raised_global_packet_limit\`"
+  fi
   echo "- Contention plan: \`$contention_plan\`"
   echo "- Combined merge: \`$merge_all_script\`"
   echo "- Host capture: \`$host_capture_script\`"
@@ -637,11 +781,19 @@ EOF
   echo
   echo "1. Copy or fill \`topology-template.md\` as \`topology.md\` next to the final artifacts."
   echo "2. Run \`host-capture-commands.sh\` on the server and each receiver host with \`HOST_ROLE\` set, for example \`HOST_ROLE=server INTERFACE=$interface ./host-capture-commands.sh\`."
-  echo "3. Run the curve receiver scripts, then \`curve-plan/server-commands.sh\` on the server host."
+  echo "3. Start \`curve-plan/server-commands.sh\` on the server host, then run the curve receiver scripts once the server is listening."
   echo "4. Copy curve receiver artifacts back under \`$curve_artifact_root\` on the merge host."
-  echo "5. Run the contention receiver scripts, then \`contention-plan/server-commands.sh\` on the server host."
-  echo "6. Copy contention receiver artifacts back under \`$contention_artifact_root\` on the merge host."
-  echo "7. Run \`merge-all.sh\` to produce \`combined/suite-aggregate.jsonl\`, curve \`bandwidth-capacity.*\` selector files, and validation reports. Validation expects \`topology.md\` and host reports under the artifact root."
+  if [[ -n "$raised_packet_limit" ]]; then
+    echo "5. Start \`curve-raised-plan/server-commands.sh\` on the server host, then run the raised-limiter curve receiver scripts once the server is listening."
+    echo "6. Copy raised-limiter curve receiver artifacts back under \`$raised_curve_artifact_root\` on the merge host."
+    echo "7. Start \`contention-plan/server-commands.sh\` on the server host, then run the contention receiver scripts once the server is listening."
+    echo "8. Copy contention receiver artifacts back under \`$contention_artifact_root\` on the merge host."
+    echo "9. Run \`merge-all.sh\` to produce \`combined/suite-aggregate.jsonl\`, combined curve \`bandwidth-capacity.*\` selector files, and validation reports. Validation expects \`topology.md\` and host reports under the artifact root."
+  else
+    echo "5. Start \`contention-plan/server-commands.sh\` on the server host, then run the contention receiver scripts once the server is listening."
+    echo "6. Copy contention receiver artifacts back under \`$contention_artifact_root\` on the merge host."
+    echo "7. Run \`merge-all.sh\` to produce \`combined/suite-aggregate.jsonl\`, curve \`bandwidth-capacity.*\` selector files, and validation reports. Validation expects \`topology.md\` and host reports under the artifact root."
+  fi
   echo
   echo "The generated start times are non-overlapping by default. Regenerate this plan shortly before lab execution if the scheduled timestamps have passed."
   echo

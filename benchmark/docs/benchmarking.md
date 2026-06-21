@@ -64,6 +64,8 @@ RakNet's server packet limiter stays at library defaults unless overridden. For 
 
 Use the default-limiter run to understand out-of-box behavior, and the raised-limiter run to avoid mistaking the anti-abuse guardrail for the established-channel send/receive ceiling. The selected limits are written into `summary.json` and `report.md`.
 
+For remote lab plans, pass `--raised-packet-limit` and `--raised-global-packet-limit` to `plan-lab-baseline.sh`. The generated plan schedules a second curve campaign and combines both default and raised-limiter capacity rows in the final baseline output.
+
 The `fairness` scenario supports benchmark-managed impairment for the first `--impaired-clients` clients. The impairment is enabled only after the client channel is established, so local runs stay focused on established-channel behavior:
 
 ```bash
