@@ -119,10 +119,10 @@ suite_aggregate_csv="$output_root/suite-aggregate.csv"
 : >"$suite_summary_jsonl"
 : >"$suite_aggregate_jsonl"
 cat >"$suite_summary_csv" <<'CSV'
-case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,elapsed_ms,offered_gbps,delivered_gbps,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,max_queued_bytes,artifact
+case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,elapsed_ms,offered_gbps,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,max_queued_bytes,artifact
 CSV
 cat >"$suite_aggregate_csv" <<'CSV'
-case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,median_delivered_gbps,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_fairness,median_healthy_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact
+case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,median_delivered_gbps,median_healthy_delivered_gbps,median_affected_delivered_gbps,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_fairness,median_healthy_fairness,median_affected_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact
 CSV
 
 json_escape() {
@@ -212,12 +212,15 @@ append_case_metrics() {
       elapsedMillis: .elapsedMillis,
       offeredGbps: .offeredGbps,
       deliveredGbps: .deliveredGbps,
+      healthyDeliveredGbps: (.healthyDeliveredGbps // .deliveredGbps),
+      affectedDeliveredGbps: (.affectedDeliveredGbps // 0),
       deliveredMessagesPerSecond: .deliveredMessagesPerSecond,
       deliveredLogicalPacketsPerSecond: (.deliveredLogicalPacketsPerSecond // 0),
       probeRttP95Millis: .probeRttP95Millis,
       probeRttP99Millis: .probeRttP99Millis,
       fairnessIndex: .fairnessIndex,
       healthyFairnessIndex: (.healthyFairnessIndex // 1),
+      affectedFairnessIndex: (.affectedFairnessIndex // 1),
       affectedClients: (.affectedClients // 0),
       disconnects: (.disconnects // 0),
       blackholedDatagramsIn: (.blackholedDatagramsIn // 0),
@@ -250,12 +253,15 @@ append_case_metrics() {
       .elapsedMillis,
       .offeredGbps,
       .deliveredGbps,
+      (.healthyDeliveredGbps // .deliveredGbps),
+      (.affectedDeliveredGbps // 0),
       .deliveredMessagesPerSecond,
       (.deliveredLogicalPacketsPerSecond // 0),
       .probeRttP95Millis,
       .probeRttP99Millis,
       .fairnessIndex,
       (.healthyFairnessIndex // 1),
+      (.affectedFairnessIndex // 1),
       (.affectedClients // 0),
       (.disconnects // 0),
       (.blackholedDatagramsIn // 0),
@@ -332,6 +338,8 @@ write_suite_aggregates() {
       elapsedMillis: ($rows | map(.elapsedMillis) | median),
       offeredGbps: ($rows | map(.offeredGbps) | median),
       deliveredGbps: ($throughput | median),
+      healthyDeliveredGbps: ($rows | map(.healthyDeliveredGbps) | median),
+      affectedDeliveredGbps: ($rows | map(.affectedDeliveredGbps) | median),
       deliveredGbpsMin: ($throughput | min),
       deliveredGbpsMax: ($throughput | max),
       deliveredGbpsSpreadPct: $throughputSpread,
@@ -344,6 +352,7 @@ write_suite_aggregates() {
       probeRttP99MillisSpreadPct: $p99Spread,
       fairnessIndex: ($rows | map(.fairnessIndex) | median),
       healthyFairnessIndex: ($rows | map(.healthyFairnessIndex) | median),
+      affectedFairnessIndex: ($rows | map(.affectedFairnessIndex) | median),
       affectedClients: ($rows | map(.affectedClients) | max),
       disconnects: ($rows | map(.disconnects) | add),
       blackholedDatagramsIn: ($rows | map(.blackholedDatagramsIn) | add),
@@ -375,12 +384,15 @@ write_suite_aggregates() {
       .impairmentJitterMillis,
       .impairmentLossPercent,
       .deliveredGbps,
+      .healthyDeliveredGbps,
+      .affectedDeliveredGbps,
       .deliveredGbpsSpreadPct,
       .probeRttP99Millis,
       .probeRttP99MillisSpreadPct,
       .maxQueuedBytes,
       .fairnessIndex,
       .healthyFairnessIndex,
+      .affectedFairnessIndex,
       .disconnects,
       .blackholedDatagramsIn,
       .blackholedDatagramsOut,
@@ -401,11 +413,12 @@ write_suite_aggregates() {
     echo "- Aggregate JSONL: \`$suite_aggregate_jsonl\`"
     echo "- Aggregate CSV: \`$suite_aggregate_csv\`"
     echo
-    echo "| Case | Scenario | Impairment | Iterations | Median Gbps | Throughput Spread | Median p99 ms | p99 Spread | Max Queue | Unstable | Reasons |"
-    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+    echo "| Case | Scenario | Impairment | Iterations | Median Gbps | Healthy Gbps | Affected Gbps | Throughput Spread | Median p99 ms | p99 Spread | Max Queue | Unstable | Reasons |"
+    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
+        elif ($value | type) == "number" and $value != 0 and (($value | fabs) < 1) then (($value * 1000000 | round) / 1000000 | tostring)
         elif ($value | type) == "number" then (($value * 1000 | round) / 1000 | tostring)
         else ($value | tostring)
         end;
@@ -415,6 +428,8 @@ write_suite_aggregates() {
         "`" + (.impairmentProfile // "0ms/0ms/0%") + "`",
         (.measuredIterations | tostring),
         fmt(.deliveredGbps),
+        fmt(.healthyDeliveredGbps),
+        fmt(.affectedDeliveredGbps),
         fmt(.deliveredGbpsSpreadPct) + "%",
         fmt(.probeRttP99Millis),
         fmt(.probeRttP99MillisSpreadPct) + "%",
@@ -422,8 +437,8 @@ write_suite_aggregates() {
         (.unstable | tostring),
         "`" + ((.unstableReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$suite_aggregate_jsonl" | while IFS=$'\t' read -r case_name scenario impairment iterations gbps throughput_spread p99 p99_spread queue unstable reasons; do
-      echo "| $case_name | $scenario | $impairment | $iterations | $gbps | $throughput_spread | $p99 | $p99_spread | $queue | $unstable | $reasons |"
+    ' "$suite_aggregate_jsonl" | while IFS=$'\t' read -r case_name scenario impairment iterations gbps healthy_gbps affected_gbps throughput_spread p99 p99_spread queue unstable reasons; do
+      echo "| $case_name | $scenario | $impairment | $iterations | $gbps | $healthy_gbps | $affected_gbps | $throughput_spread | $p99 | $p99_spread | $queue | $unstable | $reasons |"
     done
   } >>"$report"
 }

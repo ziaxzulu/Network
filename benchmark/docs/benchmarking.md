@@ -83,7 +83,7 @@ The baseline runner executes named cases and writes:
 - per-case benchmark artifacts under the suite output directory
 - `manifest.jsonl` with command, status, timestamps, and artifact path
 - `suite-summary.csv` and `suite-summary.jsonl` with key metrics extracted from each successful case
-- `suite-aggregate.csv` and `suite-aggregate.jsonl` with per-case median throughput, median p99 probe RTT, impairment profile, spread, retry-pressure totals, and unstable flags
+- `suite-aggregate.csv` and `suite-aggregate.jsonl` with per-case median throughput, healthy/affected throughput, median p99 probe RTT, impairment profile, spread, retry-pressure totals, and unstable flags
 - `README.md` with a compact case table
 
 Profiles:
@@ -131,7 +131,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --out benchmark/build/benchmark-results/lab-comparison.md
 ```
 
-The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when the impairment profile differs, or when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
+The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when the impairment profile differs, or when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds. Reports also include healthy-vs-affected throughput and fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
 
 When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggregate.jsonl` if present, so baseline-of-record comparisons operate on per-case medians and include throughput/p99 stability spread. Pass explicit `suite-summary.jsonl` paths only when you want raw per-iteration comparison.
 
@@ -191,6 +191,7 @@ Important fields:
 - `probeRttP95Millis` and `probeRttP99Millis`: latency under bulk load
 - `fairnessIndex`: Jain fairness index across clients, where `1.0` is perfectly even delivery
 - `healthyFairnessIndex`: Jain fairness for clients not marked impaired/disappearing
+- `affectedDeliveredGbps` and `affectedFairnessIndex`: throughput and fairness for impaired/disappearing clients
 - `disconnects`: established channels closed during the measured iteration
 - `blackholedDatagramsIn` and `blackholedDatagramsOut`: benchmark-managed datagrams dropped by `--disappear-mode blackhole`
 - `staleDatagrams`, `nackIn`, `nackOut`: retransmission pressure

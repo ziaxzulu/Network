@@ -179,6 +179,8 @@ jq -c -n \
         impairmentJitterMillis: ($row.impairmentJitterMillis // 0),
         impairmentLossPercent: ($row.impairmentLossPercent // 0),
         deliveredGbps: $row.deliveredGbps,
+        healthyDeliveredGbps: ($row.healthyDeliveredGbps // $row.deliveredGbps),
+        affectedDeliveredGbps: ($row.affectedDeliveredGbps // 0),
         deliveredGbpsSpreadPct: ($row.deliveredGbpsSpreadPct // null),
         deliveredMessagesPerSecond: $row.deliveredMessagesPerSecond,
         deliveredLogicalPacketsPerSecond: $row.deliveredLogicalPacketsPerSecond,
@@ -186,6 +188,7 @@ jq -c -n \
         probeRttP99MillisSpreadPct: ($row.probeRttP99MillisSpreadPct // null),
         fairnessIndex: $row.fairnessIndex,
         healthyFairnessIndex: $row.healthyFairnessIndex,
+        affectedFairnessIndex: ($row.affectedFairnessIndex // 1),
         disconnects: $row.disconnects,
         blackholedDatagramsIn: ($row.blackholedDatagramsIn // 0),
         blackholedDatagramsOut: ($row.blackholedDatagramsOut // 0),
@@ -225,6 +228,9 @@ jq -c -n \
         maxQueuedBytesPct: $queueDeltaPct,
         fairnessIndex: ((n($cand.fairnessIndex) // 0) - (n($base.fairnessIndex) // 0)),
         healthyFairnessIndex: ((n($cand.healthyFairnessIndex) // 0) - (n($base.healthyFairnessIndex) // 0)),
+        affectedFairnessIndex: ((n($cand.affectedFairnessIndex) // 0) - (n($base.affectedFairnessIndex) // 0)),
+        healthyDeliveredGbpsPct: pct_delta(n($base.healthyDeliveredGbps); n($cand.healthyDeliveredGbps)),
+        affectedDeliveredGbpsPct: pct_delta(n($base.affectedDeliveredGbps); n($cand.affectedDeliveredGbps)),
         disconnects: ((n($cand.disconnects) // 0) - (n($base.disconnects) // 0)),
         blackholedDatagramsIn: ((n($cand.blackholedDatagramsIn) // 0) - (n($base.blackholedDatagramsIn) // 0)),
         blackholedDatagramsOut: ((n($cand.blackholedDatagramsOut) // 0) - (n($base.blackholedDatagramsOut) // 0)),
@@ -292,11 +298,12 @@ write_report() {
     echo "| Missing candidate rows | $missing_rows |"
     echo "| Extra candidate rows | $extra_rows |"
     echo
-    echo "| Status | Case | Scenario | Impairment | Iteration | Iterations | Delivered Gbps | Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
-    echo "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
+    echo "| Status | Case | Scenario | Impairment | Iteration | Iterations | Delivered Gbps | Delta | Healthy Gbps Delta | Affected Gbps Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Healthy fairness delta | Affected fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
+    echo "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
+        elif ($value | type) == "number" and $value != 0 and (($value | fabs) < 1) then (($value * 1000000 | round) / 1000000 | tostring)
         elif ($value | type) == "number" then (($value * 1000 | round) / 1000 | tostring)
         else ($value | tostring)
         end;
@@ -318,6 +325,8 @@ write_report() {
         (metric(.candidate; "measuredIterations") + " / " + metric(.baseline; "measuredIterations")),
         (metric(.candidate; "deliveredGbps") + " / " + metric(.baseline; "deliveredGbps")),
         pct(.deltas.deliveredGbpsPct),
+        pct(.deltas.healthyDeliveredGbpsPct),
+        pct(.deltas.affectedDeliveredGbpsPct),
         (metric(.candidate; "probeRttP99Millis") + " / " + metric(.baseline; "probeRttP99Millis")),
         pct(.deltas.probeRttP99MillisPct),
         (pct(.candidate.deliveredGbpsSpreadPct) + " / " + pct(.baseline.deliveredGbpsSpreadPct)),
@@ -325,6 +334,8 @@ write_report() {
         (metric(.candidate; "maxQueuedBytes") + " / " + metric(.baseline; "maxQueuedBytes")),
         pct(.deltas.maxQueuedBytesPct),
         fmt(.deltas.fairnessIndex),
+        fmt(.deltas.healthyFairnessIndex),
+        fmt(.deltas.affectedFairnessIndex),
         unstable(.candidate),
         fmt(.deltas.blackholedDatagramsIn),
         fmt(.deltas.blackholedDatagramsOut),
@@ -332,8 +343,8 @@ write_report() {
         fmt(.deltas.staleDatagrams),
         "`" + ((.statusReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario impairment iteration iterations delivered delivered_delta p99 p99_delta throughput_spread p99_spread queue queue_delta fairness_delta candidate_unstable blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
-      echo "| $status | $case_name | $scenario | $impairment | $iteration | $iterations | $delivered | $delivered_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
+    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario impairment iteration iterations delivered delivered_delta healthy_delta affected_delta p99 p99_delta throughput_spread p99_spread queue queue_delta fairness_delta healthy_fairness_delta affected_fairness_delta candidate_unstable blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
+      echo "| $status | $case_name | $scenario | $impairment | $iteration | $iterations | $delivered | $delivered_delta | $healthy_delta | $affected_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $healthy_fairness_delta | $affected_fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
     done
     echo
     if [[ "$failure_rows" -gt 0 ]]; then
