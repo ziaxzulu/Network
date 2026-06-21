@@ -361,7 +361,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --out benchmark/build/benchmark-results/lab-comparison.md
 ```
 
-The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run or when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds.
+The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run, when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds, or when either input contains a failed `validation.json`.
 
 For remote server/receiver worker runs, merge the server and receiver artifact directories first:
 

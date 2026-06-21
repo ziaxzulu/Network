@@ -69,7 +69,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --out benchmark/build/benchmark-results/lab-<date>-<topology>/comparison.md
 ```
 
-The comparison script uses `suite-aggregate.jsonl` automatically when comparing suite directories. That means the comparison is based on per-case medians and includes stability spread. Use the raw `suite-summary.jsonl` files only when diagnosing individual measured iterations.
+The comparison script uses `suite-aggregate.jsonl` automatically when comparing suite directories. That means the comparison is based on per-case medians and includes stability spread. If a compared directory also has `validation.json`, the comparison fails when that validation is failed, so invalid promoted baselines or invalid candidate lab runs do not look like clean regressions. Use the raw `suite-summary.jsonl` files only when diagnosing individual measured iterations.
 
 ## Remote Worker Runs
 

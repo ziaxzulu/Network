@@ -8,6 +8,7 @@ jsonl_path=""
 throughput_regression_pct="10"
 latency_regression_pct="10"
 queue_regression_pct="50"
+allow_failed_validation=false
 
 usage() {
   cat <<'USAGE'
@@ -22,6 +23,7 @@ Options:
   --throughput-regression-pct N   Fail when delivered Gbps falls by more than N percent. Default: 10.
   --latency-regression-pct N      Fail when p99 probe RTT rises by more than N percent. Default: 10.
   --queue-regression-pct N        Fail when max queued bytes rises by more than N percent. Default: 50.
+  --allow-failed-validation       Do not fail when baseline or candidate validation.json exists and is failed.
   --help                          Show this help.
 
 Suite directories prefer suite-aggregate.jsonl when present, falling back to
@@ -62,6 +64,10 @@ while [[ $# -gt 0 ]]; do
     --queue-regression-pct)
       queue_regression_pct="$2"
       shift 2
+      ;;
+    --allow-failed-validation)
+      allow_failed_validation=true
+      shift
       ;;
     --help|-h)
       usage
@@ -105,6 +111,22 @@ resolve_summary() {
   printf '%s\n' "$path"
 }
 
+resolve_validation() {
+  local original_path="$1"
+  local summary_path="$2"
+  if [[ -d "$original_path" && -s "$original_path/validation.json" ]]; then
+    printf '%s\n' "$original_path/validation.json"
+    return
+  fi
+  local summary_dir
+  summary_dir="$(dirname "$summary_path")"
+  if [[ -s "$summary_dir/validation.json" ]]; then
+    printf '%s\n' "$summary_dir/validation.json"
+    return
+  fi
+  printf '\n'
+}
+
 is_number() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
 }
@@ -118,6 +140,22 @@ done
 
 baseline_summary="$(resolve_summary "$baseline_path")"
 candidate_summary="$(resolve_summary "$candidate_path")"
+baseline_validation="$(resolve_validation "$baseline_path" "$baseline_summary")"
+candidate_validation="$(resolve_validation "$candidate_path" "$candidate_summary")"
+
+validation_failures=()
+for label_and_path in "baseline:$baseline_validation" "candidate:$candidate_validation"; do
+  label="${label_and_path%%:*}"
+  validation_path="${label_and_path#*:}"
+  [[ -z "$validation_path" ]] && continue
+  if ! jq -e 'has("passed") and (.passed | type == "boolean")' "$validation_path" >/dev/null; then
+    echo "$label validation file is not a validate-lab-baseline result: $validation_path" >&2
+    exit 2
+  fi
+  if ! jq -e '.passed == true' "$validation_path" >/dev/null; then
+    validation_failures+=("$label:$validation_path")
+  fi
+done
 
 tmp_jsonl=""
 jsonl_retention_note=""
@@ -306,6 +344,10 @@ missing_rows="$(jq -s '[.[] | select(.status == "missing-candidate")] | length' 
 extra_rows="$(jq -s '[.[] | select(.status == "extra-candidate")] | length' "$jsonl_path")"
 ok_rows="$(jq -s '[.[] | select(.status == "ok")] | length' "$jsonl_path")"
 failure_rows=$((regression_rows + missing_rows))
+validation_failure_rows="${#validation_failures[@]}"
+if [[ "$allow_failed_validation" == "true" ]]; then
+  validation_failure_rows=0
+fi
 
 write_report() {
   {
@@ -313,6 +355,18 @@ write_report() {
     echo
     echo "- Baseline summary: \`$baseline_summary\`"
     echo "- Candidate summary: \`$candidate_summary\`"
+    if [[ -n "$baseline_validation" ]]; then
+      baseline_validation_status="$(jq -r 'if .passed then "passed" else "failed" end' "$baseline_validation")"
+      echo "- Baseline validation: \`$baseline_validation\` (\`$baseline_validation_status\`)"
+    else
+      echo "- Baseline validation: not found"
+    fi
+    if [[ -n "$candidate_validation" ]]; then
+      candidate_validation_status="$(jq -r 'if .passed then "passed" else "failed" end' "$candidate_validation")"
+      echo "- Candidate validation: \`$candidate_validation\` (\`$candidate_validation_status\`)"
+    else
+      echo "- Candidate validation: not found"
+    fi
     echo "- Raw comparison JSONL: \`$jsonl_path\` ($jsonl_retention_note)"
     echo "- Throughput regression threshold: \`$throughput_regression_pct%\`"
     echo "- p99 latency regression threshold: \`$latency_regression_pct%\`"
@@ -325,7 +379,20 @@ write_report() {
     echo "| Regressions | $regression_rows |"
     echo "| Missing candidate rows | $missing_rows |"
     echo "| Extra candidate rows | $extra_rows |"
+    echo "| Failed validation inputs | ${#validation_failures[@]} |"
     echo
+    if [[ "${#validation_failures[@]}" -gt 0 ]]; then
+      echo "## Validation Failures"
+      echo
+      echo "| Input | Validation | Issues |"
+      echo "| --- | --- | ---: |"
+      for failure in "${validation_failures[@]}"; do
+        failure_label="${failure%%:*}"
+        failure_path="${failure#*:}"
+        echo "| $failure_label | \`$failure_path\` | $(jq -r '.issues | length' "$failure_path") |"
+      done
+      echo
+    fi
     echo "| Status | Case | Scenario | Impairment | Iteration | Iterations | Delivered Gbps | Delta | Healthy Gbps Delta | Affected Gbps Delta | Client Mbps p50 | Delta | Client Mbps p99 | Delta | Send/Deliver | Delta | Affected Send/Deliver Delta | Datagram Out/s | Delta | Stale/s Delta | NACK Out/s Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Healthy fairness delta | Affected fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
     echo "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
     jq -r '
@@ -386,8 +453,8 @@ write_report() {
       echo "| $status | $case_name | $scenario | $impairment | $iteration | $iterations | $delivered | $delivered_delta | $healthy_delta | $affected_delta | $client_p50 | $client_p50_delta | $client_p99 | $client_p99_delta | $send_ratio | $send_ratio_delta | $affected_send_ratio_delta | $datagram_out_s | $datagram_out_s_delta | $stale_s_delta | $nack_out_s_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $healthy_fairness_delta | $affected_fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
     done
     echo
-    if [[ "$failure_rows" -gt 0 ]]; then
-      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s)."
+    if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 ]]; then
+      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $validation_failure_rows failed validation input(s)."
     else
       echo "Comparison passed."
     fi
@@ -403,6 +470,6 @@ else
   write_report
 fi
 
-if [[ "$failure_rows" -gt 0 ]]; then
+if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 ]]; then
   exit 1
 fi
