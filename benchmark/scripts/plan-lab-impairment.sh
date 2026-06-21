@@ -136,6 +136,7 @@ mkdir -p "$output_root/netem"
 manifest="$output_root/manifest.jsonl"
 readme="$output_root/README.md"
 validate_all_script="$output_root/validate-all.sh"
+summary_script="$output_root/summarize-campaign.sh"
 : >"$manifest"
 
 json_escape() {
@@ -335,6 +336,26 @@ fi
 EOF
 chmod +x "$validate_all_script"
 
+cat >"$summary_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="\${REPO_ROOT:-\$(pwd)}"
+SUMMARY_OUT="\${SUMMARY_OUT:-$artifact_root_default/campaign-summary}"
+cd "\$REPO_ROOT"
+benchmark/scripts/summarize-lab-impairment.sh --manifest "$manifest" --out "\$SUMMARY_OUT" "\$@"
+EOF
+chmod +x "$summary_script"
+
+cat >>"$validate_all_script" <<EOF
+
+summary_args=()
+if [[ "\$REQUIRE_NETEM_EVIDENCE" != "true" ]]; then
+  summary_args+=(--allow-missing-netem-evidence)
+fi
+"$summary_script" "\${summary_args[@]}"
+EOF
+
 {
   echo "# Lab Impairment Plan"
   echo
@@ -346,6 +367,7 @@ chmod +x "$validate_all_script"
   echo "- Sudo netem: \`$sudo_netem\`"
   echo "- Manifest: \`$manifest\`"
   echo "- Validate all: \`$validate_all_script\`"
+  echo "- Summarize campaign: \`$summary_script\`"
   echo
   echo "## Run Order"
   echo
@@ -362,6 +384,7 @@ chmod +x "$validate_all_script"
   echo "- Keep impaired or disappearing clients isolated to the shaped receiver host when exact healthy/affected attribution matters."
   echo "- Copy receiver artifacts back under each profile artifact root, then run that profile's \`merge-all.sh\`."
   echo "- After every profile is merged, run \`validate-all.sh\` as a convenience check over all generated profile plans. It requires \`<profile>-status-*.txt\` evidence by default; set \`REQUIRE_NETEM_EVIDENCE=false\` only for non-baseline smoke validation."
+  echo "- The generated \`summarize-campaign.sh\` writes campaign-level \`impairment-summary.json\`, \`impairment-summary.jsonl\`, and \`impairment-summary.md\` after profile artifacts have been merged."
   echo "- \`ARTIFACT_ROOT\` can override the default artifact root when running generated merge scripts. Default: \`$artifact_root_default\`."
 } >"$readme"
 
@@ -369,3 +392,4 @@ echo "Lab impairment plan: $output_root"
 echo "Manifest: $manifest"
 echo "README: $readme"
 echo "Validate all: $validate_all_script"
+echo "Summarize campaign: $summary_script"
