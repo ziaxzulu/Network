@@ -79,6 +79,28 @@ benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/ben
 
 For baseline-of-record runs, follow [`lab-baseline-runbook.md`](lab-baseline-runbook.md) and capture host reports with `benchmark/scripts/capture-lab-host.sh` before running the suite.
 
+To repeat a baseline suite under a stable set of host-level impairments, use the impairment matrix wrapper. It defaults to a dry-run plan so the selected NIC and commands can be reviewed before changing host qdisc state:
+
+```bash
+benchmark/scripts/run-impairment-matrix.sh \
+  --interface eth0 \
+  --runner-profile smoke \
+  --only bestcase-1c-medium
+```
+
+Run with `--execute` to apply each profile, run the suite, then clear the qdisc before moving to the next profile:
+
+```bash
+benchmark/scripts/run-impairment-matrix.sh \
+  --interface eth0 \
+  --runner-profile lab \
+  --out benchmark/build/benchmark-results/lab-impairment \
+  --sudo-netem \
+  --execute
+```
+
+The wrapper writes `impairment-manifest.jsonl`, a top-level `README.md`, and one baseline-suite artifact directory per impairment profile. Use `--profiles perfect,near-loss,regional-loss,poor,severe` to select profiles and `--common-args "..."` to append shared benchmark arguments to every case.
+
 To compare an optimization branch against a saved baseline, run the same suite shape twice and compare the generated suite directories:
 
 ```bash

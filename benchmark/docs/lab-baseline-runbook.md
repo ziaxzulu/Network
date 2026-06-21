@@ -107,6 +107,19 @@ sudo benchmark/scripts/raknet-netem.sh --interface <nic> --action clear
 
 Run the same benchmark command after each impairment change. Record the active `tc qdisc show` output in the host report or `topology.md`.
 
+For recurring runs, prefer the wrapper so the applied profile, suite command, and output directory are recorded together:
+
+```bash
+benchmark/scripts/run-impairment-matrix.sh \
+  --interface <nic> \
+  --runner-profile lab \
+  --out benchmark/build/benchmark-results/lab-impairment \
+  --sudo-netem \
+  --execute
+```
+
+Without `--execute`, the wrapper prints the exact `tc` and baseline-suite commands and writes a dry-run manifest. Use that mode to review NIC selection and profile order before running on a lab host.
+
 Start with this impairment set:
 
 | Profile | Latency | Jitter | Loss |
