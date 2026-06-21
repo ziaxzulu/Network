@@ -11,7 +11,7 @@ curve_receivers=("receiver-a:1")
 contention_receivers=()
 contention_clients="100"
 case_prefix="lab-baseline"
-curve_payload_sizes="1200,1340,1400"
+curve_payload_sizes="256,512,1200,1340,1400"
 curve_rates_mbps="100,250,500,750,1000,1500,2000,unlimited"
 contention_cases="fanout,fairness,disappear-blackhole"
 contention_payload_size="512"
@@ -71,7 +71,7 @@ Options:
   --contention-clients N            Total contention clients when no contention receiver is supplied. Default: 100.
   --case-prefix NAME                Prefix for generated case names. Default: lab-baseline.
   --case NAME                       Alias for --case-prefix.
-  --curve-payload-sizes CSV         Payload sizes for bandwidth curve. Default: 1200,1340,1400.
+  --curve-payload-sizes CSV         Payload sizes for bandwidth curve. Default: 256,512,1200,1340,1400.
   --curve-rates-mbps CSV            Offered Mbps points for bandwidth curve. Default: 100,250,500,750,1000,1500,2000,unlimited.
   --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole.
   --contention-payload-size N       Payload size for contention cases. Default: 512.

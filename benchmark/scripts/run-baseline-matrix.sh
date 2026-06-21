@@ -544,6 +544,7 @@ CASES
 case_list_local() {
   cat <<'CASES'
 bestcase-1c-small|bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --iterations 3 --payload-size 64 --rates-mbps 100,250,500,1000,unlimited
+bestcase-1c-threshold256|bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --iterations 3 --payload-size 256 --rates-mbps 100,250,500,1000,unlimited
 bestcase-1c-medium|bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --iterations 3 --payload-size 512 --rates-mbps 100,250,500,1000,unlimited
 bestcase-1c-mtu1200|bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --iterations 3 --payload-size 1200 --rates-mbps 100,250,500,1000,unlimited
 bestcase-1c-mtu1340|bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --iterations 3 --payload-size 1340 --rates-mbps 100,250,500,1000,unlimited
@@ -561,6 +562,7 @@ CASES
 case_list_lab() {
   cat <<'CASES'
 bestcase-1c-small|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 64 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
+bestcase-1c-threshold256|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 256 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
 bestcase-1c-medium|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 512 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
 bestcase-1c-mtu1200|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1200 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
 bestcase-1c-mtu1340|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1340 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited

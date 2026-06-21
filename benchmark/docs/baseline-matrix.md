@@ -41,16 +41,16 @@ Geyser, public Cloudburst/Nukkit, and CubeCraft production usage make the most i
 - Chunk/bootstrap delivery creates bursty high-volume traffic and has pacing in production code.
 - Resource-pack style flows can be split-heavy; Geyser uses `256KiB` resource-pack chunks paced around `200ms`, while public Nukkit has smaller resource-pack chunk responses around `8KiB`.
 - Public Cloudburst/Nukkit/Geyser style code uses batch flush cadences around `20ms` and `50ms`, while CubeCraft also has a `10ms` transport flush path.
-- Compression thresholds vary by project/config. Useful threshold profiles are `1`, `256`, and `512` bytes.
+- Compression thresholds vary by project/config. The current evidence supports private CubeCraft threshold `1`, public Nukkit threshold `256`, and public Geyser threshold `512`.
 - Geyser has normal session tick/batch behavior as well as selected immediate sends, so latency-sensitive probes should be tested both inside and outside bulk/batch pressure.
 - Slow-reader/backlog protection matters. Production code has explicit queue/backlog limits and disconnect paths for overloaded transfers.
 
 Benchmark implications:
 
 - Keep `RELIABLE_ORDERED` channel `0` as the primary recurring baseline.
-- Prefer payload sizes near real RakNet/Bedrock shapes: small control packets, threshold-adjacent packets around `512B`, near-MTU batches around `1200-1400B`, and split-heavy chunk/resource-pack payloads.
+- Prefer payload sizes near real RakNet/Bedrock shapes: small control packets, threshold-adjacent packets around `256B` and `512B`, near-MTU batches around `1200-1400B`, and split-heavy chunk/resource-pack payloads.
 - Use `batched-game-traffic` for bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
-- Add a future Bedrock-like workload layer that uses captured logical packet distributions and optionally compresses batches with thresholds `1`, `256`, and `512`.
+- Add a future Bedrock-like workload layer that uses captured logical packet distributions and optionally compresses batches with thresholds `1`, `256`, and `512`, distinguishing pass-through compressed batches from re-encoded modified batches.
 - Add future immediate-send and resource-pack profiles so split-heavy payload coverage is not limited to an always-on bulk stream.
 - Use `--max-queued-bytes` queue/backlog cap sweeps on fairness and disappearance rows when measuring slow-client disconnect thresholds.
 - Add host/NIC-level impairment and blackhole disappearance profiles before treating the suite as production-representative.
@@ -248,7 +248,7 @@ Remaining batch gaps:
 - immediate-send lane outside periodic batch flushes
 - resource-pack profiles such as Geyser-style `256KiB` chunks paced around `200ms` and Nukkit-style smaller chunk responses
 - captured gameplay packet-size distributions
-- compression threshold and algorithm modeling around `1B`, `256B`, and `512B`
+- compression threshold and algorithm modeling around `1B`, `256B`, and `512B`, including pass-through versus re-encode behavior
 - batch-size histograms beyond the configured payload-size list
 
 Initial target shape:
@@ -257,7 +257,7 @@ Initial target shape:
 | --- | --- |
 | Clients | `20`, `100`, `500`, `1000` |
 | Flush cadence | `10ms`, `20ms`, `50ms`, immediate |
-| Batch payloads | small control, `512B` threshold-adjacent, mixed gameplay, near-MTU, split/chunk/resource-pack-like |
+| Batch payloads | small control, `256B`/`512B` threshold-adjacent, mixed gameplay, near-MTU, split/chunk/resource-pack-like |
 | Compression threshold | future: `1`, `256`, `512`, disabled |
 | Group count | `1`, `4`, `16` payload variants |
 | Per-client target | `1Mbps`, `5Mbps` |
@@ -289,6 +289,7 @@ Use this smaller set as the first recurring perfect-network baseline before expa
 | Name | Clients | Payload | Reliability | Network | Offered load |
 | --- | ---: | ---: | --- | --- | --- |
 | `bestcase-1c-small` | `1` | `64` | `reliable_ordered` | perfect | ramp |
+| `bestcase-1c-threshold256` | `1` | `256` | `reliable_ordered` | perfect | ramp |
 | `bestcase-1c-medium` | `1` | `512` | `reliable_ordered` | perfect | ramp |
 | `bestcase-1c-mtu` | `1` | `1200`, `1340`, `1400` | `reliable_ordered` | perfect | ramp |
 | `bestcase-1c-split` | `1` | `262144` | `reliable_ordered` | perfect | ramp |
