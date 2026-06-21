@@ -31,9 +31,10 @@ Options:
 Suite directories prefer suite-aggregate.jsonl when present, falling back to
 suite-summary.jsonl. Aggregate rows are matched by case name and benchmark
 scenario. Per-iteration rows are matched by case name, scenario, and iteration
-number. The script exits non-zero when a candidate row is missing or a matched
-row breaches one of the configured regression thresholds. Extra candidate rows
-are reported as informational rows and do not fail the comparison.
+number. The script exits non-zero when a candidate row is missing, a matched
+row changes matrix shape, or a matched row breaches one of the configured
+regression thresholds. Extra candidate rows are reported as informational rows
+and do not fail the comparison.
 USAGE
 }
 
@@ -209,6 +210,15 @@ jq -c -n \
       (((($candidate | tonumber) - ($base | tonumber)) / ($base | tonumber)) * 100)
     end;
 
+  def numeric_mismatch($base; $candidate):
+    if $base == null and $candidate == null then
+      false
+    elif $base == null or $candidate == null then
+      true
+    else
+      (((($candidate | tonumber) - ($base | tonumber)) | fabs) > 0.000001)
+    end;
+
   def metric_row($row):
     if $row == null then
       null
@@ -271,11 +281,23 @@ jq -c -n \
     (pct_delta(n($base.deliveredGbps); n($cand.deliveredGbps))) as $throughputDeltaPct |
     (pct_delta(n($base.probeRttP99Millis); n($cand.probeRttP99Millis))) as $latencyDeltaPct |
     (pct_delta(n($base.maxQueuedBytes); n($cand.maxQueuedBytes))) as $queueDeltaPct |
+    (($base.clients // null) != ($cand.clients // null)) as $clientCountMismatch |
+    (($base.payloadSize // null) != ($cand.payloadSize // null)) as $payloadSizeMismatch |
+    (($base.reliability // null) != ($cand.reliability // null)) as $reliabilityMismatch |
+    (($base.batched // null) != ($cand.batched // null)) as $batchedMismatch |
+    (numeric_mismatch($base.targetMbps; $cand.targetMbps)) as $targetMbpsMismatch |
+    (numeric_mismatch($base.targetClientMbps; $cand.targetClientMbps)) as $targetClientMbpsMismatch |
     (($base.impairmentProfile // "0ms/0ms/0%") != ($cand.impairmentProfile // "0ms/0ms/0%")) as $impairmentMismatch |
     (($base.packetLimit // null) != ($cand.packetLimit // null)) as $packetLimitMismatch |
     (($base.globalPacketLimit // null) != ($cand.globalPacketLimit // null)) as $globalPacketLimitMismatch |
     (
       []
+      + (if $clientCountMismatch then ["client-count-mismatch"] else [] end)
+      + (if $payloadSizeMismatch then ["payload-size-mismatch"] else [] end)
+      + (if $reliabilityMismatch then ["reliability-mismatch"] else [] end)
+      + (if $batchedMismatch then ["batched-mode-mismatch"] else [] end)
+      + (if $targetMbpsMismatch then ["target-mbps-mismatch"] else [] end)
+      + (if $targetClientMbpsMismatch then ["target-client-mbps-mismatch"] else [] end)
       + (if $impairmentMismatch then ["impairment-profile-mismatch"] else [] end)
       + (if $packetLimitMismatch then ["packet-limit-mismatch"] else [] end)
       + (if $globalPacketLimitMismatch then ["global-packet-limit-mismatch"] else [] end)

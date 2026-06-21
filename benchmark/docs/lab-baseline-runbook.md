@@ -70,7 +70,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --require-validation
 ```
 
-The comparison script uses `suite-aggregate.jsonl` automatically when comparing suite directories. That means the comparison is based on per-case medians and includes stability spread. For lab sign-off, pass `--require-validation`; the comparison then fails when either side lacks `validation.json` or when validation is failed, so invalid promoted baselines or invalid candidate lab runs do not look like clean regressions. Use the raw `suite-summary.jsonl` files only when diagnosing individual measured iterations.
+The comparison script uses `suite-aggregate.jsonl` automatically when comparing suite directories. That means the comparison is based on per-case medians and includes stability spread. It fails when matched rows change matrix shape, including clients, payload, reliability, batching, target rate, impairment, or packet limits. For lab sign-off, pass `--require-validation`; the comparison then fails when either side lacks `validation.json` or when validation is failed, so invalid promoted baselines or invalid candidate lab runs do not look like clean regressions. Use the raw `suite-summary.jsonl` files only when diagnosing individual measured iterations.
 
 ## Remote Worker Runs
 

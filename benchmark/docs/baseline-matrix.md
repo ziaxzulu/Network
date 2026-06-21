@@ -362,7 +362,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --require-validation
 ```
 
-The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run, when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds, or when either input contains a failed `validation.json`. For lab sign-off, use `--require-validation` so candidate runs without validation metadata also fail.
+The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run, when matched rows change matrix shape (clients, payload, reliability, batching, target rate, impairment, or packet limits), when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds, or when either input contains a failed `validation.json`. For lab sign-off, use `--require-validation` so candidate runs without validation metadata also fail.
 
 For remote server/receiver worker runs, merge the server and receiver artifact directories first:
 
