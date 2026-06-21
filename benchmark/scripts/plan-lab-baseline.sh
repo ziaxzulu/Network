@@ -402,7 +402,7 @@ if [[ -n "$raised_packet_limit" && -z "$raised_global_packet_limit" ]] || [[ -z 
   echo "--raised-packet-limit and --raised-global-packet-limit must be supplied together" >&2
   exit 2
 fi
-for value_name in max_p99_ms max_queue_bytes max_send_deliver_ratio max_nack_out_s min_healthy_fairness max_healthy_send_deliver_ratio max_affected_send_deliver_ratio max_contention_p99_ms; do
+for value_name in per_client_mbps max_p99_ms max_queue_bytes max_send_deliver_ratio max_nack_out_s min_healthy_fairness max_healthy_send_deliver_ratio max_affected_send_deliver_ratio max_contention_p99_ms; do
   if ! non_negative_number "${!value_name}"; then
     echo "--${value_name//_/-} must be a non-negative number: ${!value_name}" >&2
     exit 2
@@ -429,6 +429,17 @@ for receiver in "${contention_receivers[@]}"; do
   normalized_contention_receivers+=("$(normalize_receiver "$receiver")")
 done
 contention_receivers=("${normalized_contention_receivers[@]}")
+
+sum_receiver_clients() {
+  local total=0
+  local receiver
+  for receiver in "$@"; do
+    total=$((total + ${receiver##*:}))
+  done
+  echo "$total"
+}
+
+validation_min_contention_clients="$(sum_receiver_clients "${contention_receivers[@]}")"
 
 start_offset_ms="$(duration_millis "$start_offset")"
 start_delay_ms="$(duration_millis "$start_delay")"
@@ -740,7 +751,7 @@ This directory combines the remote bandwidth-curve and remote contention campaig
 - Keep the sibling curve/, optional curve-raised/, contention/, and host report directories with this combined output.
 REPORT
 
-benchmark/scripts/validate-lab-baseline.sh --input "$ARTIFACT_ROOT" --out "$COMBINED_OUT" __CURVE_MANIFEST_ARG__ __RAISED_MANIFEST_ARG__ __CONTENTION_MANIFEST_ARG__ --min-iterations __MIN_ITERATIONS__ --required-scenarios __REQUIRED_SCENARIOS__ --min-healthy-fairness __MIN_HEALTHY_FAIRNESS__ --max-healthy-send-deliver-ratio __MAX_HEALTHY_SEND_DELIVER_RATIO__ --max-affected-send-deliver-ratio __MAX_AFFECTED_SEND_DELIVER_RATIO__ --max-contention-p99-ms __MAX_CONTENTION_P99_MS__
+benchmark/scripts/validate-lab-baseline.sh --input "$ARTIFACT_ROOT" --out "$COMBINED_OUT" __CURVE_MANIFEST_ARG__ __RAISED_MANIFEST_ARG__ __CONTENTION_MANIFEST_ARG__ --min-iterations __MIN_ITERATIONS__ --required-scenarios __REQUIRED_SCENARIOS__ --min-healthy-fairness __MIN_HEALTHY_FAIRNESS__ --max-healthy-send-deliver-ratio __MAX_HEALTHY_SEND_DELIVER_RATIO__ --max-affected-send-deliver-ratio __MAX_AFFECTED_SEND_DELIVER_RATIO__ --max-contention-p99-ms __MAX_CONTENTION_P99_MS__ --min-contention-clients __MIN_CONTENTION_CLIENTS__ --min-contention-target-client-mbps __MIN_CONTENTION_TARGET_CLIENT_MBPS__
 
 echo "Combined suite aggregate: $COMBINED_OUT/suite-aggregate.jsonl"
 EOF
@@ -758,6 +769,8 @@ sed -i "s#__MIN_HEALTHY_FAIRNESS__#$min_healthy_fairness#g" "$merge_all_script"
 sed -i "s#__MAX_HEALTHY_SEND_DELIVER_RATIO__#$max_healthy_send_deliver_ratio#g" "$merge_all_script"
 sed -i "s#__MAX_AFFECTED_SEND_DELIVER_RATIO__#$max_affected_send_deliver_ratio#g" "$merge_all_script"
 sed -i "s#__MAX_CONTENTION_P99_MS__#$max_contention_p99_ms#g" "$merge_all_script"
+sed -i "s#__MIN_CONTENTION_CLIENTS__#$validation_min_contention_clients#g" "$merge_all_script"
+sed -i "s#__MIN_CONTENTION_TARGET_CLIENT_MBPS__#$per_client_mbps#g" "$merge_all_script"
 
 cat >"$topology_template" <<EOF
 # Lab Baseline Topology
@@ -774,6 +787,8 @@ cat >"$topology_template" <<EOF
 - Warmup: \`$warmup\`
 - Duration: \`$duration\`
 - Iterations: \`$iterations\`
+- Contention clients: \`$validation_min_contention_clients\`
+- Contention per-client Mbps: \`$per_client_mbps\`
 
 ## Hosts
 
@@ -815,7 +830,7 @@ EOF
   echo "- Host capture: \`$host_capture_script\`"
   echo "- Topology template: \`$topology_template\`"
   echo "- Validation scenarios: \`$required_validation_scenarios\`"
-  echo "- Validation gates: healthy fairness >= \`$min_healthy_fairness\`; healthy send/deliver <= \`$max_healthy_send_deliver_ratio\`; affected send/deliver <= \`$max_affected_send_deliver_ratio\`; contention p99 <= \`$max_contention_p99_ms\` when non-zero"
+  echo "- Validation gates: healthy fairness >= \`$min_healthy_fairness\`; healthy send/deliver <= \`$max_healthy_send_deliver_ratio\`; affected send/deliver <= \`$max_affected_send_deliver_ratio\`; contention p99 <= \`$max_contention_p99_ms\` when non-zero; contention clients >= \`$validation_min_contention_clients\`; contention target/client Mbps >= \`$per_client_mbps\`"
   echo
   echo "## Run Order"
   echo

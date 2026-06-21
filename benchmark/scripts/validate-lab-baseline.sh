@@ -16,6 +16,8 @@ min_healthy_fairness="0"
 max_healthy_send_deliver_ratio="0"
 max_affected_send_deliver_ratio="0"
 max_contention_p99_ms="0"
+min_contention_clients="0"
+min_contention_target_client_mbps="0"
 
 usage() {
   cat <<'USAGE'
@@ -43,6 +45,8 @@ Options:
   --max-healthy-send-deliver-ratio N Fail fairness/disappearance rows above this healthy-client send/deliver ratio. Default: 0, disabled.
   --max-affected-send-deliver-ratio N Fail affected-client rows above this send/deliver ratio. Default: 0, disabled.
   --max-contention-p99-ms N        Fail fanout/fairness/disappearance rows above this p99 probe RTT. Default: 0, disabled.
+  --min-contention-clients N       Fail fanout/fairness/disappearance rows below this client count. Default: 0, disabled.
+  --min-contention-target-client-mbps N Fail contention rows below this per-client offered rate. Default: 0, disabled.
   --help                           Show this help.
 
 Outputs:
@@ -113,6 +117,14 @@ while [[ $# -gt 0 ]]; do
       max_contention_p99_ms="$2"
       shift 2
       ;;
+    --min-contention-clients)
+      min_contention_clients="$2"
+      shift 2
+      ;;
+    --min-contention-target-client-mbps)
+      min_contention_target_client_mbps="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -137,10 +149,14 @@ if [[ ! "$min_host_reports" =~ ^[0-9]+$ ]]; then
   echo "--min-host-reports must be a non-negative integer" >&2
   exit 2
 fi
+if [[ ! "$min_contention_clients" =~ ^[0-9]+$ ]]; then
+  echo "--min-contention-clients must be a non-negative integer" >&2
+  exit 2
+fi
 is_non_negative_number() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
 }
-for value_name in min_healthy_fairness max_healthy_send_deliver_ratio max_affected_send_deliver_ratio max_contention_p99_ms; do
+for value_name in min_healthy_fairness max_healthy_send_deliver_ratio max_affected_send_deliver_ratio max_contention_p99_ms min_contention_target_client_mbps; do
   if ! is_non_negative_number "${!value_name}"; then
     echo "--${value_name//_/-} must be a non-negative number: ${!value_name}" >&2
     exit 2
@@ -350,6 +366,8 @@ jq -n \
   --argjson maxHealthySendDeliverRatio "$max_healthy_send_deliver_ratio" \
   --argjson maxAffectedSendDeliverRatio "$max_affected_send_deliver_ratio" \
   --argjson maxContentionP99Millis "$max_contention_p99_ms" \
+  --argjson minContentionClients "$min_contention_clients" \
+  --argjson minContentionTargetClientMbps "$min_contention_target_client_mbps" \
   --argjson allowUnstable "$allow_unstable_json" \
   --argjson allowDisconnects "$allow_disconnects_json" \
   --argjson allowMissingCapacity "$allow_missing_capacity_json" \
@@ -377,6 +395,7 @@ jq -n \
       "clients",
       "payloadSize",
       "reliability",
+      "targetClientMbps",
       "deliveredGbps",
       "probeRttP99Millis",
       "deliveredGbpsSpreadPct",
@@ -447,6 +466,25 @@ jq -n \
       )
     )
     + (
+      $manifestRows |
+      map(. as $planned |
+        ([$aggregateRows[] | select(.case == ($planned.case // "") and .benchmarkName == ($planned.benchmarkName // ""))] | .[0] // null) as $matched |
+        if $matched == null then []
+        else
+          []
+          + (if (($planned | has("clients")) and n($matched.clients) != n($planned.clients)) then
+              [issue("planned-client-count-mismatch"; "aggregate row client count differs from planned manifest"; $matched; {plannedClients: n($planned.clients), actualClients: n($matched.clients)})]
+            else [] end)
+          + (if (($planned | has("payloadSize")) and n($matched.payloadSize) != n($planned.payloadSize)) then
+              [issue("planned-payload-size-mismatch"; "aggregate row payload size differs from planned manifest"; $matched; {plannedPayloadSize: n($planned.payloadSize), actualPayloadSize: n($matched.payloadSize)})]
+            else [] end)
+          + (if (($planned | has("perClientMbps")) and ((n($matched.targetClientMbps) - n($planned.perClientMbps)) | fabs) > 0.000001) then
+              [issue("planned-per-client-mbps-mismatch"; "aggregate row per-client target Mbps differs from planned manifest"; $matched; {plannedPerClientMbps: n($planned.perClientMbps), actualTargetClientMbps: n($matched.targetClientMbps)})]
+            else [] end)
+        end
+      ) | add // []
+    )
+    + (
       $aggregateRows |
       map(. as $row |
         (required_fields | map(. as $field | select((($row | has($field)) | not) or ($row[$field] == null)))) as $missing |
@@ -477,6 +515,12 @@ jq -n \
           else [] end)
         + (if ($maxContentionP99Millis > 0 and contention_scenario($row) and n($row.probeRttP99Millis) > $maxContentionP99Millis) then
             [issue("contention-p99-above-threshold"; "contention p99 probe RTT is above the configured threshold"; $row; {probeRttP99Millis: n($row.probeRttP99Millis), maxContentionP99Millis: $maxContentionP99Millis})]
+          else [] end)
+        + (if ($minContentionClients > 0 and contention_scenario($row) and n($row.clients) < $minContentionClients) then
+            [issue("contention-clients-below-threshold"; "contention row has fewer clients than the configured threshold"; $row; {clients: n($row.clients), minContentionClients: $minContentionClients})]
+          else [] end)
+        + (if ($minContentionTargetClientMbps > 0 and contention_scenario($row) and n($row.targetClientMbps) < $minContentionTargetClientMbps) then
+            [issue("contention-target-client-mbps-below-threshold"; "contention row has a lower per-client target Mbps than the configured threshold"; $row; {targetClientMbps: n($row.targetClientMbps), minContentionTargetClientMbps: $minContentionTargetClientMbps})]
           else [] end)
       ) | add
     )
@@ -514,6 +558,8 @@ jq -n \
     maxHealthySendDeliverRatio: $maxHealthySendDeliverRatio,
     maxAffectedSendDeliverRatio: $maxAffectedSendDeliverRatio,
     maxContentionP99Millis: $maxContentionP99Millis,
+    minContentionClients: $minContentionClients,
+    minContentionTargetClientMbps: $minContentionTargetClientMbps,
     requiredScenarios: $required,
     allowUnstable: $allowUnstable,
     allowDisconnects: $allowDisconnects,
@@ -548,6 +594,8 @@ jq -n \
   fi
   echo "- Rows: \`$(jq -r '.rowCount' "$validation_json")\`"
   echo "- Capacity rows: \`$(jq -r '.capacityRowCount' "$validation_json")\`"
+  echo "- Minimum contention clients: \`$(jq -r '.minContentionClients' "$validation_json")\`"
+  echo "- Minimum contention target/client Mbps: \`$(jq -r '.minContentionTargetClientMbps' "$validation_json")\`"
   echo "- Result: \`$(jq -r 'if .passed then "passed" else "failed" end' "$validation_json")\`"
   echo
   echo "## Scenario Counts"
