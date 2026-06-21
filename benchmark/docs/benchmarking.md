@@ -124,6 +124,19 @@ The validator writes `validation.json` and `validation.md`, checks required scen
 
 For lab-generated baselines, the planner also passes contention gates into validation: healthy-client Jain fairness must stay at or above `0.95`, healthy-client send/deliver byte ratio must stay at or below `1.2`, affected-client send/deliver byte ratio must stay at or below `5`, merged contention rows must keep the planned client count, and merged contention rows must keep at least the planned per-client offered Mbps. Override the fairness/send-work gates with `--min-healthy-fairness`, `--max-healthy-send-deliver-ratio`, `--max-affected-send-deliver-ratio`, and `--max-contention-p99-ms` when a topology needs a different acceptance policy.
 
+After validation passes, promote the lab run into a compact baseline package:
+
+```bash
+benchmark/scripts/promote-lab-baseline.sh \
+  --input benchmark/build/benchmark-results/lab-baseline \
+  --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-plan/manifest.jsonl \
+  --manifest benchmark/build/benchmark-results/lab-baseline-plan/contention-plan/manifest.jsonl \
+  --out benchmark/build/benchmark-baselines \
+  --name lab-<date>-<topology>
+```
+
+The promotion script reruns validation, then writes `BASELINE.md`, `baseline-manifest.json`, `suite-aggregate.jsonl`, `validation.*`, capacity selector files, topology metadata, host reports, and copied planning manifests under the promoted baseline directory. It also updates `benchmark/build/benchmark-baselines/latest` unless `--no-latest` is supplied.
+
 For remote lab campaigns where the impairment must happen outside the JVM, generate one coordinated lab baseline plan per host-level profile:
 
 ```bash

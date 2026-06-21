@@ -278,4 +278,17 @@ benchmark/scripts/validate-lab-baseline.sh \
 
 The lab planner's generated `merge-all.sh` runs the same validation automatically after it creates the combined aggregate, passing the curve and contention manifests so missing planned cases fail validation. Validation fails by default when `topology.md` is missing or fewer than two host reports were captured under the artifact root.
 
+After validation passes, package the baseline of record:
+
+```bash
+benchmark/scripts/promote-lab-baseline.sh \
+  --input benchmark/build/benchmark-results/lab-baseline \
+  --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-plan/manifest.jsonl \
+  --manifest benchmark/build/benchmark-results/lab-baseline-plan/contention-plan/manifest.jsonl \
+  --out benchmark/build/benchmark-baselines \
+  --name lab-<date>-<topology>
+```
+
+The promoted baseline directory contains the comparable `suite-aggregate.jsonl`, validation reports, capacity selector artifacts, copied host/topology evidence, copied planning manifests, and a `baseline-manifest.json` with source paths and validation metadata. Use that promoted directory, or the `benchmark/build/benchmark-baselines/latest` symlink, as the `--baseline` input for future candidate comparisons.
+
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.
