@@ -49,6 +49,8 @@ public final class BenchmarkIterationResult {
     public final long nackOut;
     public final long maxQueuedBytes;
     public final long disconnects;
+    public final long blackholedDatagramsIn;
+    public final long blackholedDatagramsOut;
     public final double deliveredGbps;
     public final double healthyDeliveredGbps;
     public final double affectedDeliveredGbps;
@@ -96,6 +98,8 @@ public final class BenchmarkIterationResult {
         long nacksOut = 0L;
         long queued = 0L;
         long disconnectCount = 0L;
+        long blackholedIn = 0L;
+        long blackholedOut = 0L;
         long healthyReceivedBytes = 0L;
         long affectedReceivedBytes = 0L;
         int affected = 0;
@@ -117,6 +121,8 @@ public final class BenchmarkIterationResult {
             nacksOut += peer.nackOut;
             queued = Math.max(queued, peer.maxQueuedBytes);
             disconnectCount += peer.disconnects;
+            blackholedIn += peer.blackholedDatagramsIn;
+            blackholedOut += peer.blackholedDatagramsOut;
             perClientReceived.add(peer.bulkReceivedBytes);
             if (peer.impaired) {
                 affected++;
@@ -141,6 +147,8 @@ public final class BenchmarkIterationResult {
         this.nackOut = nacksOut;
         this.maxQueuedBytes = queued;
         this.disconnects = disconnectCount;
+        this.blackholedDatagramsIn = blackholedIn;
+        this.blackholedDatagramsOut = blackholedOut;
         this.deliveredGbps = BenchmarkMath.gigabitsPerSecond(receivedBytes, elapsedMillis);
         this.healthyDeliveredGbps = BenchmarkMath.gigabitsPerSecond(healthyReceivedBytes, elapsedMillis);
         this.affectedDeliveredGbps = BenchmarkMath.gigabitsPerSecond(affectedReceivedBytes, elapsedMillis);

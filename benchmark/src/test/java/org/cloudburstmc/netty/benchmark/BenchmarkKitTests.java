@@ -23,6 +23,7 @@ import com.fasterxml.jackson.dataformat.csv.CsvMapper;
 import com.fasterxml.jackson.dataformat.csv.CsvSchema;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.UnpooledByteBufAllocator;
+import io.netty.channel.embedded.EmbeddedChannel;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -88,6 +89,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(BenchmarkScenario.DISAPPEARING_CLIENTS, config.scenario());
         Assertions.assertEquals(10, config.disappearingClients());
         Assertions.assertEquals(DisappearanceMode.STOP_READING, config.disappearanceMode());
+        Assertions.assertEquals(DisappearanceMode.BLACKHOLE, DisappearanceMode.parse("blackhole"));
         Assertions.assertEquals(250, config.disappearAfterMillis());
         Assertions.assertEquals(500.0D, config.effectiveTargetMbps(config.rateMbps(), config.clients()), 0.001D);
         Assertions.assertEquals(5.0D, config.effectiveTargetClientMbps(500.0D, config.clients()), 0.001D);
@@ -120,6 +122,29 @@ public class BenchmarkKitTests {
         } finally {
             payload.release();
         }
+    }
+
+    @Test
+    public void testDatagramBlackholeHandlerDropsAfterEnabled() {
+        PeerStats peer = new PeerStats(0, true);
+        DatagramBlackholeHandler handler = new DatagramBlackholeHandler(peer);
+        EmbeddedChannel channel = new EmbeddedChannel(handler);
+
+        ByteBuf passThrough = UnpooledByteBufAllocator.DEFAULT.buffer(1).writeByte(1);
+        Assertions.assertTrue(channel.writeInbound(passThrough));
+        ByteBuf forwarded = channel.readInbound();
+        forwarded.release();
+
+        handler.enable();
+        ByteBuf inbound = UnpooledByteBufAllocator.DEFAULT.buffer(1).writeByte(2);
+        ByteBuf outbound = UnpooledByteBufAllocator.DEFAULT.buffer(1).writeByte(3);
+        Assertions.assertFalse(channel.writeInbound(inbound));
+        Assertions.assertFalse(channel.writeOutbound(outbound));
+
+        PeerStats.Snapshot snapshot = peer.snapshot();
+        Assertions.assertEquals(1, snapshot.blackholedDatagramsIn);
+        Assertions.assertEquals(1, snapshot.blackholedDatagramsOut);
+        channel.finishAndReleaseAll();
     }
 
     @Test
@@ -158,6 +183,8 @@ public class BenchmarkKitTests {
         peer.addBulkReceived(64, 4);
         peer.addProbeSent();
         peer.addProbeAcked();
+        peer.addBlackholedDatagramIn();
+        peer.addBlackholedDatagramOut();
         run.add(new BenchmarkIterationResult(
                 "unit",
                 1,
@@ -196,7 +223,11 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(4, summary.path("iterations").get(0).path("logicalPacketsReceived").asLong());
         Assertions.assertTrue(summary.path("iterations").get(0).has("healthyFairnessIndex"));
         Assertions.assertTrue(summary.path("iterations").get(0).has("disconnects"));
+        Assertions.assertEquals(1, summary.path("iterations").get(0).path("blackholedDatagramsIn").asLong());
+        Assertions.assertEquals(1, summary.path("iterations").get(0).path("blackholedDatagramsOut").asLong());
         Assertions.assertEquals(4, summary.path("iterations").get(0).path("peers").get(0).path("logicalPacketsReceived").asLong());
+        Assertions.assertEquals(1, summary.path("iterations").get(0).path("peers").get(0).path("blackholedDatagramsIn").asLong());
+        Assertions.assertEquals(1, summary.path("iterations").get(0).path("peers").get(0).path("blackholedDatagramsOut").asLong());
         Assertions.assertTrue(summary.path("iterations").get(0).path("peers").get(0).has("serverBytesOut"));
 
         List<Map<String, String>> rows = CSV
@@ -216,6 +247,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(rows.get(0).containsKey("delivered_logical_packets_s"));
         Assertions.assertTrue(rows.get(0).containsKey("healthy_fairness"));
         Assertions.assertTrue(rows.get(0).containsKey("disconnects"));
+        Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_in"));
+        Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_out"));
         Assertions.assertTrue(rows.get(0).containsKey("max_queued_bytes"));
     }
 }

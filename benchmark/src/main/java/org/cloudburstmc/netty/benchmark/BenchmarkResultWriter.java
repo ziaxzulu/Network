@@ -85,8 +85,8 @@ public final class BenchmarkResultWriter {
             writer.write("- Role: `" + result.config().role().name().toLowerCase(Locale.ROOT) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
-            writer.write("| Name | Iteration | Clients | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Disconnects | Stale | NACK In | Max Queue |\n");
-            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+            writer.write("| Name | Iteration | Clients | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Disconnects | Blackhole In | Blackhole Out | Stale | NACK In | Max Queue |\n");
+            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
                 writer.write("| " + iteration.name
                         + " | " + iteration.iteration
@@ -106,6 +106,8 @@ public final class BenchmarkResultWriter {
                         + " | " + format(iteration.fairnessIndex)
                         + " | " + format(iteration.healthyFairnessIndex)
                         + " | " + iteration.disconnects
+                        + " | " + iteration.blackholedDatagramsIn
+                        + " | " + iteration.blackholedDatagramsOut
                         + " | " + iteration.staleDatagrams
                         + " | " + iteration.nackIn
                         + " | " + iteration.maxQueuedBytes
@@ -187,6 +189,8 @@ public final class BenchmarkResultWriter {
             "affected_fairness",
             "affected_clients",
             "disconnects",
+            "blackholed_datagrams_in",
+            "blackholed_datagrams_out",
             "stale_datagrams",
             "nack_in",
             "nack_out",
@@ -223,6 +227,8 @@ public final class BenchmarkResultWriter {
             @JsonProperty("affected_fairness") double affectedFairness,
             @JsonProperty("affected_clients") int affectedClients,
             long disconnects,
+            @JsonProperty("blackholed_datagrams_in") long blackholedDatagramsIn,
+            @JsonProperty("blackholed_datagrams_out") long blackholedDatagramsOut,
             @JsonProperty("stale_datagrams") long staleDatagrams,
             @JsonProperty("nack_in") long nackIn,
             @JsonProperty("nack_out") long nackOut,
@@ -260,6 +266,8 @@ public final class BenchmarkResultWriter {
                     iteration.affectedFairnessIndex,
                     iteration.affectedClients,
                     iteration.disconnects,
+                    iteration.blackholedDatagramsIn,
+                    iteration.blackholedDatagramsOut,
                     iteration.staleDatagrams,
                     iteration.nackIn,
                     iteration.nackOut,
@@ -374,6 +382,8 @@ public final class BenchmarkResultWriter {
             double affectedFairnessIndex,
             int affectedClients,
             long disconnects,
+            long blackholedDatagramsIn,
+            long blackholedDatagramsOut,
             long probesSent,
             long probesAcked,
             int probeRttCount,
@@ -423,6 +433,8 @@ public final class BenchmarkResultWriter {
                     iteration.affectedFairnessIndex,
                     iteration.affectedClients,
                     iteration.disconnects,
+                    iteration.blackholedDatagramsIn,
+                    iteration.blackholedDatagramsOut,
                     iteration.probesSent,
                     iteration.probesAcked,
                     iteration.probeRtt.count(),
@@ -463,6 +475,8 @@ public final class BenchmarkResultWriter {
             long probesSent,
             long probesAcked,
             long disconnects,
+            long blackholedDatagramsIn,
+            long blackholedDatagramsOut,
             long maxQueuedBytes,
             String lastState
     ) {
@@ -491,6 +505,8 @@ public final class BenchmarkResultWriter {
                     peer.probesSent,
                     peer.probesAcked,
                     peer.disconnects,
+                    peer.blackholedDatagramsIn,
+                    peer.blackholedDatagramsOut,
                     peer.maxQueuedBytes,
                     peer.lastState.name()
             );

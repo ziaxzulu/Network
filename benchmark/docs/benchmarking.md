@@ -47,12 +47,13 @@ Use `--dry-run` to inspect the command set without executing it, `--only <case-s
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="fairness --clients 100 --impaired-clients 10 --warmup 2s --duration 15s --per-client-mbps 5"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode close --warmup 2s --duration 15s --per-client-mbps 5"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode stop-reading --warmup 2s --duration 15s --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode blackhole --warmup 2s --duration 15s --per-client-mbps 5"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="batched-game-traffic --clients 100 --warmup 2s --duration 10s --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5"
 ```
 
 Use `--rate-mbps 0` or `--rates-mbps unlimited` for an uncapped sender. Use `--target-gbps 1` as shorthand for `--rate-mbps 1000`. For production-style fanout, prefer `--per-client-mbps 5`; the runner converts that to aggregate offered rate from the established client count.
 
-The `disappearing-clients` scenario supports `--disappear-mode close` for clean disconnect churn and `--disappear-mode stop-reading` for local retry-pressure smoke runs where selected clients stop reading while the server keeps sending. Use external `tc`/routing rules or remote workers for true blackhole profiles.
+The `disappearing-clients` scenario supports `--disappear-mode close` for clean disconnect churn, `--disappear-mode stop-reading` for local retry-pressure smoke runs where selected clients stop reading while the server keeps sending, and `--disappear-mode blackhole` for benchmark-managed datagram drops after the connection is established. In remote-worker lab runs, pass matching `--disappearing-clients`, `--disappear-after`, and `--disappear-mode blackhole` values to the receiver workers and the server worker so both sides label the same affected client set. Use external `tc`/routing rules when you need host/NIC-level blackhole behavior outside the JVM.
 
 The `batched-game-traffic` scenario sends bursty, length-framed synthetic batches on a fixed flush cadence. Use `--batch-interval 10ms|20ms|50ms`, `--logical-packets-per-batch`, `--batch-payload-sizes`, and `--batch-groups` to approximate CubeCraft, Nukkit, Cloudburst, and Geyser-style grouped fanout. Compression is not modeled yet; batch payload sizes represent already-encoded batch bytes.
 
@@ -142,6 +143,7 @@ Important fields:
 - `fairnessIndex`: Jain fairness index across clients, where `1.0` is perfectly even delivery
 - `healthyFairnessIndex`: Jain fairness for clients not marked impaired/disappearing
 - `disconnects`: established channels closed during the measured iteration
+- `blackholedDatagramsIn` and `blackholedDatagramsOut`: benchmark-managed datagrams dropped by `--disappear-mode blackhole`
 - `staleDatagrams`, `nackIn`, `nackOut`: retransmission pressure
 - `maxQueuedBytes`: largest observed RakNet queued payload bytes per channel
 

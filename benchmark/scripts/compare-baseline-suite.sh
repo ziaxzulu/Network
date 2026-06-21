@@ -170,6 +170,8 @@ jq -c -n \
         fairnessIndex: $row.fairnessIndex,
         healthyFairnessIndex: $row.healthyFairnessIndex,
         disconnects: $row.disconnects,
+        blackholedDatagramsIn: ($row.blackholedDatagramsIn // 0),
+        blackholedDatagramsOut: ($row.blackholedDatagramsOut // 0),
         staleDatagrams: $row.staleDatagrams,
         nackIn: $row.nackIn,
         nackOut: $row.nackOut,
@@ -203,6 +205,8 @@ jq -c -n \
         fairnessIndex: ((n($cand.fairnessIndex) // 0) - (n($base.fairnessIndex) // 0)),
         healthyFairnessIndex: ((n($cand.healthyFairnessIndex) // 0) - (n($base.healthyFairnessIndex) // 0)),
         disconnects: ((n($cand.disconnects) // 0) - (n($base.disconnects) // 0)),
+        blackholedDatagramsIn: ((n($cand.blackholedDatagramsIn) // 0) - (n($base.blackholedDatagramsIn) // 0)),
+        blackholedDatagramsOut: ((n($cand.blackholedDatagramsOut) // 0) - (n($base.blackholedDatagramsOut) // 0)),
         staleDatagrams: ((n($cand.staleDatagrams) // 0) - (n($base.staleDatagrams) // 0)),
         nackIn: ((n($cand.nackIn) // 0) - (n($base.nackIn) // 0)),
         nackOut: ((n($cand.nackOut) // 0) - (n($base.nackOut) // 0))
@@ -267,8 +271,8 @@ write_report() {
     echo "| Missing candidate rows | $missing_rows |"
     echo "| Extra candidate rows | $extra_rows |"
     echo
-    echo "| Status | Case | Scenario | Iteration | Delivered Gbps | Delta | p99 RTT ms | Delta | Max queue bytes | Delta | Fairness delta | NACK out delta | Stale datagram delta | Reasons |"
-    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+    echo "| Status | Case | Scenario | Iteration | Delivered Gbps | Delta | p99 RTT ms | Delta | Max queue bytes | Delta | Fairness delta | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
+    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -291,12 +295,14 @@ write_report() {
         (metric(.candidate; "maxQueuedBytes") + " / " + metric(.baseline; "maxQueuedBytes")),
         pct(.deltas.maxQueuedBytesPct),
         fmt(.deltas.fairnessIndex),
+        fmt(.deltas.blackholedDatagramsIn),
+        fmt(.deltas.blackholedDatagramsOut),
         fmt(.deltas.nackOut),
         fmt(.deltas.staleDatagrams),
         "`" + ((.statusReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario iteration delivered delivered_delta p99 p99_delta queue queue_delta fairness_delta nack_delta stale_delta reasons; do
-      echo "| $status | $case_name | $scenario | $iteration | $delivered | $delivered_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $nack_delta | $stale_delta | $reasons |"
+    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario iteration delivered delivered_delta p99 p99_delta queue queue_delta fairness_delta blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
+      echo "| $status | $case_name | $scenario | $iteration | $delivered | $delivered_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
     done
     echo
     if [[ "$failure_rows" -gt 0 ]]; then

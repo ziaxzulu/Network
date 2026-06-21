@@ -18,7 +18,8 @@ package org.cloudburstmc.netty.benchmark;
 
 public enum DisappearanceMode {
     CLOSE("close"),
-    STOP_READING("stop-reading");
+    STOP_READING("stop-reading"),
+    BLACKHOLE("blackhole");
 
     private final String cliName;
 

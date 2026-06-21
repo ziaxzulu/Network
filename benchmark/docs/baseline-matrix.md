@@ -12,18 +12,18 @@ The benchmark suite is meant to answer two different questions:
 The current RakNet runner is a useful starting synthetic for established-channel server-to-client throughput:
 
 - It uses normal `RakServerChannel`, `RakClientChannel`, and `RakMessage` APIs.
-- It measures delivered payload throughput, offered throughput, probe RTT under load, per-client delivery, Jain fairness, queue growth, ACK/NACK counters, stale datagrams, disconnects, and channel state.
+- It measures delivered payload throughput, offered throughput, probe RTT under load, per-client delivery, Jain fairness, queue growth, ACK/NACK counters, stale datagrams, disconnects, benchmark-managed blackholed datagrams, and channel state.
 - It supports local loopback runs for regression checks and remote server/client worker roles for lab runs.
 - It can sweep payload size, reliability mode, offered rate, and client count.
 - It supports `--per-client-mbps` so fanout and fairness runs can express production-style per-client pull targets directly.
-- It includes a `disappearing-clients` scenario where selected established clients either close or stop reading during the measured window.
+- It includes a `disappearing-clients` scenario where selected established clients close, stop reading, or blackhole datagrams during the measured window.
 - It includes a `batched-game-traffic` scenario for fixed-cadence grouped fanout with synthetic length-framed batches.
 
 It should not yet be treated as a complete production synthetic:
 
 - The `fairness` scenario currently labels impaired clients but does not itself apply per-client impairment. Use Linux `tc netem` or remote workers to create real impairment until the harness grows per-client impairment support.
 - The batch workload is still synthetic. It models burst cadence, grouped fanout, logical packet counts, and encoded batch sizes, but not compression algorithms or real Bedrock packet distributions.
-- The client-disappearance scenario covers close-mode and local stop-reading mode. True blackhole behavior still needs external `tc`/routing rules or remote worker support.
+- The client-disappearance scenario covers close-mode, local stop-reading mode, and benchmark-managed datagram blackhole mode. Host/NIC-level blackholes still need external `tc`/routing rules.
 - Local loopback is only a repeatable development baseline. Line-rate claims require separate machines, pinned CPU/NIC setup, and controlled network impairment.
 
 ## Production Usage Signals
@@ -47,7 +47,7 @@ Benchmark implications:
 - Prefer payload sizes near real RakNet/Bedrock shapes: small control packets, threshold-adjacent packets around `512B`, near-MTU batches around `1200-1400B`, and split-heavy chunk/resource-pack payloads.
 - Use `batched-game-traffic` for bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
 - Add a future Bedrock-like workload layer that uses captured logical packet distributions and optionally compresses batches with thresholds `1`, `256`, and `512`.
-- Add grouped fanout plus true blackhole disappearance profiles before treating the suite as production-representative.
+- Add grouped fanout plus host/NIC-level blackhole disappearance profiles before treating the suite as production-representative.
 - Add a later proxy profile with one downstream and one upstream RakNet channel per user to represent pass-through deployments.
 
 ## Baseline Matrix
@@ -170,23 +170,25 @@ Primary acceptance metrics:
 
 Purpose: reproduce production behavior where clients vanish, stop reading, or become blackholed while the server still has data to send.
 
-The harness now includes a close-mode starting point:
+The harness now includes close, stop-reading, and benchmark-managed blackhole modes:
 
 ```bash
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode close --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode stop-reading --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5"
 ```
 
 The scenario can:
 
 - close a configurable percentage of clients after warmup
 - stop reads on a configurable percentage of local clients after warmup while leaving server peers active
+- blackhole datagrams on a configurable percentage of established local or receiver-worker clients after warmup
 - keep healthy clients on the same configured per-client target
-- report all-client fairness, healthy-client fairness, disconnects, queue growth, retransmits, stale datagrams, and channel state
+- report all-client fairness, healthy-client fairness, disconnects, blackholed datagrams, queue growth, retransmits, stale datagrams, and channel state
 
-The remaining required gap is harsher blackhole behavior:
+The remaining required gap is harsher host/NIC-level blackhole behavior:
 
-- blackhole a configurable percentage of client traffic with `tc` or worker-side drop behavior
+- blackhole a configurable percentage of client traffic with `tc` or routing rules outside the JVM
 - keep retry pressure alive under real packet drops long enough to measure retransmit storms and queue drain behavior
 
 Initial target shape:
@@ -195,7 +197,7 @@ Initial target shape:
 | --- | --- |
 | Clients | `100`, `500`, `1000` |
 | Disappearing clients | `1%`, `5%`, `10%` |
-| Disappearance mode | close, stop reading; blackhole later |
+| Disappearance mode | close, stop reading, blackhole |
 | Per-client target | `1Mbps`, `5Mbps` |
 | Runtime | `10s` warmup, `60s` measured |
 
@@ -274,6 +276,7 @@ Use this smaller set as the first recurring baseline before expanding the full m
 | `loss-100-50ms-2pct` | `100` | `512` | `reliable_ordered` | `50ms`, `2%` loss | `5Mbps` per client |
 | `disappear-100-10pct-close` | `100` | `512` | `reliable_ordered` | close 10 clients | `5Mbps` per client |
 | `disappear-100-10pct-stopread` | `100` | `512` | `reliable_ordered` | stop reads on 10 clients | `5Mbps` per client |
+| `disappear-100-10pct-blackhole` | `100` | `512` | `reliable_ordered` | blackhole 10 clients | `5Mbps` per client |
 | `batch-fanout-100-10ms` | `100` | mixed | `reliable_ordered` | perfect | `10ms`, `5Mbps` per client |
 | `batch-fanout-100-20ms` | `100` | mixed | `reliable_ordered` | perfect | `20ms`, `5Mbps` per client |
 | `batch-fanout-100-50ms` | `100` | mixed | `reliable_ordered` | perfect | `50ms`, `5Mbps` per client |
