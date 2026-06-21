@@ -121,6 +121,25 @@ benchmark/scripts/compare-baseline-suite.sh \
   --out benchmark/build/benchmark-results/lab-remote-comparison.md
 ```
 
+For a repeatable remote bandwidth curve, generate a plan before the run:
+
+```bash
+benchmark/scripts/plan-remote-worker-curve.sh \
+  --out benchmark/build/benchmark-results/lab-remote-curve-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-remote-curve \
+  --case remote-curve-1c-mtu \
+  --server-host <server-ip> \
+  --receiver receiver-a=1 \
+  --payload-size 1200 \
+  --rates-mbps 100,250,500,750,1000,1500,2000,unlimited \
+  --warmup 10s \
+  --duration 60s \
+  --iterations 3 \
+  --start-delay 90s
+```
+
+Run the generated receiver scripts on receiver hosts, run `server-commands.sh` on the server host, copy receiver artifacts back under the same artifact root, then run `merge-commands.sh`. The merge output includes a campaign-level `suite-aggregate.jsonl` and `bandwidth-capacity.*` files for highest-stable-capacity review.
+
 ## Impairment Profiles
 
 Use `raknet-netem.sh` to apply controlled host-level impairment outside the JVM:

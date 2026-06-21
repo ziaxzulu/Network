@@ -5,6 +5,7 @@ server_path=""
 receivers=()
 output_root=""
 case_name=""
+benchmark_name=""
 
 usage() {
   cat <<'USAGE'
@@ -16,6 +17,7 @@ Options:
   --receiver PATH     Receiver-worker artifact directory or summary.json. May be repeated.
   --out DIR           Output directory for merged lab artifacts.
   --case NAME         Case name for suite-aggregate.jsonl. Default: server runId.
+  --benchmark-name    Benchmark name for suite-aggregate.jsonl. Default: server scenario.
   --help              Show this help.
 
 Outputs:
@@ -42,6 +44,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --case)
       case_name="$2"
+      shift 2
+      ;;
+    --benchmark-name)
+      benchmark_name="$2"
       shift 2
       ;;
     --help|-h)
@@ -106,6 +112,7 @@ report="$output_root/README.md"
 jq -s \
   --arg generatedAt "$generated_at" \
   --arg caseName "$case_name" \
+  --arg benchmarkName "$benchmark_name" \
   --arg serverPath "$server_summary" \
   --argjson receiverPaths "$receiver_paths_json" \
   --arg outputRoot "$output_root" '
@@ -128,6 +135,19 @@ jq -s \
   def ratio($num; $den): if ($den // 0) == 0 then 0 else (($num // 0) / $den) end;
   def gbps($bytes; $elapsed_ms): if ($elapsed_ms // 0) <= 0 then 0 else (($bytes // 0) * 8 / ($elapsed_ms * 1000000)) end;
   def mbps($bytes; $elapsed_ms): if ($elapsed_ms // 0) <= 0 then 0 else (($bytes // 0) * 8 / ($elapsed_ms * 1000)) end;
+  def spread_pct($values):
+    ($values | map(. // 0) | sort) as $s |
+    if ($s | length) < 2 then 0
+    else
+      ($s[0] // 0) as $min |
+      ($s[-1] // 0) as $max |
+      ($s[((($s | length) - 1) / 2 | floor)] // 0) as $median |
+      if $median == 0 then
+        (if $max == $min then 0 else 100 end)
+      else
+        ((($max - $min) / $median) * 100)
+      end
+    end;
 
   def fairness($values):
     if ($values | length) == 0 then 1
@@ -151,6 +171,23 @@ jq -s \
   ([$server.startAtEpochMillis // 0] + [$receivers[] | (.startAtEpochMillis // 0)] | unique) as $start_at_epoch_values |
   (elapsed_by_iteration($receiver_iterations)) as $receiver_elapsed_ms |
   (elapsed_by_iteration($server_iterations)) as $server_elapsed_ms |
+  (
+    $receiver_iterations |
+    sort_by(.iteration // 1) |
+    group_by(.iteration // 1) |
+    map({
+      bytes: (map(.bulkReceivedBytes // 0) | sum_or_zero),
+      elapsedMillis: (map(.elapsedMillis // 0) | max_or_zero)
+    } | gbps(.bytes; .elapsedMillis))
+  ) as $receiver_iteration_gbps |
+  ($server_iterations | map(.probeRttP99Millis // 0)) as $server_p99_values |
+  (spread_pct($receiver_iteration_gbps)) as $delivered_gbps_spread_pct |
+  (spread_pct($server_p99_values)) as $probe_p99_spread_pct |
+  (
+    []
+    + (if $delivered_gbps_spread_pct > 10 then ["throughput-spread"] else [] end)
+    + (if $probe_p99_spread_pct > 10 then ["p99-spread"] else [] end)
+  ) as $unstable_reasons |
   ($receiver_iterations | map(.bulkReceivedBytes // 0) | sum_or_zero) as $receiver_bytes |
   ($receiver_iterations | map(.bulkReceivedMessages // 0) | sum_or_zero) as $receiver_messages |
   ($receiver_iterations | map(.logicalPacketsReceived // 0) | sum_or_zero) as $receiver_logical_packets |
@@ -216,7 +253,7 @@ jq -s \
     {
       summaryKind: "aggregate",
       case: $caseName,
-      benchmarkName: ($server.scenario // "server-worker"),
+      benchmarkName: (if $benchmarkName == "" then ($server.scenario // "server-worker") else $benchmarkName end),
       iteration: "aggregate",
       measuredIterations: $server_iteration_count,
       receiverWorkers: ($receivers | length),
@@ -258,10 +295,10 @@ jq -s \
       healthyClientMbpsP99: $healthy_client_mbps_p99,
       affectedClientMbpsP50: $affected_client_mbps_p50,
       affectedClientMbpsP99: $affected_client_mbps_p99,
-      deliveredGbpsSpreadPct: 0,
+      deliveredGbpsSpreadPct: $delivered_gbps_spread_pct,
       probeRttP95Millis: ($server_iterations | map(.probeRttP95Millis // 0) | median),
       probeRttP99Millis: ($server_iterations | map(.probeRttP99Millis // 0) | median),
-      probeRttP99MillisSpreadPct: 0,
+      probeRttP99MillisSpreadPct: $probe_p99_spread_pct,
       fairnessIndex: fairness($receiver_peer_bytes),
       healthyFairnessIndex: fairness($healthy_peer_bytes),
       affectedFairnessIndex: fairness($affected_peer_bytes),
@@ -276,8 +313,8 @@ jq -s \
       nackOut: $server_nack_out,
       nackOutPerSecond: (if $server_elapsed_ms <= 0 then 0 else ($server_nack_out * 1000 / $server_elapsed_ms) end),
       maxQueuedBytes: ($server_iterations | map(.maxQueuedBytes // 0) | max_or_zero),
-      unstable: false,
-      unstableReasons: [],
+      unstable: (($unstable_reasons | length) > 0),
+      unstableReasons: $unstable_reasons,
       artifact: $outputRoot
     }
   ) as $aggregate |

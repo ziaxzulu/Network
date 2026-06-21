@@ -179,6 +179,27 @@ benchmark/scripts/merge-worker-results.sh \
 
 Repeat `--receiver` for each receiver host. The merge writes `lab-summary.json`, `lab-summary.csv`, `README.md`, and a `suite-aggregate.jsonl` row that can be passed to `compare-baseline-suite.sh`. For line-rate work, pin JVMs and interrupts consistently between runs and keep other host traffic quiet.
 
+For multi-rate remote bandwidth curves, generate a coordinated command plan instead of hand-assembling each rate:
+
+```bash
+benchmark/scripts/plan-remote-worker-curve.sh \
+  --out benchmark/build/benchmark-results/lab-remote-curve-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-remote-curve \
+  --case remote-curve-1c-mtu \
+  --server-host <server-ip> \
+  --receiver receiver-a=1 \
+  --payload-size 1200 \
+  --rates-mbps 100,250,500,750,1000,1500,2000,unlimited \
+  --warmup 10s \
+  --duration 60s \
+  --iterations 3 \
+  --start-delay 90s \
+  --max-p99-ms 20 \
+  --max-send-deliver-ratio 1.2
+```
+
+The plan writes `server-commands.sh`, one `receiver-<name>-commands.sh` per receiver, `merge-commands.sh`, a manifest, and a README. The merge script labels remote rows as `curve-*`, concatenates a campaign-level `suite-aggregate.jsonl`, and runs `select-stable-bandwidth.sh` so the remote curve produces the same capacity artifacts as local suites.
+
 ## Matrix Profiles
 
 The `matrix` scenario sweeps payload size, reliability, and offered rate:

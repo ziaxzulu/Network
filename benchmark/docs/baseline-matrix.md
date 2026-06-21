@@ -329,6 +329,8 @@ benchmark/scripts/merge-worker-results.sh \
 
 The merged directory exposes a `suite-aggregate.jsonl` row, so it can be compared with `compare-baseline-suite.sh` like any other suite artifact.
 
+For multi-rate remote bandwidth curves, prefer `benchmark/scripts/plan-remote-worker-curve.sh`. It generates per-host server/receiver scripts, fixed `--start-at-epoch-ms` values, merge commands, a campaign `suite-aggregate.jsonl`, and `bandwidth-capacity.*` selector artifacts.
+
 For quick local verification of the runner itself:
 
 ```bash
