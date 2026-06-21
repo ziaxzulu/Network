@@ -225,6 +225,25 @@ benchmark/scripts/run-impairment-matrix.sh \
 
 Without `--execute`, the wrapper prints the exact `tc` and baseline-suite commands and writes a dry-run manifest. Use that mode to review NIC selection and profile order before running on a lab host.
 
+For remote-worker lab runs, use the impairment planner instead of the local suite wrapper:
+
+```bash
+benchmark/scripts/plan-lab-impairment.sh \
+  --out benchmark/build/benchmark-results/lab-impairment-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-impairment \
+  --interface <nic> \
+  --target-host-role receiver-a \
+  --sudo-netem \
+  -- \
+  --server-host <server-ip> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=100 \
+  --raised-packet-limit 100000 \
+  --raised-global-packet-limit 1000000
+```
+
+The generated campaign contains one `plan-lab-baseline.sh` output per impairment profile plus `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, and `netem/<profile>-clear.sh`. Run those netem scripts on the shaped receiver host or namespace before and after the matching profile plan, and keep the status output beside the profile artifacts.
+
 Start with this impairment set:
 
 | Profile | Latency | Jitter | Loss |

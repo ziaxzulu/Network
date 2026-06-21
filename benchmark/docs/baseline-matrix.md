@@ -332,6 +332,24 @@ benchmark/scripts/plan-lab-baseline.sh \
   --raised-global-packet-limit 1000000
 ```
 
+For baseline-of-record adverse network runs, generate profile-specific remote plans and netem scripts:
+
+```bash
+benchmark/scripts/plan-lab-impairment.sh \
+  --out benchmark/build/benchmark-results/lab-impairment-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-impairment \
+  --interface <nic> \
+  --target-host-role receiver-a \
+  --profiles perfect,near-loss,regional-loss,poor,severe \
+  --sudo-netem \
+  -- \
+  --server-host <server-ip> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=500 \
+  --raised-packet-limit 100000 \
+  --raised-global-packet-limit 1000000
+```
+
 After running the same profile on a candidate branch, compare the suite summaries:
 
 ```bash

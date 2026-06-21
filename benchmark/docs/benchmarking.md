@@ -124,6 +124,25 @@ The validator writes `validation.json` and `validation.md`, checks required scen
 
 For lab-generated baselines, the planner also passes contention gates into validation: healthy-client Jain fairness must stay at or above `0.95`, healthy-client send/deliver byte ratio must stay at or below `1.2`, and affected-client send/deliver byte ratio must stay at or below `5`. Override these with `--min-healthy-fairness`, `--max-healthy-send-deliver-ratio`, `--max-affected-send-deliver-ratio`, and `--max-contention-p99-ms` when a topology needs a different acceptance policy.
 
+For remote lab campaigns where the impairment must happen outside the JVM, generate one coordinated lab baseline plan per host-level profile:
+
+```bash
+benchmark/scripts/plan-lab-impairment.sh \
+  --out benchmark/build/benchmark-results/lab-impairment-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-impairment \
+  --interface <nic> \
+  --target-host-role receiver-a \
+  --sudo-netem \
+  -- \
+  --server-host <server-ip> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=100 \
+  --raised-packet-limit 100000 \
+  --raised-global-packet-limit 1000000
+```
+
+The impairment planner writes per-profile `plan-lab-baseline.sh` outputs plus `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, and `netem/<profile>-clear.sh` for the shaped receiver host or network namespace. Use it when you need the same remote worker baseline under perfect, near-loss, regional-loss, poor, and severe host/NIC conditions.
+
 To repeat a baseline suite under a stable set of host-level impairments, use the impairment matrix wrapper. It defaults to a dry-run plan so the selected NIC and commands can be reviewed before changing host qdisc state:
 
 ```bash
