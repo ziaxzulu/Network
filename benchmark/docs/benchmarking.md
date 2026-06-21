@@ -197,6 +197,17 @@ The comparison matches aggregate rows by case and benchmark scenario, or raw sum
 
 When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggregate.jsonl` if present, so baseline-of-record comparisons operate on per-case medians and include throughput/p99 stability spread. Pass explicit `suite-summary.jsonl` paths only when you want raw per-iteration comparison.
 
+For host-level impairment campaigns, compare the campaign summaries after every profile has been merged, validated, and summarized:
+
+```bash
+benchmark/scripts/compare-lab-impairment.sh \
+  --baseline benchmark/build/benchmark-results/lab-impairment-baseline/campaign-summary \
+  --candidate benchmark/build/benchmark-results/lab-impairment-candidate/campaign-summary \
+  --out benchmark/build/benchmark-results/lab-impairment-comparison.md
+```
+
+The campaign comparator fails when a candidate profile or planned capacity/contention row is missing, when profile network shape differs, when either campaign summary failed, when netem status evidence was not required, or when delivered throughput, p99 probe RTT, or max queued bytes breaches the configured thresholds. Extra candidate rows are reported but do not fail the comparison.
+
 ## Remote Worker Runs
 
 For lab validation, run the server and receiver workers on separate machines. Start the server first:
