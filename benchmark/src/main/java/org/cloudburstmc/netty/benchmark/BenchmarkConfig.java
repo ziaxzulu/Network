@@ -45,6 +45,9 @@ public final class BenchmarkConfig {
     private int workers = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
     private int packetLimit;
     private int globalPacketLimit;
+    private long impairmentLatencyMillis;
+    private long impairmentJitterMillis;
+    private double impairmentLossPercent;
     private long messageRate;
     private double rateMbps;
     private double perClientRateMbps = -1.0D;
@@ -141,6 +144,12 @@ public final class BenchmarkConfig {
             this.packetLimit = parsePositiveInt(key, value);
         } else if ("global-packet-limit".equals(key)) {
             this.globalPacketLimit = parsePositiveInt(key, value);
+        } else if ("impairment-latency".equals(key) || "impaired-latency".equals(key)) {
+            this.impairmentLatencyMillis = parseDurationMillis(value);
+        } else if ("impairment-jitter".equals(key) || "impaired-jitter".equals(key)) {
+            this.impairmentJitterMillis = parseDurationMillis(value);
+        } else if ("impairment-loss".equals(key) || "impaired-loss".equals(key)) {
+            this.impairmentLossPercent = parsePercent(key, value);
         } else if ("message-rate".equals(key)) {
             this.messageRate = parseNonNegativeLong(key, value);
         } else if ("rate-mbps".equals(key) || "target-mbps".equals(key)) {
@@ -202,6 +211,9 @@ public final class BenchmarkConfig {
         }
         if (this.disappearingClients > 0 && this.disappearAfterMillis() >= this.durationMillis) {
             throw new IllegalArgumentException("--disappear-after must be less than --duration");
+        }
+        if (this.impairmentJitterMillis > 0L && this.impairmentLatencyMillis == 0L) {
+            throw new IllegalArgumentException("--impairment-jitter requires --impairment-latency");
         }
     }
 
@@ -319,6 +331,18 @@ public final class BenchmarkConfig {
         return this.globalPacketLimit;
     }
 
+    public long impairmentLatencyMillis() {
+        return this.impairmentLatencyMillis;
+    }
+
+    public long impairmentJitterMillis() {
+        return this.impairmentJitterMillis;
+    }
+
+    public double impairmentLossPercent() {
+        return this.impairmentLossPercent;
+    }
+
     public long messageRate() {
         return this.messageRate;
     }
@@ -420,6 +444,15 @@ public final class BenchmarkConfig {
         double parsed = Double.parseDouble(value);
         if (parsed < 0.0D) {
             throw new IllegalArgumentException("rate must be non-negative");
+        }
+        return parsed;
+    }
+
+    private static double parsePercent(String key, String value) {
+        String normalized = value.endsWith("%") ? value.substring(0, value.length() - 1) : value;
+        double parsed = Double.parseDouble(normalized);
+        if (parsed < 0.0D || parsed > 100.0D) {
+            throw new IllegalArgumentException("--" + key + " must be between 0 and 100");
         }
         return parsed;
     }

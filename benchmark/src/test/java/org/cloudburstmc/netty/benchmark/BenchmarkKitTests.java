@@ -56,6 +56,9 @@ public class BenchmarkKitTests {
                 "--batch-groups", "4",
                 "--packet-limit", "1000",
                 "--global-packet-limit", "1000000",
+                "--impairment-latency", "50ms",
+                "--impairment-jitter", "5ms",
+                "--impairment-loss", "2%",
                 "--rates-mbps", "100,unlimited"
         });
 
@@ -74,6 +77,9 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(4, config.batchGroups());
         Assertions.assertEquals(1000, config.packetLimit());
         Assertions.assertEquals(1_000_000, config.globalPacketLimit());
+        Assertions.assertEquals(50, config.impairmentLatencyMillis());
+        Assertions.assertEquals(5, config.impairmentJitterMillis());
+        Assertions.assertEquals(2.0D, config.impairmentLossPercent(), 0.001D);
         Assertions.assertEquals(Arrays.asList(100.0D, 0.0D), config.ratesMbps());
     }
 
@@ -148,6 +154,25 @@ public class BenchmarkKitTests {
         PeerStats.Snapshot snapshot = peer.snapshot();
         Assertions.assertEquals(1, snapshot.blackholedDatagramsIn);
         Assertions.assertEquals(1, snapshot.blackholedDatagramsOut);
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    public void testDatagramImpairmentHandlerDropsAfterEnabled() {
+        DatagramImpairmentHandler handler = new DatagramImpairmentHandler(0, 0, 100.0D, 0);
+        EmbeddedChannel channel = new EmbeddedChannel(handler);
+
+        ByteBuf passThrough = UnpooledByteBufAllocator.DEFAULT.buffer(1).writeByte(1);
+        Assertions.assertTrue(channel.writeInbound(passThrough));
+        ByteBuf forwarded = channel.readInbound();
+        forwarded.release();
+
+        handler.enable();
+        ByteBuf inbound = UnpooledByteBufAllocator.DEFAULT.buffer(1).writeByte(2);
+        ByteBuf outbound = UnpooledByteBufAllocator.DEFAULT.buffer(1).writeByte(3);
+        Assertions.assertFalse(channel.writeInbound(inbound));
+        Assertions.assertFalse(channel.writeOutbound(outbound));
+
         channel.finishAndReleaseAll();
     }
 
@@ -258,6 +283,9 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summary.has("perClientTargetMbps"));
         Assertions.assertTrue(summary.has("packetLimit"));
         Assertions.assertTrue(summary.has("globalPacketLimit"));
+        Assertions.assertTrue(summary.has("impairmentLatencyMillis"));
+        Assertions.assertTrue(summary.has("impairmentJitterMillis"));
+        Assertions.assertTrue(summary.has("impairmentLossPercent"));
         Assertions.assertTrue(summary.has("stability"));
         Assertions.assertEquals("unit", summary.path("stability").get(0).path("name").asText());
         Assertions.assertTrue(summary.path("stability").get(0).path("unstable").asBoolean());

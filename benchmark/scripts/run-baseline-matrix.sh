@@ -412,6 +412,7 @@ case_list_smoke() {
 bestcase-1c-medium|baseline-bandwidth --clients 1 --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --rate-mbps 50 --workers 1
 curve-1c-mtu|bandwidth-latency-curve --clients 1 --warmup 0ms --duration 1s --iterations 1 --payload-size 1200 --rates-mbps 50,100 --workers 1
 fanout-10x0_2|multi-client-fanout --clients 10 --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --workers 1
+fairness-10-2poor|fairness --clients 10 --impaired-clients 2 --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --impairment-latency 50ms --impairment-jitter 5ms --impairment-loss 5 --workers 1
 disappear-10-stopread|disappearing-clients --clients 10 --disappearing-clients 1 --disappear-after 500ms --disappear-mode stop-reading --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --workers 1
 disappear-10-blackhole|disappearing-clients --clients 10 --disappearing-clients 1 --disappear-after 500ms --disappear-mode blackhole --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --workers 1
 batch-10-20ms|batched-game-traffic --clients 10 --warmup 0ms --duration 1s --iterations 1 --batch-interval 20ms --logical-packets-per-batch 4 --batch-payload-sizes 64,256 --batch-groups 2 --per-client-mbps 0.2 --workers 1
@@ -425,6 +426,7 @@ bestcase-1c-medium|bandwidth-latency-curve --clients 1 --warmup 2s --duration 10
 bestcase-1c-mtu|bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --iterations 3 --payload-size 1200 --rates-mbps 100,250,500,1000,unlimited
 fanout-20x5|multi-client-fanout --clients 20 --warmup 2s --duration 10s --iterations 3 --payload-size 512 --per-client-mbps 5
 fanout-100x5|multi-client-fanout --clients 100 --warmup 2s --duration 10s --iterations 3 --payload-size 512 --per-client-mbps 5
+fairness-100-10poor|fairness --clients 100 --impaired-clients 10 --warmup 2s --duration 15s --iterations 3 --payload-size 512 --per-client-mbps 5 --impairment-latency 100ms --impairment-jitter 10ms --impairment-loss 5
 disappear-100-close|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode close --warmup 2s --duration 15s --iterations 3 --payload-size 512 --per-client-mbps 5
 disappear-100-stopread|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode stop-reading --warmup 2s --duration 15s --iterations 3 --payload-size 512 --per-client-mbps 5
 disappear-100-blackhole|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode blackhole --warmup 2s --duration 15s --iterations 3 --payload-size 512 --per-client-mbps 5
@@ -439,7 +441,7 @@ bestcase-1c-medium|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30
 bestcase-1c-mtu|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1200 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
 fanout-100x5|multi-client-fanout --clients 100 --warmup 5s --duration 30s --iterations 3 --payload-size 512 --per-client-mbps 5
 fanout-500x5|multi-client-fanout --clients 500 --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5
-fairness-100-10poor|fairness --clients 100 --impaired-clients 10 --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5
+fairness-100-10poor|fairness --clients 100 --impaired-clients 10 --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --impairment-latency 100ms --impairment-jitter 10ms --impairment-loss 5
 disappear-100-close|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode close --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5
 disappear-100-stopread|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode stop-reading --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5
 disappear-100-blackhole|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5

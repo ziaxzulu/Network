@@ -49,6 +49,7 @@ public final class BenchmarkMain {
         System.out.println("  --host 127.0.0.1 --bind-host 0.0.0.0 --port 19132");
         System.out.println("  --clients 1 --impaired-clients 0 --disappearing-clients 0 --workers <n>");
         System.out.println("  --packet-limit <packets-per-10ms> --global-packet-limit <packets-per-10ms>");
+        System.out.println("  --impairment-latency 50ms --impairment-jitter 5ms --impairment-loss 2%");
         System.out.println("  --payload-size 512 --payload-sizes 64,512,1200");
         System.out.println("  --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 1");
         System.out.println("  --reliability reliable_ordered|reliable|unreliable");

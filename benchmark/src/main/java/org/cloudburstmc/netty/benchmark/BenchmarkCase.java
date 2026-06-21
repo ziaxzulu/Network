@@ -22,6 +22,10 @@ import java.util.List;
 
 record BenchmarkCase(String name, int clients, int impairedClients, int disappearingClients, int payloadSize,
                      RakReliability reliability, double targetMbps, double targetClientMbps, long disappearAfterMillis,
+                     long impairmentLatencyMillis, long impairmentJitterMillis, double impairmentLossPercent,
                      DisappearanceMode disappearanceMode, boolean batched, long batchIntervalMillis,
                      int logicalPacketsPerBatch, int batchGroups, List<Integer> batchPayloadSizes) {
+    boolean hasImpairment() {
+        return this.impairmentLatencyMillis > 0L || this.impairmentJitterMillis > 0L || this.impairmentLossPercent > 0.0D;
+    }
 }

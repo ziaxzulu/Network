@@ -18,13 +18,14 @@ The current RakNet runner is a useful starting synthetic for established-channel
 - It supports local loopback runs for regression checks and remote server/client worker roles for lab runs.
 - It can sweep payload size, reliability mode, offered rate, and client count.
 - It supports `--per-client-mbps` so fanout and fairness runs can express production-style per-client pull targets directly.
+- It can apply benchmark-managed latency, jitter, and loss to selected impaired clients after their RakNet channels are established.
 - It includes a `disappearing-clients` scenario where selected established clients close, stop reading, or blackhole datagrams during the measured window.
 - It includes a `batched-game-traffic` scenario for fixed-cadence grouped fanout with synthetic length-framed batches.
 - It records RakNet server packet-limit overrides so best-case bandwidth runs can distinguish library-default limiter behavior from raised-limiter capacity tests.
 
 It should not yet be treated as a complete production synthetic:
 
-- The `fairness` scenario currently labels impaired clients but does not itself apply per-client impairment. Use Linux `tc netem` or remote workers to create real impairment until the harness grows per-client impairment support.
+- Benchmark-managed impairment runs inside the client JVM and is useful for repeatable local fairness tests. Use Linux `tc netem`, routing rules, or remote workers for host/NIC-level impairment before making lab claims.
 - The batch workload is still synthetic. It models burst cadence, grouped fanout, logical packet counts, and encoded batch sizes, but not compression algorithms or real Bedrock packet distributions.
 - The client-disappearance scenario covers close-mode, local stop-reading mode, and benchmark-managed datagram blackhole mode. Host/NIC-level blackholes still need external `tc`/routing rules.
 - Local loopback is only a repeatable development baseline. Line-rate claims require separate machines, pinned CPU/NIC setup, and controlled network impairment.
@@ -50,7 +51,7 @@ Benchmark implications:
 - Prefer payload sizes near real RakNet/Bedrock shapes: small control packets, threshold-adjacent packets around `512B`, near-MTU batches around `1200-1400B`, and split-heavy chunk/resource-pack payloads.
 - Use `batched-game-traffic` for bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
 - Add a future Bedrock-like workload layer that uses captured logical packet distributions and optionally compresses batches with thresholds `1`, `256`, and `512`.
-- Add grouped fanout plus host/NIC-level blackhole disappearance profiles before treating the suite as production-representative.
+- Add host/NIC-level impairment and blackhole disappearance profiles before treating the suite as production-representative.
 - Add a later proxy profile with one downstream and one upstream RakNet channel per user to represent pass-through deployments.
 
 ## Baseline Matrix
@@ -153,10 +154,10 @@ Purpose: ensure poor links do not consume excessive send work or degrade healthy
 Start with a 100-client lab run:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="fairness --clients 100 --impaired-clients 10 --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="fairness --clients 100 --impaired-clients 10 --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --impairment-latency 100ms --impairment-jitter 10ms --impairment-loss 5"
 ```
 
-Apply impairment outside the JVM to the impaired receiver host or network namespace. Suggested impaired profiles:
+The local harness applies this profile to the first `--impaired-clients` client datagram channels after connection establishment. For lab validation, also run host-level impairment outside the JVM against the impaired receiver host or network namespace. Suggested impaired profiles:
 
 | Profile | Latency | Jitter | Loss | Expected use |
 | --- | ---: | ---: | ---: | --- |

@@ -95,9 +95,9 @@ public final class RakNetBenchmarkRunner {
         int affectedClients = Math.max(config.impairedClients(), config.disappearingClients());
         boolean batched = config.scenario() == BenchmarkScenario.BATCHED_GAME_TRAFFIC;
         return new BenchmarkCase(name, config.clients(), affectedClients, config.disappearingClients(), payloadSize,
-                reliability, targetMbps, targetClientMbps, config.disappearAfterMillis(), config.disappearanceMode(),
-                batched, config.batchIntervalMillis(), config.logicalPacketsPerBatch(), config.batchGroups(),
-                config.batchPayloadSizes());
+                reliability, targetMbps, targetClientMbps, config.disappearAfterMillis(), config.impairmentLatencyMillis(),
+                config.impairmentJitterMillis(), config.impairmentLossPercent(), config.disappearanceMode(), batched,
+                config.batchIntervalMillis(), config.logicalPacketsPerBatch(), config.batchGroups(), config.batchPayloadSizes());
     }
 
     private void runLocal(BenchmarkConfig config, BenchmarkCase benchmarkCase, BenchmarkRunResult result) throws Exception {
@@ -133,6 +133,7 @@ public final class RakNetBenchmarkRunner {
             }
 
             waitForServerPeers(serverPeers, benchmarkCase.clients());
+            enableImpairments(connections.impairments());
             success = true;
             return new LocalSession(serverGroup, clientGroup, serverChannel, clientChannels, connections.blackholes(),
                     probeRtt, metrics, serverPeers);
@@ -241,6 +242,7 @@ public final class RakNetBenchmarkRunner {
         EventLoopGroup group = new NioEventLoopGroup(config.workers());
         List<Channel> channels = new ArrayList<>();
         List<DatagramBlackholeHandler> blackholes = new ArrayList<>();
+        List<DatagramImpairmentHandler> impairments = new ArrayList<>();
         List<PeerStats> peers = new ArrayList<>();
         try {
             CountDownLatch connected = new CountDownLatch(config.clients());
@@ -251,10 +253,12 @@ public final class RakNetBenchmarkRunner {
                 ClientConnection connection = startClient(group, address, peer, connected, benchmarkCase);
                 channels.add(connection.channel());
                 blackholes.add(connection.blackhole());
+                impairments.add(connection.impairment());
             }
             if (!connected.await(Math.max(30_000L, config.clients() * 100L), TimeUnit.MILLISECONDS)) {
                 throw new IllegalStateException("Timed out waiting for client worker connections");
             }
+            enableImpairments(impairments);
             Thread.sleep(config.warmupMillis());
             for (PeerStats peer : peers) {
                 peer.resetMeasurement();
@@ -355,24 +359,32 @@ public final class RakNetBenchmarkRunner {
                                            CountDownLatch connectedLatch) {
         List<Channel> channels = new ArrayList<>(benchmarkCase.clients());
         List<DatagramBlackholeHandler> blackholes = new ArrayList<>(benchmarkCase.clients());
+        List<DatagramImpairmentHandler> impairments = new ArrayList<>(benchmarkCase.clients());
         for (int i = 0; i < benchmarkCase.clients(); i++) {
             PeerStats peer = new PeerStats(i, i < benchmarkCase.impairedClients());
             pendingPeers.add(peer);
             ClientConnection connection = startClient(group, serverAddress, peer, connectedLatch, benchmarkCase);
             channels.add(connection.channel());
             blackholes.add(connection.blackhole());
+            impairments.add(connection.impairment());
         }
-        return new ClientConnections(channels, blackholes);
+        return new ClientConnections(channels, blackholes, impairments);
     }
 
     private ClientConnection startClient(EventLoopGroup group, InetSocketAddress serverAddress, PeerStats peer,
                                          CountDownLatch connectedLatch, BenchmarkCase benchmarkCase) {
         DatagramBlackholeHandler blackhole = shouldInstallBlackhole(benchmarkCase, peer)
                 ? new DatagramBlackholeHandler(peer) : null;
+        DatagramImpairmentHandler impairment = shouldInstallImpairment(benchmarkCase, peer)
+                ? new DatagramImpairmentHandler(benchmarkCase.impairmentLatencyMillis(), benchmarkCase.impairmentJitterMillis(),
+                benchmarkCase.impairmentLossPercent(), peer.id()) : null;
         Bootstrap bootstrap = new Bootstrap()
                 .channelFactory(RakChannelFactory.client(NioDatagramChannel.class, datagram -> {
                     if (blackhole != null) {
                         datagram.pipeline().addFirst(DatagramBlackholeHandler.NAME, blackhole);
+                    }
+                    if (impairment != null) {
+                        datagram.pipeline().addFirst(DatagramImpairmentHandler.NAME, impairment);
                     }
                 }))
                 .group(group)
@@ -386,12 +398,24 @@ public final class RakNetBenchmarkRunner {
                     }
                 });
         Channel channel = bootstrap.connect(serverAddress).awaitUninterruptibly().channel();
-        return new ClientConnection(channel, blackhole);
+        return new ClientConnection(channel, blackhole, impairment);
     }
 
     private static boolean shouldInstallBlackhole(BenchmarkCase benchmarkCase, PeerStats peer) {
         return benchmarkCase.disappearanceMode() == DisappearanceMode.BLACKHOLE
                 && peer.id() < benchmarkCase.disappearingClients();
+    }
+
+    private static boolean shouldInstallImpairment(BenchmarkCase benchmarkCase, PeerStats peer) {
+        return peer.impaired() && benchmarkCase.hasImpairment();
+    }
+
+    private static void enableImpairments(List<DatagramImpairmentHandler> impairments) {
+        for (DatagramImpairmentHandler impairment : impairments) {
+            if (impairment != null) {
+                impairment.enable();
+            }
+        }
     }
 
     private static void waitForServerPeers(List<ServerPeer> peers, int expected) throws InterruptedException {
@@ -694,10 +718,11 @@ public final class RakNetBenchmarkRunner {
         }
     }
 
-    private record ClientConnections(List<Channel> channels, List<DatagramBlackholeHandler> blackholes) {
+    private record ClientConnections(List<Channel> channels, List<DatagramBlackholeHandler> blackholes,
+                                     List<DatagramImpairmentHandler> impairments) {
     }
 
-    private record ClientConnection(Channel channel, DatagramBlackholeHandler blackhole) {
+    private record ClientConnection(Channel channel, DatagramBlackholeHandler blackhole, DatagramImpairmentHandler impairment) {
     }
 
     private static String rateName(Double rate) {

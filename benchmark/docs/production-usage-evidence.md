@@ -16,7 +16,7 @@ The benchmark is a good transport-level synthetic for established RakNet behavio
 - fanout or grouped-fanout pressure across `100+` established clients
 - slow, stopped, closed, or blackholed clients that create retry pressure
 
-It is not a full Bedrock production emulator yet. Compression thresholds and algorithms are not modeled, logical packet size distributions are synthetic, and true host/NIC-level impairment still needs `tc` or lab routing rules.
+It is not a full Bedrock production emulator yet. Compression thresholds and algorithms are not modeled, logical packet size distributions are synthetic, and true host/NIC-level validation still needs `tc`, lab routing rules, or remote workers.
 
 ## Evidence And Benchmark Implications
 
@@ -57,7 +57,7 @@ Keep the recurring matrix centered on these cases:
 - Best-case one-client bandwidth curve with payloads `64`, `512`, `1200`, `1340`, `1400`, and split-heavy payloads.
 - `20ms` and `50ms` batched-game-traffic profiles, with `10ms` included because RakNet flush ticks and CubeCraft validation both make that cadence relevant.
 - Multi-client fanout at `100`, `500`, and `1000` clients, with per-client targets such as `1Mbps`, `5Mbps`, and `10Mbps`.
-- Mixed-network fairness with externally applied latency/loss and healthy-client metrics separated from affected-client metrics.
+- Mixed-network fairness with benchmark-managed latency/loss for repeatable local runs, plus host/NIC-level impairment for lab validation.
 - Disappearing-client runs using `close`, `stop-reading`, and benchmark-managed `blackhole`.
 
 Keep these as known gaps:
@@ -65,5 +65,5 @@ Keep these as known gaps:
 - Compression modeling for zlib/snappy and threshold-specific behavior.
 - Captured Bedrock logical-packet size distributions.
 - Proxy pass-through with one downstream and one upstream RakNet session per logical user.
-- Host/NIC-level blackhole rules that drop packets outside the JVM.
+- Host/NIC-level impairment and blackhole rules that shape or drop packets outside the JVM.
 - Real lab line-rate runs on separate hosts; loopback results are only development baselines.
