@@ -146,6 +146,8 @@ jq -s \
   ($server.iterations // []) as $server_iterations |
   ([$receivers[] | (.iterations // [])[]] ) as $receiver_iterations |
   ([$receivers[] | .runId // "receiver"] ) as $receiver_run_ids |
+  ($server_iterations | length) as $server_iteration_count |
+  ($receivers | map((.iterations // []) | length)) as $receiver_iteration_counts |
   (elapsed_by_iteration($receiver_iterations)) as $receiver_elapsed_ms |
   (elapsed_by_iteration($server_iterations)) as $server_elapsed_ms |
   ($receiver_iterations | map(.bulkReceivedBytes // 0) | sum_or_zero) as $receiver_bytes |
@@ -168,6 +170,7 @@ jq -s \
       ($iteration.peers // [])[] |
       {
         receiverRunId: ($receiver.runId // "receiver"),
+        id: (.id // 0),
         iteration: ($iteration.iteration // 1),
         impaired: (.impaired // false),
         bytes: (.bulkReceivedBytes // 0),
@@ -175,12 +178,24 @@ jq -s \
       }
     ]
   ) as $receiver_peers |
-  ($receiver_peers | map(.bytes)) as $receiver_peer_bytes |
-  ($receiver_peers | map(select(.impaired | not) | .bytes)) as $healthy_peer_bytes |
-  ($receiver_peers | map(select(.impaired) | .bytes)) as $affected_peer_bytes |
-  ($receiver_peers | map(mbps(.bytes; .elapsedMillis))) as $receiver_peer_mbps |
-  ($receiver_peers | map(select(.impaired | not) | mbps(.bytes; .elapsedMillis))) as $healthy_peer_mbps |
-  ($receiver_peers | map(select(.impaired) | mbps(.bytes; .elapsedMillis))) as $affected_peer_mbps |
+  (
+    $receiver_peers |
+    sort_by(.receiverRunId, .id) |
+    group_by([.receiverRunId, .id]) |
+    map({
+      receiverRunId: .[0].receiverRunId,
+      id: .[0].id,
+      impaired: (map(.impaired) | any),
+      bytes: (map(.bytes) | sum_or_zero),
+      elapsedMillis: (map(.elapsedMillis) | sum_or_zero)
+    })
+  ) as $receiver_clients_rollup |
+  ($receiver_clients_rollup | map(.bytes)) as $receiver_peer_bytes |
+  ($receiver_clients_rollup | map(select(.impaired | not) | .bytes)) as $healthy_peer_bytes |
+  ($receiver_clients_rollup | map(select(.impaired) | .bytes)) as $affected_peer_bytes |
+  ($receiver_clients_rollup | map(mbps(.bytes; .elapsedMillis))) as $receiver_peer_mbps |
+  ($receiver_clients_rollup | map(select(.impaired | not) | mbps(.bytes; .elapsedMillis))) as $healthy_peer_mbps |
+  ($receiver_clients_rollup | map(select(.impaired) | mbps(.bytes; .elapsedMillis))) as $affected_peer_mbps |
   ($receiver_peer_mbps | percentile(50)) as $client_mbps_p50 |
   ($receiver_peer_mbps | percentile(95)) as $client_mbps_p95 |
   ($receiver_peer_mbps | percentile(99)) as $client_mbps_p99 |
@@ -202,7 +217,7 @@ jq -s \
       case: $caseName,
       benchmarkName: ($server.scenario // "server-worker"),
       iteration: "aggregate",
-      measuredIterations: ($server_iterations | length),
+      measuredIterations: $server_iteration_count,
       receiverWorkers: ($receivers | length),
       receiverRunIds: $receiver_run_ids,
       clients: $receiver_clients,
@@ -298,6 +313,8 @@ jq -s \
       + (if ($server.role // "") != "server" then ["server-summary-role-is-not-server"] else [] end)
       + (if ([$receivers[] | select((.role // "") != "client")] | length) > 0 then ["one-or-more-receiver-summaries-are-not-client-role"] else [] end)
       + (if ($aggregate.serverConnectedClients // 0) != ($aggregate.receiverClients // 0) then ["server-receiver-client-count-mismatch"] else [] end)
+      + (if ($receiver_clients_rollup | length) != $receiver_clients then ["receiver-peer-client-count-mismatch"] else [] end)
+      + (if ($receiver_iteration_counts | map(select(. != $server_iteration_count)) | length) > 0 then ["server-receiver-iteration-count-mismatch"] else [] end)
       + (if (($receiver_iterations | length) == 0) then ["no-receiver-iterations"] else [] end)
       + (if (($server_iterations | length) == 0) then ["no-server-iterations"] else [] end)
   }

@@ -146,10 +146,10 @@ For lab validation, run the server and receiver workers on separate machines. St
 Then start receivers from one or more client machines:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --warmup 5s --duration 120s --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --warmup 5s --duration 30s --iterations 3 --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
 ```
 
-The server report contains send-side RakNet metrics and probe RTTs. Receiver reports contain delivered bytes/messages from that worker. Use absolute `--out` paths for direct `raknetBenchmark` invocations so artifacts land in the same place regardless of the Gradle task working directory.
+The server report contains send-side RakNet metrics and probe RTTs. Receiver reports contain delivered bytes/messages from that worker. Keep `--iterations`, `--warmup`, and `--duration` aligned between server and receiver workers for comparable merged artifacts. Use absolute `--out` paths for direct `raknetBenchmark` invocations so artifacts land in the same place regardless of the Gradle task working directory.
 
 After copying receiver summaries back to the server-side checkout, merge the worker reports into a comparable lab artifact:
 

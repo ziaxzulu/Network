@@ -259,34 +259,37 @@ public final class RakNetBenchmarkRunner {
                 throw new IllegalStateException("Timed out waiting for client worker connections");
             }
             enableImpairments(impairments);
-            Thread.sleep(config.warmupMillis());
-            for (PeerStats peer : peers) {
-                peer.resetMeasurement();
+            for (int iteration = 1; iteration <= config.iterations(); iteration++) {
+                Thread.sleep(config.warmupMillis());
+                drainWarmup(config);
+                for (PeerStats peer : peers) {
+                    peer.resetMeasurement();
+                }
+                long started = System.nanoTime();
+                runClientWorkerMeasurement(config, benchmarkCase, channels, blackholes);
+                long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                List<PeerStats.Snapshot> snapshots = new ArrayList<>();
+                for (PeerStats peer : peers) {
+                    snapshots.add(peer.snapshot());
+                }
+                result.add(new BenchmarkIterationResult(
+                        benchmarkCase.name(),
+                        iteration,
+                        config.clients(),
+                        benchmarkCase.payloadSize(),
+                        benchmarkCase.reliability(),
+                        benchmarkCase.targetMbps(),
+                        benchmarkCase.targetClientMbps(),
+                        benchmarkCase.disappearanceMode(),
+                        benchmarkCase.batched(),
+                        benchmarkCase.batchIntervalMillis(),
+                        benchmarkCase.logicalPacketsPerBatch(),
+                        benchmarkCase.batchGroups(),
+                        elapsedMillis,
+                        new LatencyHistogram().snapshot(),
+                        snapshots
+                ));
             }
-            long started = System.nanoTime();
-            runClientWorkerMeasurement(config, benchmarkCase, channels, blackholes);
-            long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-            List<PeerStats.Snapshot> snapshots = new ArrayList<>();
-            for (PeerStats peer : peers) {
-                snapshots.add(peer.snapshot());
-            }
-            result.add(new BenchmarkIterationResult(
-                    benchmarkCase.name(),
-                    1,
-                    config.clients(),
-                    benchmarkCase.payloadSize(),
-                    benchmarkCase.reliability(),
-                    benchmarkCase.targetMbps(),
-                    benchmarkCase.targetClientMbps(),
-                    benchmarkCase.disappearanceMode(),
-                    benchmarkCase.batched(),
-                    benchmarkCase.batchIntervalMillis(),
-                    benchmarkCase.logicalPacketsPerBatch(),
-                    benchmarkCase.batchGroups(),
-                    elapsedMillis,
-                    new LatencyHistogram().snapshot(),
-                    snapshots
-            ));
         } finally {
             for (Channel channel : channels) {
                 channel.close().awaitUninterruptibly();
