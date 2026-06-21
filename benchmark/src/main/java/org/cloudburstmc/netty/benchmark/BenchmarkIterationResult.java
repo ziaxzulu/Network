@@ -61,6 +61,9 @@ public final class BenchmarkIterationResult {
     public final double fairnessIndex;
     public final double healthyFairnessIndex;
     public final double affectedFairnessIndex;
+    public final ThroughputDistribution perClientThroughput;
+    public final ThroughputDistribution healthyClientThroughput;
+    public final ThroughputDistribution affectedClientThroughput;
     public final LatencyHistogram.Snapshot probeRtt;
     public final List<PeerStats.Snapshot> peers;
 
@@ -159,5 +162,8 @@ public final class BenchmarkIterationResult {
         this.fairnessIndex = BenchmarkMath.jainFairness(perClientReceived);
         this.healthyFairnessIndex = BenchmarkMath.jainFairness(healthyClientReceived);
         this.affectedFairnessIndex = BenchmarkMath.jainFairness(affectedClientReceived);
+        this.perClientThroughput = ThroughputDistribution.fromBytes(perClientReceived, elapsedMillis);
+        this.healthyClientThroughput = ThroughputDistribution.fromBytes(healthyClientReceived, elapsedMillis);
+        this.affectedClientThroughput = ThroughputDistribution.fromBytes(affectedClientReceived, elapsedMillis);
     }
 }

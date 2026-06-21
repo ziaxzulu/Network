@@ -40,6 +40,10 @@ public final class BenchmarkMath {
         return bytesPerSecond(bytes, elapsedMillis) * 8.0D / 1_000_000_000.0D;
     }
 
+    public static double megabitsPerSecond(long bytes, long elapsedMillis) {
+        return bytesPerSecond(bytes, elapsedMillis) * 8.0D / 1_000_000.0D;
+    }
+
     public static double jainFairness(List<Long> values) {
         if (values.isEmpty()) {
             return 1.0D;

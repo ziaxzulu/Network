@@ -181,6 +181,12 @@ jq -c -n \
         deliveredGbps: $row.deliveredGbps,
         healthyDeliveredGbps: ($row.healthyDeliveredGbps // $row.deliveredGbps),
         affectedDeliveredGbps: ($row.affectedDeliveredGbps // 0),
+        clientMbpsP50: ($row.clientMbpsP50 // 0),
+        clientMbpsP99: ($row.clientMbpsP99 // 0),
+        healthyClientMbpsP50: ($row.healthyClientMbpsP50 // 0),
+        healthyClientMbpsP99: ($row.healthyClientMbpsP99 // 0),
+        affectedClientMbpsP50: ($row.affectedClientMbpsP50 // 0),
+        affectedClientMbpsP99: ($row.affectedClientMbpsP99 // 0),
         deliveredGbpsSpreadPct: ($row.deliveredGbpsSpreadPct // null),
         deliveredMessagesPerSecond: $row.deliveredMessagesPerSecond,
         deliveredLogicalPacketsPerSecond: $row.deliveredLogicalPacketsPerSecond,
@@ -231,6 +237,10 @@ jq -c -n \
         affectedFairnessIndex: ((n($cand.affectedFairnessIndex) // 0) - (n($base.affectedFairnessIndex) // 0)),
         healthyDeliveredGbpsPct: pct_delta(n($base.healthyDeliveredGbps); n($cand.healthyDeliveredGbps)),
         affectedDeliveredGbpsPct: pct_delta(n($base.affectedDeliveredGbps); n($cand.affectedDeliveredGbps)),
+        clientMbpsP50Pct: pct_delta(n($base.clientMbpsP50); n($cand.clientMbpsP50)),
+        clientMbpsP99Pct: pct_delta(n($base.clientMbpsP99); n($cand.clientMbpsP99)),
+        healthyClientMbpsP50Pct: pct_delta(n($base.healthyClientMbpsP50); n($cand.healthyClientMbpsP50)),
+        affectedClientMbpsP50Pct: pct_delta(n($base.affectedClientMbpsP50); n($cand.affectedClientMbpsP50)),
         disconnects: ((n($cand.disconnects) // 0) - (n($base.disconnects) // 0)),
         blackholedDatagramsIn: ((n($cand.blackholedDatagramsIn) // 0) - (n($base.blackholedDatagramsIn) // 0)),
         blackholedDatagramsOut: ((n($cand.blackholedDatagramsOut) // 0) - (n($base.blackholedDatagramsOut) // 0)),
@@ -298,8 +308,8 @@ write_report() {
     echo "| Missing candidate rows | $missing_rows |"
     echo "| Extra candidate rows | $extra_rows |"
     echo
-    echo "| Status | Case | Scenario | Impairment | Iteration | Iterations | Delivered Gbps | Delta | Healthy Gbps Delta | Affected Gbps Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Healthy fairness delta | Affected fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
-    echo "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
+    echo "| Status | Case | Scenario | Impairment | Iteration | Iterations | Delivered Gbps | Delta | Healthy Gbps Delta | Affected Gbps Delta | Client Mbps p50 | Delta | Client Mbps p99 | Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Healthy fairness delta | Affected fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
+    echo "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -327,6 +337,10 @@ write_report() {
         pct(.deltas.deliveredGbpsPct),
         pct(.deltas.healthyDeliveredGbpsPct),
         pct(.deltas.affectedDeliveredGbpsPct),
+        (metric(.candidate; "clientMbpsP50") + " / " + metric(.baseline; "clientMbpsP50")),
+        pct(.deltas.clientMbpsP50Pct),
+        (metric(.candidate; "clientMbpsP99") + " / " + metric(.baseline; "clientMbpsP99")),
+        pct(.deltas.clientMbpsP99Pct),
         (metric(.candidate; "probeRttP99Millis") + " / " + metric(.baseline; "probeRttP99Millis")),
         pct(.deltas.probeRttP99MillisPct),
         (pct(.candidate.deliveredGbpsSpreadPct) + " / " + pct(.baseline.deliveredGbpsSpreadPct)),
@@ -343,8 +357,8 @@ write_report() {
         fmt(.deltas.staleDatagrams),
         "`" + ((.statusReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario impairment iteration iterations delivered delivered_delta healthy_delta affected_delta p99 p99_delta throughput_spread p99_spread queue queue_delta fairness_delta healthy_fairness_delta affected_fairness_delta candidate_unstable blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
-      echo "| $status | $case_name | $scenario | $impairment | $iteration | $iterations | $delivered | $delivered_delta | $healthy_delta | $affected_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $healthy_fairness_delta | $affected_fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
+    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario impairment iteration iterations delivered delivered_delta healthy_delta affected_delta client_p50 client_p50_delta client_p99 client_p99_delta p99 p99_delta throughput_spread p99_spread queue queue_delta fairness_delta healthy_fairness_delta affected_fairness_delta candidate_unstable blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
+      echo "| $status | $case_name | $scenario | $impairment | $iteration | $iterations | $delivered | $delivered_delta | $healthy_delta | $affected_delta | $client_p50 | $client_p50_delta | $client_p99 | $client_p99_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $healthy_fairness_delta | $affected_fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
     done
     echo
     if [[ "$failure_rows" -gt 0 ]]; then

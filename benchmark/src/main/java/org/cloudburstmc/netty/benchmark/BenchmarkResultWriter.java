@@ -90,8 +90,8 @@ public final class BenchmarkResultWriter {
             writer.write("- Impairment: `" + impairmentSummary(result.config()) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
-            writer.write("| Name | Iteration | Clients | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Disconnects | Blackhole In | Blackhole Out | Stale | NACK In | Max Queue |\n");
-            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+            writer.write("| Name | Iteration | Clients | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Stale | NACK In | Max Queue |\n");
+            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
                 writer.write("| " + iteration.name
                         + " | " + iteration.iteration
@@ -106,10 +106,16 @@ public final class BenchmarkResultWriter {
                         + " | " + format(iteration.deliveredGbps)
                         + " | " + format(iteration.deliveredLogicalPacketsPerSecond)
                         + " | " + format(iteration.healthyDeliveredGbps)
+                        + " | " + format(iteration.affectedDeliveredGbps)
+                        + " | " + format(iteration.perClientThroughput.p50Mbps())
+                        + " | " + format(iteration.perClientThroughput.p99Mbps())
+                        + " | " + format(iteration.healthyClientThroughput.p50Mbps())
+                        + " | " + format(iteration.affectedClientThroughput.p50Mbps())
                         + " | " + format(iteration.probeRtt.percentileMillis(95.0D))
                         + " | " + format(iteration.probeRtt.percentileMillis(99.0D))
                         + " | " + format(iteration.fairnessIndex)
                         + " | " + format(iteration.healthyFairnessIndex)
+                        + " | " + format(iteration.affectedFairnessIndex)
                         + " | " + iteration.disconnects
                         + " | " + iteration.blackholedDatagramsIn
                         + " | " + iteration.blackholedDatagramsOut
@@ -251,6 +257,21 @@ public final class BenchmarkResultWriter {
             "delivered_gbps",
             "healthy_delivered_gbps",
             "affected_delivered_gbps",
+            "client_mbps_min",
+            "client_mbps_p50",
+            "client_mbps_p95",
+            "client_mbps_p99",
+            "client_mbps_max",
+            "healthy_client_mbps_min",
+            "healthy_client_mbps_p50",
+            "healthy_client_mbps_p95",
+            "healthy_client_mbps_p99",
+            "healthy_client_mbps_max",
+            "affected_client_mbps_min",
+            "affected_client_mbps_p50",
+            "affected_client_mbps_p95",
+            "affected_client_mbps_p99",
+            "affected_client_mbps_max",
             "delivered_msg_s",
             "delivered_logical_packets_s",
             "logical_packets_sent",
@@ -289,6 +310,21 @@ public final class BenchmarkResultWriter {
             @JsonProperty("delivered_gbps") double deliveredGbps,
             @JsonProperty("healthy_delivered_gbps") double healthyDeliveredGbps,
             @JsonProperty("affected_delivered_gbps") double affectedDeliveredGbps,
+            @JsonProperty("client_mbps_min") double clientMbpsMin,
+            @JsonProperty("client_mbps_p50") double clientMbpsP50,
+            @JsonProperty("client_mbps_p95") double clientMbpsP95,
+            @JsonProperty("client_mbps_p99") double clientMbpsP99,
+            @JsonProperty("client_mbps_max") double clientMbpsMax,
+            @JsonProperty("healthy_client_mbps_min") double healthyClientMbpsMin,
+            @JsonProperty("healthy_client_mbps_p50") double healthyClientMbpsP50,
+            @JsonProperty("healthy_client_mbps_p95") double healthyClientMbpsP95,
+            @JsonProperty("healthy_client_mbps_p99") double healthyClientMbpsP99,
+            @JsonProperty("healthy_client_mbps_max") double healthyClientMbpsMax,
+            @JsonProperty("affected_client_mbps_min") double affectedClientMbpsMin,
+            @JsonProperty("affected_client_mbps_p50") double affectedClientMbpsP50,
+            @JsonProperty("affected_client_mbps_p95") double affectedClientMbpsP95,
+            @JsonProperty("affected_client_mbps_p99") double affectedClientMbpsP99,
+            @JsonProperty("affected_client_mbps_max") double affectedClientMbpsMax,
             @JsonProperty("delivered_msg_s") double deliveredMessagesPerSecond,
             @JsonProperty("delivered_logical_packets_s") double deliveredLogicalPacketsPerSecond,
             @JsonProperty("logical_packets_sent") long logicalPacketsSent,
@@ -328,6 +364,21 @@ public final class BenchmarkResultWriter {
                     iteration.deliveredGbps,
                     iteration.healthyDeliveredGbps,
                     iteration.affectedDeliveredGbps,
+                    iteration.perClientThroughput.minMbps(),
+                    iteration.perClientThroughput.p50Mbps(),
+                    iteration.perClientThroughput.p95Mbps(),
+                    iteration.perClientThroughput.p99Mbps(),
+                    iteration.perClientThroughput.maxMbps(),
+                    iteration.healthyClientThroughput.minMbps(),
+                    iteration.healthyClientThroughput.p50Mbps(),
+                    iteration.healthyClientThroughput.p95Mbps(),
+                    iteration.healthyClientThroughput.p99Mbps(),
+                    iteration.healthyClientThroughput.maxMbps(),
+                    iteration.affectedClientThroughput.minMbps(),
+                    iteration.affectedClientThroughput.p50Mbps(),
+                    iteration.affectedClientThroughput.p95Mbps(),
+                    iteration.affectedClientThroughput.p99Mbps(),
+                    iteration.affectedClientThroughput.maxMbps(),
                     iteration.deliveredMessagesPerSecond,
                     iteration.deliveredLogicalPacketsPerSecond,
                     iteration.logicalPacketsSent,
@@ -486,6 +537,9 @@ public final class BenchmarkResultWriter {
             double offeredGbps,
             double healthyDeliveredGbps,
             double affectedDeliveredGbps,
+            ThroughputDistribution perClientThroughput,
+            ThroughputDistribution healthyClientThroughput,
+            ThroughputDistribution affectedClientThroughput,
             double deliveredMessagesPerSecond,
             double deliveredLogicalPacketsPerSecond,
             double fairnessIndex,
@@ -537,6 +591,9 @@ public final class BenchmarkResultWriter {
                     iteration.offeredGbps,
                     iteration.healthyDeliveredGbps,
                     iteration.affectedDeliveredGbps,
+                    iteration.perClientThroughput,
+                    iteration.healthyClientThroughput,
+                    iteration.affectedClientThroughput,
                     iteration.deliveredMessagesPerSecond,
                     iteration.deliveredLogicalPacketsPerSecond,
                     iteration.fairnessIndex,

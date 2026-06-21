@@ -208,6 +208,20 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testThroughputDistributionCalculation() {
+        ThroughputDistribution distribution = ThroughputDistribution.fromBytes(
+                Arrays.asList(125_000L, 250_000L, 500_000L),
+                1000
+        );
+
+        Assertions.assertEquals(1.0D, distribution.minMbps(), 0.001D);
+        Assertions.assertEquals(2.0D, distribution.p50Mbps(), 0.001D);
+        Assertions.assertEquals(4.0D, distribution.p95Mbps(), 0.001D);
+        Assertions.assertEquals(4.0D, distribution.p99Mbps(), 0.001D);
+        Assertions.assertEquals(4.0D, distribution.maxMbps(), 0.001D);
+    }
+
+    @Test
     public void testStabilitySummaryGroupsByCaseName() {
         String summary = BenchmarkResultWriter.stabilitySummary(Arrays.asList(
                 iteration("case-a", 1, 1000, 1.0D),
@@ -300,6 +314,9 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("close", summary.path("iterations").get(0).path("disappearanceMode").asText());
         Assertions.assertEquals(4, summary.path("iterations").get(0).path("logicalPacketsReceived").asLong());
         Assertions.assertTrue(summary.path("iterations").get(0).has("healthyFairnessIndex"));
+        Assertions.assertEquals(0.000512D, summary.path("iterations").get(0).path("perClientThroughput").path("p50Mbps").asDouble(), 0.000001D);
+        Assertions.assertTrue(summary.path("iterations").get(0).has("healthyClientThroughput"));
+        Assertions.assertTrue(summary.path("iterations").get(0).has("affectedClientThroughput"));
         Assertions.assertTrue(summary.path("iterations").get(0).has("disconnects"));
         Assertions.assertEquals(1, summary.path("iterations").get(0).path("blackholedDatagramsIn").asLong());
         Assertions.assertEquals(1, summary.path("iterations").get(0).path("blackholedDatagramsOut").asLong());
@@ -319,6 +336,10 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("RELIABLE_ORDERED", rows.get(0).get("reliability"));
         Assertions.assertTrue(rows.get(0).containsKey("delivered_gbps"));
         Assertions.assertTrue(rows.get(0).containsKey("target_client_mbps"));
+        Assertions.assertTrue(rows.get(0).containsKey("client_mbps_p50"));
+        Assertions.assertTrue(rows.get(0).containsKey("client_mbps_p99"));
+        Assertions.assertTrue(rows.get(0).containsKey("healthy_client_mbps_p50"));
+        Assertions.assertTrue(rows.get(0).containsKey("affected_client_mbps_p50"));
         Assertions.assertEquals("close", rows.get(0).get("disappearance_mode"));
         Assertions.assertEquals("true", rows.get(0).get("batched"));
         Assertions.assertEquals("4", rows.get(0).get("logical_packets_received"));
