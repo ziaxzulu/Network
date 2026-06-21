@@ -358,10 +358,11 @@ After running the same profile on a candidate branch, compare the suite summarie
 benchmark/scripts/compare-baseline-suite.sh \
   --baseline benchmark/build/benchmark-results/lab-baseline \
   --candidate benchmark/build/benchmark-results/lab-candidate \
-  --out benchmark/build/benchmark-results/lab-comparison.md
+  --out benchmark/build/benchmark-results/lab-comparison.md \
+  --require-validation
 ```
 
-The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run, when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds, or when either input contains a failed `validation.json`.
+The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run, when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds, or when either input contains a failed `validation.json`. For lab sign-off, use `--require-validation` so candidate runs without validation metadata also fail.
 
 For remote server/receiver worker runs, merge the server and receiver artifact directories first:
 

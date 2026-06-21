@@ -66,10 +66,11 @@ Compare the candidate to the saved baseline:
 benchmark/scripts/compare-baseline-suite.sh \
   --baseline benchmark/build/benchmark-results/lab-<date>-<topology>/baseline \
   --candidate benchmark/build/benchmark-results/lab-<date>-<topology>/candidate \
-  --out benchmark/build/benchmark-results/lab-<date>-<topology>/comparison.md
+  --out benchmark/build/benchmark-results/lab-<date>-<topology>/comparison.md \
+  --require-validation
 ```
 
-The comparison script uses `suite-aggregate.jsonl` automatically when comparing suite directories. That means the comparison is based on per-case medians and includes stability spread. If a compared directory also has `validation.json`, the comparison fails when that validation is failed, so invalid promoted baselines or invalid candidate lab runs do not look like clean regressions. Use the raw `suite-summary.jsonl` files only when diagnosing individual measured iterations.
+The comparison script uses `suite-aggregate.jsonl` automatically when comparing suite directories. That means the comparison is based on per-case medians and includes stability spread. For lab sign-off, pass `--require-validation`; the comparison then fails when either side lacks `validation.json` or when validation is failed, so invalid promoted baselines or invalid candidate lab runs do not look like clean regressions. Use the raw `suite-summary.jsonl` files only when diagnosing individual measured iterations.
 
 ## Remote Worker Runs
 
@@ -289,6 +290,6 @@ benchmark/scripts/promote-lab-baseline.sh \
   --name lab-<date>-<topology>
 ```
 
-The promoted baseline directory contains the comparable `suite-aggregate.jsonl`, validation reports, capacity selector artifacts, copied host/topology evidence, copied planning manifests, and a `baseline-manifest.json` with source paths and validation metadata. Use that promoted directory, or the `benchmark/build/benchmark-baselines/latest` symlink, as the `--baseline` input for future candidate comparisons.
+The promoted baseline directory contains the comparable `suite-aggregate.jsonl`, validation reports, capacity selector artifacts, copied host/topology evidence, copied planning manifests, and a `baseline-manifest.json` with source paths and validation metadata. Use that promoted directory, or the `benchmark/build/benchmark-baselines/latest` symlink, as the `--baseline` input for future candidate comparisons, and pass `--require-validation` so unvalidated candidates fail comparison.
 
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.

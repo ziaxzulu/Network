@@ -186,10 +186,11 @@ benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/ben
 benchmark/scripts/compare-baseline-suite.sh \
   --baseline benchmark/build/benchmark-results/lab-baseline \
   --candidate benchmark/build/benchmark-results/lab-candidate \
-  --out benchmark/build/benchmark-results/lab-comparison.md
+  --out benchmark/build/benchmark-results/lab-comparison.md \
+  --require-validation
 ```
 
-The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when impairment or packet-limit settings differ, when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds, or when a present `validation.json` on either input is failed. Reports also include per-client delivered Mbps percentiles, send/deliver ratio deltas, datagram/NACK/stale rate deltas, and healthy-vs-affected throughput/fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
+The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when impairment or packet-limit settings differ, when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds, or when a present `validation.json` on either input is failed. For lab/promoted-baseline comparisons, pass `--require-validation` so both sides must include validation metadata. Reports also include per-client delivered Mbps percentiles, send/deliver ratio deltas, datagram/NACK/stale rate deltas, and healthy-vs-affected throughput/fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
 
 When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggregate.jsonl` if present, so baseline-of-record comparisons operate on per-case medians and include throughput/p99 stability spread. Pass explicit `suite-summary.jsonl` paths only when you want raw per-iteration comparison.
 
