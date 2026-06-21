@@ -53,6 +53,15 @@ Use `--dry-run` to inspect the command set without executing it, `--only <case-s
 
 Use `--rate-mbps 0` or `--rates-mbps unlimited` for an uncapped sender. Use `--target-gbps 1` as shorthand for `--rate-mbps 1000`. For production-style fanout, prefer `--per-client-mbps 5`; the runner converts that to aggregate offered rate from the established client count.
 
+RakNet's server packet limiter stays at library defaults unless overridden. For one-client best-case bandwidth sweeps, record both the default-limiter result and a raised-limiter result:
+
+```bash
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1200 --rates-mbps 250,500,750,1000,unlimited"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1200 --rates-mbps 250,500,750,1000,unlimited --packet-limit 100000 --global-packet-limit 1000000"
+```
+
+Use the default-limiter run to understand out-of-box behavior, and the raised-limiter run to avoid mistaking the anti-abuse guardrail for the established-channel send/receive ceiling. The selected limits are written into `summary.json` and `report.md`.
+
 The `disappearing-clients` scenario supports `--disappear-mode close` for clean disconnect churn, `--disappear-mode stop-reading` for local retry-pressure smoke runs where selected clients stop reading while the server keeps sending, and `--disappear-mode blackhole` for benchmark-managed datagram drops after the connection is established. In remote-worker lab runs, pass matching `--disappearing-clients`, `--disappear-after`, and `--disappear-mode blackhole` values to the receiver workers and the server worker so both sides label the same affected client set. Use external `tc`/routing rules when you need host/NIC-level blackhole behavior outside the JVM.
 
 The `batched-game-traffic` scenario sends bursty, length-framed synthetic batches on a fixed flush cadence. Use `--batch-interval 10ms|20ms|50ms`, `--logical-packets-per-batch`, `--batch-payload-sizes`, and `--batch-groups` to approximate CubeCraft, Nukkit, Cloudburst, and Geyser-style grouped fanout. Compression is not modeled yet; batch payload sizes represent already-encoded batch bytes.
@@ -164,6 +173,7 @@ Important fields:
 - `deliveredGbps`: receiver-observed payload throughput
 - `offeredGbps`: benchmark sender payload rate
 - `targetClientMbps`: configured or derived per-client offered target
+- `packetLimit` and `globalPacketLimit`: configured RakNet server packet-limit overrides, or `null` when library defaults were used
 - `deliveredLogicalPacketsPerSecond`: synthetic logical game packets delivered per second for batch runs
 - `disappearanceMode`: clean close or stop-reading behavior for disappearance runs
 - `probeRttP95Millis` and `probeRttP99Millis`: latency under bulk load

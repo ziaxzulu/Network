@@ -20,6 +20,7 @@ The current RakNet runner is a useful starting synthetic for established-channel
 - It supports `--per-client-mbps` so fanout and fairness runs can express production-style per-client pull targets directly.
 - It includes a `disappearing-clients` scenario where selected established clients close, stop reading, or blackhole datagrams during the measured window.
 - It includes a `batched-game-traffic` scenario for fixed-cadence grouped fanout with synthetic length-framed batches.
+- It records RakNet server packet-limit overrides so best-case bandwidth runs can distinguish library-default limiter behavior from raised-limiter capacity tests.
 
 It should not yet be treated as a complete production synthetic:
 
@@ -93,6 +94,7 @@ Recommended starting command:
 
 ```bash
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1200 --rates-mbps 100,250,500,750,1000,1500,2000"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1200 --rates-mbps 100,250,500,750,1000,1500,2000 --packet-limit 100000 --global-packet-limit 1000000"
 ```
 
 Run this under:
@@ -110,6 +112,7 @@ Primary acceptance metrics:
 - throughput knee per network profile
 - p95/p99 latency knee per network profile
 - queue growth and retransmit pressure around the knee
+- whether `packetLimit` and `globalPacketLimit` were library defaults or explicitly raised
 
 ### 3. Multi-Client Fanout
 

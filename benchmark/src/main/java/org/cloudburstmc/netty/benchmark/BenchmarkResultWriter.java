@@ -83,6 +83,8 @@ public final class BenchmarkResultWriter {
             writer.write("- Run ID: `" + result.runId() + "`\n");
             writer.write("- Scenario: `" + result.config().scenario().cliName() + "`\n");
             writer.write("- Role: `" + result.config().role().name().toLowerCase(Locale.ROOT) + "`\n");
+            writer.write("- Packet limit: `" + optionalLimit(result.config().packetLimit()) + "`\n");
+            writer.write("- Global packet limit: `" + optionalLimit(result.config().globalPacketLimit()) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
             writer.write("| Name | Iteration | Clients | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Disconnects | Blackhole In | Blackhole Out | Stale | NACK In | Max Queue |\n");
@@ -152,6 +154,10 @@ public final class BenchmarkResultWriter {
 
     private static String format(double value) {
         return String.format(Locale.ROOT, "%.6f", value);
+    }
+
+    private static String optionalLimit(int value) {
+        return value > 0 ? Integer.toString(value) : "library default";
     }
 
     private static BufferedWriter writer(File file) throws IOException {
@@ -284,6 +290,8 @@ public final class BenchmarkResultWriter {
             int impairedClients,
             int disappearingClients,
             Double perClientTargetMbps,
+            Integer packetLimit,
+            Integer globalPacketLimit,
             long disappearAfterMillis,
             String disappearanceMode,
             long batchIntervalMillis,
@@ -310,6 +318,8 @@ public final class BenchmarkResultWriter {
                     config.impairedClients(),
                     config.disappearingClients(),
                     config.perClientRateMbps() >= 0.0D ? config.perClientRateMbps() : null,
+                    config.packetLimit() > 0 ? config.packetLimit() : null,
+                    config.globalPacketLimit() > 0 ? config.globalPacketLimit() : null,
                     config.disappearAfterMillis(),
                     config.disappearanceMode().cliName(),
                     config.batchIntervalMillis(),

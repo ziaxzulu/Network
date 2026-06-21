@@ -101,17 +101,8 @@ public final class RakNetBenchmarkRunner {
     }
 
     private void runLocal(BenchmarkConfig config, BenchmarkCase benchmarkCase, BenchmarkRunResult result) throws Exception {
-        if (benchmarkCase.disappearingClients() > 0) {
-            for (int iteration = 1; iteration <= config.iterations(); iteration++) {
-                try (LocalSession session = openLocalSession(config, benchmarkCase)) {
-                    runLocalIteration(config, benchmarkCase, result, session, iteration);
-                }
-            }
-            return;
-        }
-
-        try (LocalSession session = openLocalSession(config, benchmarkCase)) {
-            for (int iteration = 1; iteration <= config.iterations(); iteration++) {
+        for (int iteration = 1; iteration <= config.iterations(); iteration++) {
+            try (LocalSession session = openLocalSession(config, benchmarkCase)) {
                 runLocalIteration(config, benchmarkCase, result, session, iteration);
             }
         }
@@ -350,6 +341,12 @@ public final class RakNetBenchmarkRunner {
                         ch.pipeline().addLast(new ServerProbeAckHandler(assignedPeer, probeRtt));
                     }
                 });
+        if (config.packetLimit() > 0) {
+            bootstrap.option(RakChannelOption.RAK_PACKET_LIMIT, config.packetLimit());
+        }
+        if (config.globalPacketLimit() > 0) {
+            bootstrap.option(RakChannelOption.RAK_GLOBAL_PACKET_LIMIT, config.globalPacketLimit());
+        }
         return bootstrap.bind(new InetSocketAddress(config.bindHost(), config.port())).awaitUninterruptibly().channel();
     }
 

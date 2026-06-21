@@ -77,6 +77,7 @@ public final class PeerStats {
         this.logicalPacketsReceived.reset();
         this.probesSent.reset();
         this.probesAcked.reset();
+        this.disconnects.reset();
         this.blackholedDatagramsIn.reset();
         this.blackholedDatagramsOut.reset();
         this.maxQueuedBytes.set(0L);

@@ -43,6 +43,8 @@ public final class BenchmarkConfig {
     private long startDelayMillis = 3000;
     private int iterations = 3;
     private int workers = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
+    private int packetLimit;
+    private int globalPacketLimit;
     private long messageRate;
     private double rateMbps;
     private double perClientRateMbps = -1.0D;
@@ -135,6 +137,10 @@ public final class BenchmarkConfig {
             this.iterations = parsePositiveInt(key, value);
         } else if ("workers".equals(key)) {
             this.workers = parsePositiveInt(key, value);
+        } else if ("packet-limit".equals(key)) {
+            this.packetLimit = parsePositiveInt(key, value);
+        } else if ("global-packet-limit".equals(key)) {
+            this.globalPacketLimit = parsePositiveInt(key, value);
         } else if ("message-rate".equals(key)) {
             this.messageRate = parseNonNegativeLong(key, value);
         } else if ("rate-mbps".equals(key) || "target-mbps".equals(key)) {
@@ -303,6 +309,14 @@ public final class BenchmarkConfig {
 
     public int workers() {
         return this.workers;
+    }
+
+    public int packetLimit() {
+        return this.packetLimit;
+    }
+
+    public int globalPacketLimit() {
+        return this.globalPacketLimit;
     }
 
     public long messageRate() {

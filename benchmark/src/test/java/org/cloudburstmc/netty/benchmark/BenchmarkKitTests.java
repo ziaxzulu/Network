@@ -54,6 +54,8 @@ public class BenchmarkKitTests {
                 "--logical-packets-per-batch", "4",
                 "--batch-payload-sizes", "64,512",
                 "--batch-groups", "4",
+                "--packet-limit", "1000",
+                "--global-packet-limit", "1000000",
                 "--rates-mbps", "100,unlimited"
         });
 
@@ -70,6 +72,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(4, config.logicalPacketsPerBatch());
         Assertions.assertEquals(Arrays.asList(64, 512), config.batchPayloadSizes());
         Assertions.assertEquals(4, config.batchGroups());
+        Assertions.assertEquals(1000, config.packetLimit());
+        Assertions.assertEquals(1_000_000, config.globalPacketLimit());
         Assertions.assertEquals(Arrays.asList(100.0D, 0.0D), config.ratesMbps());
     }
 
@@ -148,6 +152,31 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testPeerStatsResetClearsMeasurementWindowCounters() {
+        PeerStats peer = new PeerStats(0, false);
+        peer.addBulkSent(64);
+        peer.addBulkReceived(64);
+        peer.addProbeSent();
+        peer.addProbeAcked();
+        peer.addDisconnect();
+        peer.addBlackholedDatagramIn();
+        peer.addBlackholedDatagramOut();
+        peer.queuedBytes(128);
+
+        peer.resetMeasurement();
+
+        PeerStats.Snapshot snapshot = peer.snapshot();
+        Assertions.assertEquals(0, snapshot.bulkSentMessages);
+        Assertions.assertEquals(0, snapshot.bulkReceivedMessages);
+        Assertions.assertEquals(0, snapshot.probesSent);
+        Assertions.assertEquals(0, snapshot.probesAcked);
+        Assertions.assertEquals(0, snapshot.disconnects);
+        Assertions.assertEquals(0, snapshot.blackholedDatagramsIn);
+        Assertions.assertEquals(0, snapshot.blackholedDatagramsOut);
+        Assertions.assertEquals(0, snapshot.maxQueuedBytes);
+    }
+
+    @Test
     public void testFairnessCalculation() {
         Assertions.assertEquals(1.0D, BenchmarkMath.jainFairness(Arrays.asList(100L, 100L, 100L)), 0.001D);
         Assertions.assertTrue(BenchmarkMath.jainFairness(Arrays.asList(100L, 0L, 0L)) < 0.34D);
@@ -212,6 +241,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("baseline-bandwidth", summary.path("scenario").asText());
         Assertions.assertEquals("unit", summary.path("runId").asText());
         Assertions.assertTrue(summary.has("perClientTargetMbps"));
+        Assertions.assertTrue(summary.has("packetLimit"));
+        Assertions.assertTrue(summary.has("globalPacketLimit"));
         Assertions.assertTrue(summary.has("disappearingClients"));
         Assertions.assertEquals("close", summary.path("disappearanceMode").asText());
         Assertions.assertEquals(20, summary.path("batchIntervalMillis").asLong());
