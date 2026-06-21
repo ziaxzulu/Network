@@ -278,6 +278,18 @@ Use this smaller set as the first recurring baseline before expanding the full m
 | `batch-fanout-100-20ms` | `100` | mixed | `reliable_ordered` | perfect | `20ms`, `5Mbps` per client |
 | `batch-fanout-100-50ms` | `100` | mixed | `reliable_ordered` | perfect | `50ms`, `5Mbps` per client |
 
+Run the executable profile with:
+
+```bash
+benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-baseline
+```
+
+For quick local verification of the runner itself:
+
+```bash
+benchmark/scripts/run-baseline-matrix.sh --profile smoke
+```
+
 ## Interpretation Rules
 
 - Compare optimized code against the same run IDs, same lab topology, same CPU pinning, and same impairment profiles.

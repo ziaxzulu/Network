@@ -32,6 +32,14 @@ Each run writes:
 
 Local loopback runs are useful for regression checks, but they are not proof of NIC line rate.
 
+To run the repeatable smoke suite and write a suite manifest:
+
+```bash
+benchmark/scripts/run-baseline-matrix.sh --profile smoke
+```
+
+Use `--dry-run` to inspect the command set without executing it, `--only <case-substring>` to run one case, and `--out <dir>` to control the suite artifact directory.
+
 ```bash
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="baseline-bandwidth --clients 1 --warmup 2s --duration 10s --iterations 3 --payload-size 512"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --rates-mbps 100,500,1000,unlimited"
@@ -47,6 +55,24 @@ Use `--rate-mbps 0` or `--rates-mbps unlimited` for an uncapped sender. Use `--t
 The `disappearing-clients` scenario supports `--disappear-mode close` for clean disconnect churn and `--disappear-mode stop-reading` for local retry-pressure smoke runs where selected clients stop reading while the server keeps sending. Use external `tc`/routing rules or remote workers for true blackhole profiles.
 
 The `batched-game-traffic` scenario sends bursty, length-framed synthetic batches on a fixed flush cadence. Use `--batch-interval 10ms|20ms|50ms`, `--logical-packets-per-batch`, `--batch-payload-sizes`, and `--batch-groups` to approximate CubeCraft, Nukkit, Cloudburst, and Geyser-style grouped fanout. Compression is not modeled yet; batch payload sizes represent already-encoded batch bytes.
+
+## Baseline Suite Runner
+
+The baseline runner executes named cases and writes:
+
+- per-case benchmark artifacts under the suite output directory
+- `manifest.jsonl` with command, status, timestamps, and artifact path
+- `README.md` with a compact case table
+
+Profiles:
+
+```bash
+benchmark/scripts/run-baseline-matrix.sh --profile smoke --dry-run
+benchmark/scripts/run-baseline-matrix.sh --profile local --out benchmark/build/benchmark-results/local-baseline
+benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-baseline
+```
+
+`smoke` is short and intended for local regression. `local` is longer but still loopback-only. `lab` matches the recurring baseline matrix and should be used on controlled hosts/NICs, optionally with `tc netem` applied outside the JVM.
 
 ## Remote Worker Runs
 
