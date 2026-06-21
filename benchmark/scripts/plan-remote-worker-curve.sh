@@ -27,6 +27,7 @@ max_p99_ms="0"
 max_queue_bytes="0"
 max_send_deliver_ratio="0"
 max_nack_out_s="0"
+selector_min_iterations="3"
 
 usage() {
   cat <<'USAGE'
@@ -62,6 +63,7 @@ Options:
   --max-queue-bytes N               Selector gate passed to merge script. Default: 0, disabled.
   --max-send-deliver-ratio N        Selector gate passed to merge script. Default: 0, disabled.
   --max-nack-out-s N                Selector gate passed to merge script. Default: 0, disabled.
+  --selector-min-iterations N       Selector minimum measured iterations. Default: 3.
   --help                            Show this help.
 
 Outputs:
@@ -176,6 +178,10 @@ while [[ $# -gt 0 ]]; do
       max_nack_out_s="$2"
       shift 2
       ;;
+    --selector-min-iterations)
+      selector_min_iterations="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -279,6 +285,10 @@ if [[ -n "$workers" ]] && ! positive_int "$workers"; then
   echo "--workers must be a positive integer" >&2
   exit 2
 fi
+if ! positive_int "$selector_min_iterations"; then
+  echo "--selector-min-iterations must be a positive integer" >&2
+  exit 2
+fi
 for value in "$max_p99_ms" "$max_queue_bytes" "$max_send_deliver_ratio" "$max_nack_out_s"; do
   if ! non_negative_number "$value"; then
     echo "selector gate values must be non-negative numbers: $value" >&2
@@ -377,7 +387,7 @@ if [[ -n "$common_args" ]]; then
   common_worker_args="$common_worker_args $common_args"
 fi
 
-selector_args="--max-p99-ms $max_p99_ms --max-queue-bytes $max_queue_bytes --max-send-deliver-ratio $max_send_deliver_ratio --max-nack-out-s $max_nack_out_s"
+selector_args="--min-iterations $selector_min_iterations --max-p99-ms $max_p99_ms --max-queue-bytes $max_queue_bytes --max-send-deliver-ratio $max_send_deliver_ratio --max-nack-out-s $max_nack_out_s"
 
 cat >"$server_script" <<EOF
 #!/usr/bin/env bash

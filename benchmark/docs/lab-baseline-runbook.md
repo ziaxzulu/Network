@@ -235,4 +235,13 @@ Treat a lab baseline as usable only when:
 - blackhole or stop-reading scenarios show retry-pressure indicators such as stale datagrams, queue growth, NACKs, blackholed datagram counters, or rising send/deliver ratios
 - healthy-client throughput, per-client delivered Mbps percentiles, send/deliver ratios, and p99 latency are reviewed separately from affected-client metrics
 
+Run the validator before promoting a lab run to the saved baseline:
+
+```bash
+benchmark/scripts/validate-lab-baseline.sh \
+  --input benchmark/build/benchmark-results/lab-baseline
+```
+
+The lab planner's generated `merge-all.sh` runs the same validation automatically after it creates the combined aggregate.
+
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.
