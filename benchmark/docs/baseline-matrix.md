@@ -331,6 +331,8 @@ The merged directory exposes a `suite-aggregate.jsonl` row, so it can be compare
 
 For multi-rate remote bandwidth curves, prefer `benchmark/scripts/plan-remote-worker-curve.sh`. It generates per-host server/receiver scripts, fixed `--start-at-epoch-ms` values, merge commands, a campaign `suite-aggregate.jsonl`, and `bandwidth-capacity.*` selector artifacts.
 
+For production-like fanout, fairness, and disappearing-client campaigns, prefer `benchmark/scripts/plan-remote-contention.sh`. It uses the same remote worker scheduling and merge model, records affected-client distribution in `manifest.jsonl`, and keeps fanout, fairness, and disappearance artifacts comparable through one campaign-level `suite-aggregate.jsonl`.
+
 For quick local verification of the runner itself:
 
 ```bash

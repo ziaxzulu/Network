@@ -140,6 +140,28 @@ benchmark/scripts/plan-remote-worker-curve.sh \
 
 Run the generated receiver scripts on receiver hosts, run `server-commands.sh` on the server host, copy receiver artifacts back under the same artifact root, then run `merge-commands.sh`. The merge output includes a campaign-level `suite-aggregate.jsonl` and `bandwidth-capacity.*` files for highest-stable-capacity review.
 
+For remote contention campaigns, generate fanout, fairness, and disappearance cases together:
+
+```bash
+benchmark/scripts/plan-remote-contention.sh \
+  --out benchmark/build/benchmark-results/lab-contention-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-contention \
+  --case remote-contention-100x5 \
+  --server-host <server-ip> \
+  --receiver receiver-a=100 \
+  --cases fanout,fairness,disappear-blackhole \
+  --payload-size 512 \
+  --per-client-mbps 5 \
+  --impaired-clients 10% \
+  --disappearing-clients 10% \
+  --warmup 10s \
+  --duration 60s \
+  --iterations 3 \
+  --start-delay 90s
+```
+
+The generated manifest records the scheduled start times, receiver distribution, and affected-client counts. When using host/NIC-level impairment, place the affected receiver clients on the impaired host or network namespace. With multiple receiver hosts, server-side affected-client splits are accept-order based and should be treated as advisory unless the affected clients are isolated to one receiver.
+
 ## Impairment Profiles
 
 Use `raknet-netem.sh` to apply controlled host-level impairment outside the JVM:

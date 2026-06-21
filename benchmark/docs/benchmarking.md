@@ -200,6 +200,28 @@ benchmark/scripts/plan-remote-worker-curve.sh \
 
 The plan writes `server-commands.sh`, one `receiver-<name>-commands.sh` per receiver, `merge-commands.sh`, a manifest, and a README. The merge script labels remote rows as `curve-*`, concatenates a campaign-level `suite-aggregate.jsonl`, and runs `select-stable-bandwidth.sh` so the remote curve produces the same capacity artifacts as local suites.
 
+For production-like remote contention runs, generate a coordinated fanout, fairness, and disappearance plan:
+
+```bash
+benchmark/scripts/plan-remote-contention.sh \
+  --out benchmark/build/benchmark-results/lab-contention-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-contention \
+  --case remote-contention-100x5 \
+  --server-host <server-ip> \
+  --receiver receiver-a=100 \
+  --cases fanout,fairness,disappear-blackhole \
+  --payload-size 512 \
+  --per-client-mbps 5 \
+  --impaired-clients 10% \
+  --disappearing-clients 10% \
+  --warmup 10s \
+  --duration 60s \
+  --iterations 3 \
+  --start-delay 90s
+```
+
+The contention planner writes the same per-host command scripts and merge script shape as the curve planner, but each generated case uses `multi-client-fanout`, `fairness`, or `disappearing-clients` worker modes. Affected clients are assigned to receiver scripts in receiver order. Keep affected clients on one receiver host when you need exact healthy/affected splits, or treat server-side affected splits as advisory because the server labels peers by accept order across hosts.
+
 ## Matrix Profiles
 
 The `matrix` scenario sweeps payload size, reliability, and offered rate:
