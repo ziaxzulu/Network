@@ -87,6 +87,8 @@ Primary acceptance metrics:
 - ACK/NACK and stale datagram pressure
 - sender CPU and receiver CPU from the lab environment
 
+The baseline suite runner writes `bandwidth-capacity.jsonl`, `bandwidth-capacity.csv`, and `bandwidth-capacity.md` to select the highest stable bandwidth-curve point per payload/reliability/impairment/packet-limit group. The selector chooses by delivered Gbps, not offered target, because uncapped `unlimited` rows are represented as target `0`.
+
 ### 2. Bandwidth-Latency Curve
 
 Purpose: find the operating knee where additional offered bandwidth stops producing useful delivered throughput and starts increasing latency or queueing.
@@ -114,6 +116,16 @@ Primary acceptance metrics:
 - p95/p99 latency knee per network profile
 - queue growth and retransmit pressure around the knee
 - whether `packetLimit` and `globalPacketLimit` were library defaults or explicitly raised
+
+For lab sign-off, rerun the selector with explicit gates that match the topology target, for example:
+
+```bash
+benchmark/scripts/select-stable-bandwidth.sh \
+  --input benchmark/build/benchmark-results/lab-baseline \
+  --max-p99-ms 20 \
+  --max-queue-bytes 1048576 \
+  --max-send-deliver-ratio 1.2
+```
 
 ### 3. Multi-Client Fanout
 

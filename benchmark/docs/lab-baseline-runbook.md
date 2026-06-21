@@ -163,7 +163,8 @@ Treat a lab baseline as usable only when:
 
 - every selected case produces `summary.json`, `timeseries.csv`, `latency.hdr`, and `report.md`
 - `suite-summary.jsonl` has one row per successful measured iteration
-- `suite-aggregate.jsonl` has one row per case/scenario and records median throughput, per-client delivered Mbps percentiles, send/deliver ratios, datagram/NACK/stale rates, median p99 probe RTT, spread, retry-pressure totals, and unstable flags
+- `suite-aggregate.jsonl` has one row per case/scenario and records median throughput, per-client delivered Mbps percentiles, send/deliver ratios, datagram/NACK/stale rates, median p99 probe RTT, packet-limit settings, spread, retry-pressure totals, and unstable flags
+- `bandwidth-capacity.jsonl` has one row per bandwidth curve group and selects the highest stable delivered Gbps, with `bandwidth-capacity.md` kept beside it for review
 - at least three measured iterations exist for baseline-of-record runs
 - repeated runs under the same topology have delivered throughput and p99 probe RTT spread within the configured stability threshold
 - no unexpected disconnects occur in best-case and fanout scenarios

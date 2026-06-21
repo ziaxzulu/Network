@@ -83,7 +83,8 @@ The baseline runner executes named cases and writes:
 - per-case benchmark artifacts under the suite output directory
 - `manifest.jsonl` with command, status, timestamps, and artifact path
 - `suite-summary.csv` and `suite-summary.jsonl` with key metrics extracted from each successful case, including per-client delivered Mbps percentiles, server send-work ratios, and retry-pressure rates
-- `suite-aggregate.csv` and `suite-aggregate.jsonl` with per-case median throughput, healthy/affected throughput, per-client delivered Mbps percentiles, send/deliver ratios, median p99 probe RTT, impairment profile, spread, retry-pressure rates/totals, and unstable flags
+- `suite-aggregate.csv` and `suite-aggregate.jsonl` with per-case median throughput, healthy/affected throughput, per-client delivered Mbps percentiles, send/deliver ratios, median p99 probe RTT, impairment profile, packet-limit settings, spread, retry-pressure rates/totals, and unstable flags
+- `bandwidth-capacity.jsonl`, `bandwidth-capacity.csv`, and `bandwidth-capacity.md` with the highest stable delivered bandwidth selected from bandwidth-latency curve rows
 - `README.md` with a compact case table
 
 Profiles:
@@ -97,6 +98,18 @@ benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/ben
 `smoke` is short and intended for local regression. `local` is longer but still loopback-only. `lab` matches the recurring baseline matrix and should be used on controlled hosts/NICs, optionally with `tc netem` applied outside the JVM.
 
 For baseline-of-record runs, follow [`lab-baseline-runbook.md`](lab-baseline-runbook.md) and capture host reports with `benchmark/scripts/capture-lab-host.sh` before running the suite.
+
+The suite runner writes a stable bandwidth capacity report automatically after aggregate generation. The selector requires at least three measured iterations and rejects aggregate rows already marked unstable, rows with disconnects, and any rows that exceed optional gates:
+
+```bash
+benchmark/scripts/select-stable-bandwidth.sh \
+  --input benchmark/build/benchmark-results/lab-baseline \
+  --max-p99-ms 20 \
+  --max-queue-bytes 1048576 \
+  --max-send-deliver-ratio 1.2
+```
+
+Use the selected stable row as the capacity baseline. The report also shows the best observed row separately so unstable or queue-heavy high-throughput results remain visible.
 
 To repeat a baseline suite under a stable set of host-level impairments, use the impairment matrix wrapper. It defaults to a dry-run plan so the selected NIC and commands can be reviewed before changing host qdisc state:
 
@@ -131,7 +144,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --out benchmark/build/benchmark-results/lab-comparison.md
 ```
 
-The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when the impairment profile differs, or when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds. Reports also include per-client delivered Mbps percentiles, send/deliver ratio deltas, datagram/NACK/stale rate deltas, and healthy-vs-affected throughput/fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
+The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when impairment or packet-limit settings differ, or when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds. Reports also include per-client delivered Mbps percentiles, send/deliver ratio deltas, datagram/NACK/stale rate deltas, and healthy-vs-affected throughput/fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
 
 When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggregate.jsonl` if present, so baseline-of-record comparisons operate on per-case medians and include throughput/p99 stability spread. Pass explicit `suite-summary.jsonl` paths only when you want raw per-iteration comparison.
 

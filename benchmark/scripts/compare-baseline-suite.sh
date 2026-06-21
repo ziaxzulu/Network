@@ -174,6 +174,8 @@ jq -c -n \
         batched: $row.batched,
         targetMbps: $row.targetMbps,
         targetClientMbps: $row.targetClientMbps,
+        packetLimit: ($row.packetLimit // null),
+        globalPacketLimit: ($row.globalPacketLimit // null),
         impairmentProfile: ($row.impairmentProfile // "0ms/0ms/0%"),
         impairmentLatencyMillis: ($row.impairmentLatencyMillis // 0),
         impairmentJitterMillis: ($row.impairmentJitterMillis // 0),
@@ -220,9 +222,13 @@ jq -c -n \
     (pct_delta(n($base.probeRttP99Millis); n($cand.probeRttP99Millis))) as $latencyDeltaPct |
     (pct_delta(n($base.maxQueuedBytes); n($cand.maxQueuedBytes))) as $queueDeltaPct |
     (($base.impairmentProfile // "0ms/0ms/0%") != ($cand.impairmentProfile // "0ms/0ms/0%")) as $impairmentMismatch |
+    (($base.packetLimit // null) != ($cand.packetLimit // null)) as $packetLimitMismatch |
+    (($base.globalPacketLimit // null) != ($cand.globalPacketLimit // null)) as $globalPacketLimitMismatch |
     (
       []
       + (if $impairmentMismatch then ["impairment-profile-mismatch"] else [] end)
+      + (if $packetLimitMismatch then ["packet-limit-mismatch"] else [] end)
+      + (if $globalPacketLimitMismatch then ["global-packet-limit-mismatch"] else [] end)
       + (if $throughputDeltaPct != null and $throughputDeltaPct < (-1 * $throughputThreshold) then ["throughput-regression"] else [] end)
       + (if $latencyDeltaPct != null and $latencyDeltaPct > $latencyThreshold then ["p99-latency-regression"] else [] end)
       + (if $queueDeltaPct != null and $queueDeltaPct > $queueThreshold then ["queue-regression"] else [] end)
