@@ -12,7 +12,7 @@ The benchmark is a good synthetic for established-channel transport pressure:
 - queue, ACK/NACK, stale datagram, disconnect, fairness, per-client throughput, send/deliver, and probe-latency indicators
 - local loopback runs for regression and remote worker runs for separate-host lab evidence
 
-It is not a full Bedrock production emulator yet. The main remaining workload gaps are compression modeling, captured logical packet distributions, pass-through versus re-encode batch behavior, immediate-send/resource-pack pacing, proxy pass-through, and host/NIC-level impairment evidence. Source evidence and the gap list are in [`production-usage-evidence.md`](production-usage-evidence.md).
+It is not a full Bedrock production emulator yet. The main remaining workload gaps are compression modeling, captured logical packet distributions, pass-through versus re-encode batch behavior, immediate-send/resource-pack pacing, proxy pass-through, and captured host/NIC-level impairment results. Source evidence and the gap list are in [`production-usage-evidence.md`](production-usage-evidence.md).
 
 ## Base Matrix
 
@@ -115,3 +115,55 @@ benchmark/scripts/promote-lab-baseline.sh \
 ```
 
 Use the promoted directory, or `benchmark/build/benchmark-baselines/latest`, as the baseline input for candidate comparisons with `--require-validation`.
+
+## Adverse-Network Lab Plan
+
+The current host/NIC-level impairment campaign is generated with:
+
+```bash
+benchmark/scripts/plan-lab-impairment.sh \
+  --out benchmark/build/benchmark-results/lab-impairment-plan-current \
+  --artifact-root benchmark/build/benchmark-results/lab-impairment-current \
+  --interface <nic> \
+  --profiles perfect,near-loss,regional-loss,poor,severe \
+  --target-host-role receiver-a \
+  -- \
+  --server-host <server-ip> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
+  --contention-cases fanout,fairness,disappear-blackhole \
+  --contention-payload-size 512 \
+  --per-client-mbps 5 \
+  --raised-packet-limit 100000 \
+  --raised-global-packet-limit 1000000 \
+  --max-queued-bytes 67108864 \
+  --warmup 10s \
+  --duration 60s \
+  --iterations 3 \
+  --start-delay 90s
+```
+
+The current generated artifact in this worktree is:
+
+```text
+benchmark/build/benchmark-results/lab-impairment-plan-current/
+```
+
+That plan contains five profiles:
+
+| Profile | Latency | Jitter | Loss |
+| --- | ---: | ---: | ---: |
+| `perfect` | `0ms` | `0ms` | `0%` |
+| `near-loss` | `10ms` | `2ms` | `2%` |
+| `regional-loss` | `50ms` | `5ms` | `2%` |
+| `poor` | `100ms` | `10ms` | `5%` |
+| `severe` | `200ms` | `20ms` | `10%` |
+
+Each profile schedules:
+
+- `40` default-limiter one-client bandwidth curve rows
+- `40` raised-limiter one-client bandwidth curve rows
+- `3` contention rows at `500` clients split across two receiver hosts
+
+The impairment planner also writes `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, and `netem/<profile>-clear.sh`. Run those scripts on the shaped receiver host or network namespace before and after the matching profile plan. Keep the generated `<profile>-status-*.txt` files with the copied benchmark artifacts; `validate-all.sh` requires that evidence by default. The `perfect` profile is the no-impairment companion and should still capture qdisc status so later comparisons can prove the baseline host was unshaped.

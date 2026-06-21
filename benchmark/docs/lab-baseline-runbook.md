@@ -297,6 +297,7 @@ After validation passes, package the baseline of record:
 benchmark/scripts/promote-lab-baseline.sh \
   --input benchmark/build/benchmark-results/lab-baseline \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-plan/manifest.jsonl \
+  --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-raised-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/contention-plan/manifest.jsonl \
   --out benchmark/build/benchmark-baselines \
   --name lab-<date>-<topology>
