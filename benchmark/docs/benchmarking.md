@@ -62,6 +62,7 @@ The baseline runner executes named cases and writes:
 
 - per-case benchmark artifacts under the suite output directory
 - `manifest.jsonl` with command, status, timestamps, and artifact path
+- `suite-summary.csv` and `suite-summary.jsonl` with key metrics extracted from each successful case
 - `README.md` with a compact case table
 
 Profiles:

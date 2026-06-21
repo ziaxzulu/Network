@@ -96,7 +96,13 @@ fi
 mkdir -p "$output_root"
 manifest="$output_root/manifest.jsonl"
 report="$output_root/README.md"
+suite_summary_jsonl="$output_root/suite-summary.jsonl"
+suite_summary_csv="$output_root/suite-summary.csv"
 : >"$manifest"
+: >"$suite_summary_jsonl"
+cat >"$suite_summary_csv" <<'CSV'
+case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,elapsed_ms,offered_gbps,delivered_gbps,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_clients,disconnects,stale_datagrams,nack_in,nack_out,max_queued_bytes,artifact
+CSV
 
 json_escape() {
   local value="$1"
@@ -149,6 +155,81 @@ record_manifest() {
     "$(json_escape "$args")" \
     "$(json_escape "$command")" \
     "$(json_escape "$artifact")" >>"$manifest"
+}
+
+append_case_metrics() {
+  local name="$1"
+  local artifact="$2"
+  local summary="$artifact/summary.json"
+
+  if [[ ! -f "$summary" ]]; then
+    echo "No summary.json found for $name at $summary" >&2
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq not found; skipping suite summary extraction for $name" >&2
+    return 0
+  fi
+
+  jq -c --arg case "$name" --arg artifact "$artifact" '
+    .iterations[] | {
+      case: $case,
+      benchmarkName: .name,
+      iteration: .iteration,
+      clients: .clients,
+      payloadSize: .payloadSize,
+      reliability: .reliability,
+      batched: (.batched // false),
+      targetMbps: .targetMbps,
+      targetClientMbps: (.targetClientMbps // 0),
+      elapsedMillis: .elapsedMillis,
+      offeredGbps: .offeredGbps,
+      deliveredGbps: .deliveredGbps,
+      deliveredMessagesPerSecond: .deliveredMessagesPerSecond,
+      deliveredLogicalPacketsPerSecond: (.deliveredLogicalPacketsPerSecond // 0),
+      probeRttP95Millis: .probeRttP95Millis,
+      probeRttP99Millis: .probeRttP99Millis,
+      fairnessIndex: .fairnessIndex,
+      healthyFairnessIndex: (.healthyFairnessIndex // 1),
+      affectedClients: (.affectedClients // 0),
+      disconnects: (.disconnects // 0),
+      staleDatagrams: .staleDatagrams,
+      nackIn: .nackIn,
+      nackOut: .nackOut,
+      maxQueuedBytes: .maxQueuedBytes,
+      artifact: $artifact
+    }
+  ' "$summary" >>"$suite_summary_jsonl"
+
+  jq -r --arg case "$name" --arg artifact "$artifact" '
+    .iterations[] | [
+      $case,
+      .name,
+      .iteration,
+      .clients,
+      .payloadSize,
+      .reliability,
+      (.batched // false),
+      .targetMbps,
+      (.targetClientMbps // 0),
+      .elapsedMillis,
+      .offeredGbps,
+      .deliveredGbps,
+      .deliveredMessagesPerSecond,
+      (.deliveredLogicalPacketsPerSecond // 0),
+      .probeRttP95Millis,
+      .probeRttP99Millis,
+      .fairnessIndex,
+      (.healthyFairnessIndex // 1),
+      (.affectedClients // 0),
+      (.disconnects // 0),
+      .staleDatagrams,
+      .nackIn,
+      .nackOut,
+      .maxQueuedBytes,
+      $artifact
+    ] | @csv
+  ' "$summary" >>"$suite_summary_csv"
 }
 
 case_list_smoke() {
@@ -221,6 +302,9 @@ run_case() {
   ended="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   record_manifest "$name" "$status" "$run_args" "$command_text" "$artifact" "$started" "$ended"
   append_report_row "$name" "$status" "$artifact"
+  if [[ "$status" == "passed" ]]; then
+    append_case_metrics "$name" "$artifact"
+  fi
 
   if [[ "$status" == "failed" && "$continue_on_error" == "false" ]]; then
     echo "Benchmark case failed: $name" >&2
@@ -261,4 +345,6 @@ fi
 echo
 echo "Baseline suite artifacts: $output_root"
 echo "Manifest: $manifest"
+echo "Suite summary JSONL: $suite_summary_jsonl"
+echo "Suite summary CSV: $suite_summary_csv"
 echo "Report: $report"
