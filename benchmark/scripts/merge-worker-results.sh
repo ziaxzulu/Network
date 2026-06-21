@@ -266,6 +266,8 @@ jq -s \
       payloadSize: ($server_iterations[0].payloadSize // 0),
       reliability: ($server_iterations[0].reliability // "unknown"),
       batched: ($server_iterations[0].batched // false),
+      packetLimit: ($server.packetLimit // null),
+      globalPacketLimit: ($server.globalPacketLimit // null),
       targetMbps: ($server_iterations[0].targetMbps // 0),
       targetClientMbps: ($server_iterations[0].targetClientMbps // 0),
       startAtEpochMillis: ($server.startAtEpochMillis // 0),
