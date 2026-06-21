@@ -119,10 +119,10 @@ suite_aggregate_csv="$output_root/suite-aggregate.csv"
 : >"$suite_summary_jsonl"
 : >"$suite_aggregate_jsonl"
 cat >"$suite_summary_csv" <<'CSV'
-case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,elapsed_ms,offered_gbps,delivered_gbps,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,max_queued_bytes,artifact
+case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,elapsed_ms,offered_gbps,delivered_gbps,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,max_queued_bytes,artifact
 CSV
 cat >"$suite_aggregate_csv" <<'CSV'
-case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,median_delivered_gbps,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_fairness,median_healthy_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact
+case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,median_delivered_gbps,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_fairness,median_healthy_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact
 CSV
 
 json_escape() {
@@ -193,6 +193,8 @@ append_case_metrics() {
   fi
 
   jq -c --arg case "$name" --arg artifact "$artifact" '
+    . as $summary |
+    ((($summary.impairmentLatencyMillis // 0) | tostring) + "ms/" + (($summary.impairmentJitterMillis // 0) | tostring) + "ms/" + (($summary.impairmentLossPercent // 0) | tostring) + "%") as $impairmentProfile |
     .iterations[] | {
       case: $case,
       benchmarkName: .name,
@@ -203,6 +205,10 @@ append_case_metrics() {
       batched: (.batched // false),
       targetMbps: .targetMbps,
       targetClientMbps: (.targetClientMbps // 0),
+      impairmentProfile: $impairmentProfile,
+      impairmentLatencyMillis: ($summary.impairmentLatencyMillis // 0),
+      impairmentJitterMillis: ($summary.impairmentJitterMillis // 0),
+      impairmentLossPercent: ($summary.impairmentLossPercent // 0),
       elapsedMillis: .elapsedMillis,
       offeredGbps: .offeredGbps,
       deliveredGbps: .deliveredGbps,
@@ -225,6 +231,8 @@ append_case_metrics() {
   ' "$summary" >>"$suite_summary_jsonl"
 
   jq -r --arg case "$name" --arg artifact "$artifact" '
+    . as $summary |
+    ((($summary.impairmentLatencyMillis // 0) | tostring) + "ms/" + (($summary.impairmentJitterMillis // 0) | tostring) + "ms/" + (($summary.impairmentLossPercent // 0) | tostring) + "%") as $impairmentProfile |
     .iterations[] | [
       $case,
       .name,
@@ -235,6 +243,10 @@ append_case_metrics() {
       (.batched // false),
       .targetMbps,
       (.targetClientMbps // 0),
+      $impairmentProfile,
+      ($summary.impairmentLatencyMillis // 0),
+      ($summary.impairmentJitterMillis // 0),
+      ($summary.impairmentLossPercent // 0),
       .elapsedMillis,
       .offeredGbps,
       .deliveredGbps,
@@ -313,6 +325,10 @@ write_suite_aggregates() {
       batched: $first.batched,
       targetMbps: $first.targetMbps,
       targetClientMbps: $first.targetClientMbps,
+      impairmentProfile: ($first.impairmentProfile // "0ms/0ms/0%"),
+      impairmentLatencyMillis: ($first.impairmentLatencyMillis // 0),
+      impairmentJitterMillis: ($first.impairmentJitterMillis // 0),
+      impairmentLossPercent: ($first.impairmentLossPercent // 0),
       elapsedMillis: ($rows | map(.elapsedMillis) | median),
       offeredGbps: ($rows | map(.offeredGbps) | median),
       deliveredGbps: ($throughput | median),
@@ -354,6 +370,10 @@ write_suite_aggregates() {
       .batched,
       .targetMbps,
       .targetClientMbps,
+      .impairmentProfile,
+      .impairmentLatencyMillis,
+      .impairmentJitterMillis,
+      .impairmentLossPercent,
       .deliveredGbps,
       .deliveredGbpsSpreadPct,
       .probeRttP99Millis,
@@ -381,8 +401,8 @@ write_suite_aggregates() {
     echo "- Aggregate JSONL: \`$suite_aggregate_jsonl\`"
     echo "- Aggregate CSV: \`$suite_aggregate_csv\`"
     echo
-    echo "| Case | Scenario | Iterations | Median Gbps | Throughput Spread | Median p99 ms | p99 Spread | Max Queue | Unstable | Reasons |"
-    echo "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+    echo "| Case | Scenario | Impairment | Iterations | Median Gbps | Throughput Spread | Median p99 ms | p99 Spread | Max Queue | Unstable | Reasons |"
+    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -392,6 +412,7 @@ write_suite_aggregates() {
       [
         "`" + .case + "`",
         "`" + .benchmarkName + "`",
+        "`" + (.impairmentProfile // "0ms/0ms/0%") + "`",
         (.measuredIterations | tostring),
         fmt(.deliveredGbps),
         fmt(.deliveredGbpsSpreadPct) + "%",
@@ -401,8 +422,8 @@ write_suite_aggregates() {
         (.unstable | tostring),
         "`" + ((.unstableReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$suite_aggregate_jsonl" | while IFS=$'\t' read -r case_name scenario iterations gbps throughput_spread p99 p99_spread queue unstable reasons; do
-      echo "| $case_name | $scenario | $iterations | $gbps | $throughput_spread | $p99 | $p99_spread | $queue | $unstable | $reasons |"
+    ' "$suite_aggregate_jsonl" | while IFS=$'\t' read -r case_name scenario impairment iterations gbps throughput_spread p99 p99_spread queue unstable reasons; do
+      echo "| $case_name | $scenario | $impairment | $iterations | $gbps | $throughput_spread | $p99 | $p99_spread | $queue | $unstable | $reasons |"
     done
   } >>"$report"
 }

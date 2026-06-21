@@ -174,6 +174,10 @@ jq -c -n \
         batched: $row.batched,
         targetMbps: $row.targetMbps,
         targetClientMbps: $row.targetClientMbps,
+        impairmentProfile: ($row.impairmentProfile // "0ms/0ms/0%"),
+        impairmentLatencyMillis: ($row.impairmentLatencyMillis // 0),
+        impairmentJitterMillis: ($row.impairmentJitterMillis // 0),
+        impairmentLossPercent: ($row.impairmentLossPercent // 0),
         deliveredGbps: $row.deliveredGbps,
         deliveredGbpsSpreadPct: ($row.deliveredGbpsSpreadPct // null),
         deliveredMessagesPerSecond: $row.deliveredMessagesPerSecond,
@@ -199,8 +203,10 @@ jq -c -n \
     (pct_delta(n($base.deliveredGbps); n($cand.deliveredGbps))) as $throughputDeltaPct |
     (pct_delta(n($base.probeRttP99Millis); n($cand.probeRttP99Millis))) as $latencyDeltaPct |
     (pct_delta(n($base.maxQueuedBytes); n($cand.maxQueuedBytes))) as $queueDeltaPct |
+    (($base.impairmentProfile // "0ms/0ms/0%") != ($cand.impairmentProfile // "0ms/0ms/0%")) as $impairmentMismatch |
     (
       []
+      + (if $impairmentMismatch then ["impairment-profile-mismatch"] else [] end)
       + (if $throughputDeltaPct != null and $throughputDeltaPct < (-1 * $throughputThreshold) then ["throughput-regression"] else [] end)
       + (if $latencyDeltaPct != null and $latencyDeltaPct > $latencyThreshold then ["p99-latency-regression"] else [] end)
       + (if $queueDeltaPct != null and $queueDeltaPct > $queueThreshold then ["queue-regression"] else [] end)
@@ -286,8 +292,8 @@ write_report() {
     echo "| Missing candidate rows | $missing_rows |"
     echo "| Extra candidate rows | $extra_rows |"
     echo
-    echo "| Status | Case | Scenario | Iteration | Iterations | Delivered Gbps | Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
-    echo "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
+    echo "| Status | Case | Scenario | Impairment | Iteration | Iterations | Delivered Gbps | Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
+    echo "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -307,6 +313,7 @@ write_report() {
         "`" + .status + "`",
         "`" + .case + "`",
         "`" + .benchmarkName + "`",
+        (metric(.candidate; "impairmentProfile") + " / " + metric(.baseline; "impairmentProfile")),
         (.iteration | tostring),
         (metric(.candidate; "measuredIterations") + " / " + metric(.baseline; "measuredIterations")),
         (metric(.candidate; "deliveredGbps") + " / " + metric(.baseline; "deliveredGbps")),
@@ -325,8 +332,8 @@ write_report() {
         fmt(.deltas.staleDatagrams),
         "`" + ((.statusReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario iteration iterations delivered delivered_delta p99 p99_delta throughput_spread p99_spread queue queue_delta fairness_delta candidate_unstable blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
-      echo "| $status | $case_name | $scenario | $iteration | $iterations | $delivered | $delivered_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
+    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario impairment iteration iterations delivered delivered_delta p99 p99_delta throughput_spread p99_spread queue queue_delta fairness_delta candidate_unstable blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
+      echo "| $status | $case_name | $scenario | $impairment | $iteration | $iterations | $delivered | $delivered_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
     done
     echo
     if [[ "$failure_rows" -gt 0 ]]; then
