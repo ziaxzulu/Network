@@ -284,6 +284,17 @@ Run the executable profile with:
 benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-baseline
 ```
 
+After running the same profile on a candidate branch, compare the suite summaries:
+
+```bash
+benchmark/scripts/compare-baseline-suite.sh \
+  --baseline benchmark/build/benchmark-results/lab-baseline \
+  --candidate benchmark/build/benchmark-results/lab-candidate \
+  --out benchmark/build/benchmark-results/lab-comparison.md
+```
+
+The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run or when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds.
+
 For quick local verification of the runner itself:
 
 ```bash
@@ -293,6 +304,7 @@ benchmark/scripts/run-baseline-matrix.sh --profile smoke
 ## Interpretation Rules
 
 - Compare optimized code against the same run IDs, same lab topology, same CPU pinning, and same impairment profiles.
+- Keep the saved baseline and candidate `suite-summary.jsonl` files with the code revision, host, NIC, and impairment notes for that run.
 - Use local loopback only for quick regression and profiling. Do not use it for external line-rate claims.
 - Prefer median delivered throughput across measured iterations, but fail the run if p99 latency or queue growth is unstable.
 - Record healthy-client metrics separately from impaired-client metrics for fairness scenarios.

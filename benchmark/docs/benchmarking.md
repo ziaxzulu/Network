@@ -75,6 +75,19 @@ benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/ben
 
 `smoke` is short and intended for local regression. `local` is longer but still loopback-only. `lab` matches the recurring baseline matrix and should be used on controlled hosts/NICs, optionally with `tc netem` applied outside the JVM.
 
+To compare an optimization branch against a saved baseline, run the same suite shape twice and compare the generated `suite-summary.jsonl` files:
+
+```bash
+benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-baseline
+benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-candidate
+benchmark/scripts/compare-baseline-suite.sh \
+  --baseline benchmark/build/benchmark-results/lab-baseline \
+  --candidate benchmark/build/benchmark-results/lab-candidate \
+  --out benchmark/build/benchmark-results/lab-comparison.md
+```
+
+The comparison matches rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing or when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
+
 ## Remote Worker Runs
 
 For lab validation, run the server and receiver workers on separate machines. Start the server first:
