@@ -8,6 +8,7 @@ gradle="./gradlew"
 output_root=""
 common_args=""
 only_pattern=""
+stability_threshold_pct="10"
 
 usage() {
   cat <<'USAGE'
@@ -20,6 +21,7 @@ Options:
   --dry-run                     Print Gradle commands and write a manifest without running benchmarks.
   --only PATTERN                Run only cases whose name contains PATTERN.
   --common-args "..."           Extra benchmark args appended to every case.
+  --stability-threshold-pct N   Mark aggregate rows unstable when throughput or p99 spread exceeds N percent. Default: 10.
   --gradle ./gradlew            Gradle executable to use.
   --continue-on-error           Keep running remaining cases after a benchmark failure.
   --help                        Show this help.
@@ -51,6 +53,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --common-args)
       common_args="$2"
+      shift 2
+      ;;
+    --stability-threshold-pct)
+      stability_threshold_pct="$2"
       shift 2
       ;;
     --gradle)
@@ -87,6 +93,15 @@ case "$profile" in
     ;;
 esac
 
+is_number() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+if ! is_number "$stability_threshold_pct"; then
+  echo "--stability-threshold-pct must be a non-negative number: $stability_threshold_pct" >&2
+  exit 2
+fi
+
 if [[ -z "$output_root" ]]; then
   output_root="$repo_root/benchmark/build/benchmark-results/baseline-${profile}-${timestamp}"
 elif [[ "$output_root" != /* ]]; then
@@ -98,10 +113,16 @@ manifest="$output_root/manifest.jsonl"
 report="$output_root/README.md"
 suite_summary_jsonl="$output_root/suite-summary.jsonl"
 suite_summary_csv="$output_root/suite-summary.csv"
+suite_aggregate_jsonl="$output_root/suite-aggregate.jsonl"
+suite_aggregate_csv="$output_root/suite-aggregate.csv"
 : >"$manifest"
 : >"$suite_summary_jsonl"
+: >"$suite_aggregate_jsonl"
 cat >"$suite_summary_csv" <<'CSV'
 case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,elapsed_ms,offered_gbps,delivered_gbps,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,max_queued_bytes,artifact
+CSV
+cat >"$suite_aggregate_csv" <<'CSV'
+case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,median_delivered_gbps,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_fairness,median_healthy_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact
 CSV
 
 json_escape() {
@@ -236,6 +257,156 @@ append_case_metrics() {
   ' "$summary" >>"$suite_summary_csv"
 }
 
+write_suite_aggregates() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq not found; skipping suite aggregate extraction" >&2
+    return 0
+  fi
+  if [[ ! -s "$suite_summary_jsonl" ]]; then
+    {
+      echo
+      echo "No successful benchmark case metrics were available for aggregate summary generation."
+    } >>"$report"
+    return 0
+  fi
+
+  jq -c -s --argjson stabilityThreshold "$stability_threshold_pct" '
+    def median:
+      if length == 0 then 0
+      else sort as $s | $s[(length - 1) / 2 | floor]
+      end;
+
+    def spread_pct($values):
+      ($values | map(. // 0) | sort) as $s |
+      if ($s | length) == 0 then 0
+      else
+        ($s[0] // 0) as $min |
+        ($s[-1] // 0) as $max |
+        ($s[((($s | length) - 1) / 2 | floor)] // 0) as $median |
+        if $median == 0 then
+          (if $max == $min then 0 else 100 end)
+        else
+          ((($max - $min) / $median) * 100)
+        end
+      end;
+
+    group_by([.case, .benchmarkName])[] as $rows |
+    ($rows[0]) as $first |
+    ($rows | map(.deliveredGbps)) as $throughput |
+    ($rows | map(.probeRttP99Millis)) as $p99 |
+    (spread_pct($throughput)) as $throughputSpread |
+    (spread_pct($p99)) as $p99Spread |
+    (
+      []
+      + (if $throughputSpread > $stabilityThreshold then ["throughput-spread"] else [] end)
+      + (if $p99Spread > $stabilityThreshold then ["p99-spread"] else [] end)
+    ) as $unstableReasons |
+    {
+      summaryKind: "aggregate",
+      case: $first.case,
+      benchmarkName: $first.benchmarkName,
+      iteration: "aggregate",
+      measuredIterations: ($rows | length),
+      clients: $first.clients,
+      payloadSize: $first.payloadSize,
+      reliability: $first.reliability,
+      batched: $first.batched,
+      targetMbps: $first.targetMbps,
+      targetClientMbps: $first.targetClientMbps,
+      elapsedMillis: ($rows | map(.elapsedMillis) | median),
+      offeredGbps: ($rows | map(.offeredGbps) | median),
+      deliveredGbps: ($throughput | median),
+      deliveredGbpsMin: ($throughput | min),
+      deliveredGbpsMax: ($throughput | max),
+      deliveredGbpsSpreadPct: $throughputSpread,
+      deliveredMessagesPerSecond: ($rows | map(.deliveredMessagesPerSecond) | median),
+      deliveredLogicalPacketsPerSecond: ($rows | map(.deliveredLogicalPacketsPerSecond) | median),
+      probeRttP95Millis: ($rows | map(.probeRttP95Millis) | median),
+      probeRttP99Millis: ($p99 | median),
+      probeRttP99MillisMin: ($p99 | min),
+      probeRttP99MillisMax: ($p99 | max),
+      probeRttP99MillisSpreadPct: $p99Spread,
+      fairnessIndex: ($rows | map(.fairnessIndex) | median),
+      healthyFairnessIndex: ($rows | map(.healthyFairnessIndex) | median),
+      affectedClients: ($rows | map(.affectedClients) | max),
+      disconnects: ($rows | map(.disconnects) | add),
+      blackholedDatagramsIn: ($rows | map(.blackholedDatagramsIn) | add),
+      blackholedDatagramsOut: ($rows | map(.blackholedDatagramsOut) | add),
+      staleDatagrams: ($rows | map(.staleDatagrams) | add),
+      nackIn: ($rows | map(.nackIn) | add),
+      nackOut: ($rows | map(.nackOut) | add),
+      maxQueuedBytes: ($rows | map(.maxQueuedBytes) | max),
+      maxQueuedBytesMedian: ($rows | map(.maxQueuedBytes) | median),
+      unstable: (($unstableReasons | length) > 0),
+      unstableReasons: $unstableReasons,
+      artifact: $first.artifact
+    }
+  ' "$suite_summary_jsonl" >"$suite_aggregate_jsonl"
+
+  jq -r '
+    [
+      .case,
+      .benchmarkName,
+      .measuredIterations,
+      .clients,
+      .payloadSize,
+      .reliability,
+      .batched,
+      .targetMbps,
+      .targetClientMbps,
+      .deliveredGbps,
+      .deliveredGbpsSpreadPct,
+      .probeRttP99Millis,
+      .probeRttP99MillisSpreadPct,
+      .maxQueuedBytes,
+      .fairnessIndex,
+      .healthyFairnessIndex,
+      .disconnects,
+      .blackholedDatagramsIn,
+      .blackholedDatagramsOut,
+      .staleDatagrams,
+      .nackIn,
+      .nackOut,
+      .unstable,
+      (.unstableReasons | join(";")),
+      .artifact
+    ] | @csv
+  ' "$suite_aggregate_jsonl" >>"$suite_aggregate_csv"
+
+  {
+    echo
+    echo "## Aggregate Stability"
+    echo
+    echo "- Stability threshold: \`$stability_threshold_pct%\` relative spread for delivered throughput or p99 probe RTT."
+    echo "- Aggregate JSONL: \`$suite_aggregate_jsonl\`"
+    echo "- Aggregate CSV: \`$suite_aggregate_csv\`"
+    echo
+    echo "| Case | Scenario | Iterations | Median Gbps | Throughput Spread | Median p99 ms | p99 Spread | Max Queue | Unstable | Reasons |"
+    echo "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+    jq -r '
+      def fmt($value):
+        if $value == null then "n/a"
+        elif ($value | type) == "number" then (($value * 1000 | round) / 1000 | tostring)
+        else ($value | tostring)
+        end;
+      [
+        "`" + .case + "`",
+        "`" + .benchmarkName + "`",
+        (.measuredIterations | tostring),
+        fmt(.deliveredGbps),
+        fmt(.deliveredGbpsSpreadPct) + "%",
+        fmt(.probeRttP99Millis),
+        fmt(.probeRttP99MillisSpreadPct) + "%",
+        (.maxQueuedBytes | tostring),
+        (.unstable | tostring),
+        "`" + ((.unstableReasons // []) | join(",")) + "`"
+      ] | @tsv
+    ' "$suite_aggregate_jsonl" | while IFS=$'\t' read -r case_name scenario iterations gbps throughput_spread p99 p99_spread queue unstable reasons; do
+      echo "| $case_name | $scenario | $iterations | $gbps | $throughput_spread | $p99 | $p99_spread | $queue | $unstable | $reasons |"
+    done
+  } >>"$report"
+}
+
 case_list_smoke() {
   cat <<'CASES'
 bestcase-1c-medium|baseline-bandwidth --clients 1 --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --rate-mbps 50 --workers 1
@@ -349,9 +520,13 @@ if [[ "$selected" -eq 0 ]]; then
   exit 2
 fi
 
+write_suite_aggregates
+
 echo
 echo "Baseline suite artifacts: $output_root"
 echo "Manifest: $manifest"
 echo "Suite summary JSONL: $suite_summary_jsonl"
 echo "Suite summary CSV: $suite_summary_csv"
+echo "Suite aggregate JSONL: $suite_aggregate_jsonl"
+echo "Suite aggregate CSV: $suite_aggregate_csv"
 echo "Report: $report"

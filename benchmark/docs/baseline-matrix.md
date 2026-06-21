@@ -310,6 +310,7 @@ benchmark/scripts/run-baseline-matrix.sh --profile smoke
 
 - Compare optimized code against the same run IDs, same lab topology, same CPU pinning, and same impairment profiles.
 - Keep the saved baseline and candidate `suite-summary.jsonl` files with the code revision, host, NIC, and impairment notes for that run.
+- Use `suite-aggregate.jsonl` for baseline-of-record comparisons; keep `suite-summary.jsonl` for per-iteration diagnosis.
 - Use local loopback only for quick regression and profiling. Do not use it for external line-rate claims.
 - Prefer median delivered throughput across measured iterations, but fail the run if p99 latency or queue growth is unstable.
 - Record healthy-client metrics separately from impaired-client metrics for fairness scenarios.

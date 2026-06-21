@@ -64,6 +64,7 @@ The baseline runner executes named cases and writes:
 - per-case benchmark artifacts under the suite output directory
 - `manifest.jsonl` with command, status, timestamps, and artifact path
 - `suite-summary.csv` and `suite-summary.jsonl` with key metrics extracted from each successful case
+- `suite-aggregate.csv` and `suite-aggregate.jsonl` with per-case median throughput, median p99 probe RTT, spread, retry-pressure totals, and unstable flags
 - `README.md` with a compact case table
 
 Profiles:
@@ -78,7 +79,7 @@ benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/ben
 
 For baseline-of-record runs, follow [`lab-baseline-runbook.md`](lab-baseline-runbook.md) and capture host reports with `benchmark/scripts/capture-lab-host.sh` before running the suite.
 
-To compare an optimization branch against a saved baseline, run the same suite shape twice and compare the generated `suite-summary.jsonl` files:
+To compare an optimization branch against a saved baseline, run the same suite shape twice and compare the generated suite directories:
 
 ```bash
 benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-baseline
@@ -89,7 +90,9 @@ benchmark/scripts/compare-baseline-suite.sh \
   --out benchmark/build/benchmark-results/lab-comparison.md
 ```
 
-The comparison matches rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing or when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
+The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing or when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
+
+When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggregate.jsonl` if present, so baseline-of-record comparisons operate on per-case medians and include throughput/p99 stability spread. Pass explicit `suite-summary.jsonl` paths only when you want raw per-iteration comparison.
 
 ## Remote Worker Runs
 

@@ -69,6 +69,8 @@ benchmark/scripts/compare-baseline-suite.sh \
   --out benchmark/build/benchmark-results/lab-<date>-<topology>/comparison.md
 ```
 
+The comparison script uses `suite-aggregate.jsonl` automatically when comparing suite directories. That means the comparison is based on per-case medians and includes stability spread. Use the raw `suite-summary.jsonl` files only when diagnosing individual measured iterations.
+
 ## Remote Worker Runs
 
 For line-rate validation, prefer explicit server and receiver workers instead of single-process local mode.
@@ -121,6 +123,7 @@ Treat a lab baseline as usable only when:
 
 - every selected case produces `summary.json`, `timeseries.csv`, `latency.hdr`, and `report.md`
 - `suite-summary.jsonl` has one row per successful measured iteration
+- `suite-aggregate.jsonl` has one row per case/scenario and records median throughput, median p99 probe RTT, spread, retry-pressure totals, and unstable flags
 - at least three measured iterations exist for baseline-of-record runs
 - repeated runs under the same topology have delivered throughput and p99 probe RTT spread within the configured stability threshold
 - no unexpected disconnects occur in best-case and fanout scenarios

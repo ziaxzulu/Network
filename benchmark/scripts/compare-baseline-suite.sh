@@ -12,11 +12,11 @@ queue_regression_pct="50"
 usage() {
   cat <<'USAGE'
 Usage:
-  benchmark/scripts/compare-baseline-suite.sh --baseline DIR|suite-summary.jsonl --candidate DIR|suite-summary.jsonl [options]
+  benchmark/scripts/compare-baseline-suite.sh --baseline DIR|suite-aggregate.jsonl|suite-summary.jsonl --candidate DIR|suite-aggregate.jsonl|suite-summary.jsonl [options]
 
 Options:
-  --baseline PATH                 Baseline suite directory or suite-summary.jsonl.
-  --candidate PATH                Candidate suite directory or suite-summary.jsonl.
+  --baseline PATH                 Baseline suite directory, aggregate JSONL, or per-iteration summary JSONL.
+  --candidate PATH                Candidate suite directory, aggregate JSONL, or per-iteration summary JSONL.
   --out FILE                      Markdown report path. Default: stdout.
   --jsonl FILE                    Raw comparison JSONL path. Default: next to --out, or temporary for stdout.
   --throughput-regression-pct N   Fail when delivered Gbps falls by more than N percent. Default: 10.
@@ -24,10 +24,12 @@ Options:
   --queue-regression-pct N        Fail when max queued bytes rises by more than N percent. Default: 50.
   --help                          Show this help.
 
-Rows are matched by case name, benchmark scenario, and iteration number. The
-script exits non-zero when a candidate row is missing or a matched row breaches
-one of the configured regression thresholds. Extra candidate rows are reported
-as informational rows and do not fail the comparison.
+Suite directories prefer suite-aggregate.jsonl when present, falling back to
+suite-summary.jsonl. Aggregate rows are matched by case name and benchmark
+scenario. Per-iteration rows are matched by case name, scenario, and iteration
+number. The script exits non-zero when a candidate row is missing or a matched
+row breaches one of the configured regression thresholds. Extra candidate rows
+are reported as informational rows and do not fail the comparison.
 USAGE
 }
 
@@ -86,7 +88,11 @@ fi
 resolve_summary() {
   local path="$1"
   if [[ -d "$path" ]]; then
-    path="$path/suite-summary.jsonl"
+    if [[ -s "$path/suite-aggregate.jsonl" ]]; then
+      path="$path/suite-aggregate.jsonl"
+    else
+      path="$path/suite-summary.jsonl"
+    fi
   fi
   if [[ ! -f "$path" ]]; then
     echo "suite summary not found: $path" >&2
@@ -137,7 +143,11 @@ jq -c -n \
   --argjson latencyThreshold "$latency_regression_pct" \
   --argjson queueThreshold "$queue_regression_pct" '
   def suite_key($row):
-    [$row.case, $row.benchmarkName, ($row.iteration | tostring)] | join("|");
+    if ($row.summaryKind // "") == "aggregate" or (($row.iteration // "") | tostring) == "aggregate" then
+      [$row.case, $row.benchmarkName] | join("|")
+    else
+      [$row.case, $row.benchmarkName, ($row.iteration | tostring)] | join("|")
+    end;
 
   def n($value):
     if $value == null then null else ($value | tonumber) end;
@@ -156,7 +166,8 @@ jq -c -n \
       {
         case: $row.case,
         benchmarkName: $row.benchmarkName,
-        iteration: $row.iteration,
+        iteration: ($row.iteration // "aggregate"),
+        measuredIterations: ($row.measuredIterations // 1),
         clients: $row.clients,
         payloadSize: $row.payloadSize,
         reliability: $row.reliability,
@@ -164,9 +175,11 @@ jq -c -n \
         targetMbps: $row.targetMbps,
         targetClientMbps: $row.targetClientMbps,
         deliveredGbps: $row.deliveredGbps,
+        deliveredGbpsSpreadPct: ($row.deliveredGbpsSpreadPct // null),
         deliveredMessagesPerSecond: $row.deliveredMessagesPerSecond,
         deliveredLogicalPacketsPerSecond: $row.deliveredLogicalPacketsPerSecond,
         probeRttP99Millis: $row.probeRttP99Millis,
+        probeRttP99MillisSpreadPct: ($row.probeRttP99MillisSpreadPct // null),
         fairnessIndex: $row.fairnessIndex,
         healthyFairnessIndex: $row.healthyFairnessIndex,
         disconnects: $row.disconnects,
@@ -176,6 +189,8 @@ jq -c -n \
         nackIn: $row.nackIn,
         nackOut: $row.nackOut,
         maxQueuedBytes: $row.maxQueuedBytes,
+        unstable: ($row.unstable // false),
+        unstableReasons: ($row.unstableReasons // []),
         artifact: $row.artifact
       }
     end;
@@ -195,7 +210,7 @@ jq -c -n \
       statusReasons: $reasons,
       case: $cand.case,
       benchmarkName: $cand.benchmarkName,
-      iteration: $cand.iteration,
+      iteration: ($cand.iteration // "aggregate"),
       baseline: metric_row($base),
       candidate: metric_row($cand),
       deltas: {
@@ -224,7 +239,7 @@ jq -c -n \
       statusReasons: ["extra-candidate"],
       case: $cand.case,
       benchmarkName: $cand.benchmarkName,
-      iteration: $cand.iteration,
+      iteration: ($cand.iteration // "aggregate"),
       baseline: null,
       candidate: metric_row($cand),
       deltas: {}
@@ -235,7 +250,7 @@ jq -c -n \
       statusReasons: ["missing-candidate"],
       case: $base.case,
       benchmarkName: $base.benchmarkName,
-      iteration: $base.iteration,
+      iteration: ($base.iteration // "aggregate"),
       baseline: metric_row($base),
       candidate: null,
       deltas: {}
@@ -271,8 +286,8 @@ write_report() {
     echo "| Missing candidate rows | $missing_rows |"
     echo "| Extra candidate rows | $extra_rows |"
     echo
-    echo "| Status | Case | Scenario | Iteration | Delivered Gbps | Delta | p99 RTT ms | Delta | Max queue bytes | Delta | Fairness delta | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
-    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+    echo "| Status | Case | Scenario | Iteration | Iterations | Delivered Gbps | Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
+    echo "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -283,26 +298,35 @@ write_report() {
         if $side == null then "n/a" else fmt($side[$name]) end;
       def pct($value):
         if $value == null then "n/a" else (((($value * 100) | round) / 100) | tostring) + "%" end;
+      def unstable($side):
+        if $side == null then "n/a"
+        elif ($side.unstable // false) then "true:" + (($side.unstableReasons // []) | join(","))
+        else "false"
+        end;
       [
         "`" + .status + "`",
         "`" + .case + "`",
         "`" + .benchmarkName + "`",
         (.iteration | tostring),
+        (metric(.candidate; "measuredIterations") + " / " + metric(.baseline; "measuredIterations")),
         (metric(.candidate; "deliveredGbps") + " / " + metric(.baseline; "deliveredGbps")),
         pct(.deltas.deliveredGbpsPct),
         (metric(.candidate; "probeRttP99Millis") + " / " + metric(.baseline; "probeRttP99Millis")),
         pct(.deltas.probeRttP99MillisPct),
+        (pct(.candidate.deliveredGbpsSpreadPct) + " / " + pct(.baseline.deliveredGbpsSpreadPct)),
+        (pct(.candidate.probeRttP99MillisSpreadPct) + " / " + pct(.baseline.probeRttP99MillisSpreadPct)),
         (metric(.candidate; "maxQueuedBytes") + " / " + metric(.baseline; "maxQueuedBytes")),
         pct(.deltas.maxQueuedBytesPct),
         fmt(.deltas.fairnessIndex),
+        unstable(.candidate),
         fmt(.deltas.blackholedDatagramsIn),
         fmt(.deltas.blackholedDatagramsOut),
         fmt(.deltas.nackOut),
         fmt(.deltas.staleDatagrams),
         "`" + ((.statusReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario iteration delivered delivered_delta p99 p99_delta queue queue_delta fairness_delta blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
-      echo "| $status | $case_name | $scenario | $iteration | $delivered | $delivered_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
+    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario iteration iterations delivered delivered_delta p99 p99_delta throughput_spread p99_spread queue queue_delta fairness_delta candidate_unstable blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
+      echo "| $status | $case_name | $scenario | $iteration | $iterations | $delivered | $delivered_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
     done
     echo
     if [[ "$failure_rows" -gt 0 ]]; then
