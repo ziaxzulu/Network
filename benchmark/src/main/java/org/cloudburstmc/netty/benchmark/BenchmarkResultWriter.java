@@ -31,8 +31,10 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 public final class BenchmarkResultWriter {
     private static final ObjectMapper JSON = new ObjectMapper()
@@ -125,17 +127,64 @@ public final class BenchmarkResultWriter {
         if (iterations.size() < 2) {
             return "Only one measured iteration was recorded; variance cannot be calculated.\n";
         }
+        StringBuilder summary = new StringBuilder();
+        summary.append("Stability is calculated per benchmark case.\n\n");
+        summary.append("| Name | Iterations | Delivered Gbps Spread | Probe p99 RTT Spread | Unstable | Reasons |\n");
+        summary.append("| --- | ---: | ---: | ---: | --- | --- |\n");
+        for (StabilityRow row : stabilityRows(iterations)) {
+            summary.append("| ")
+                    .append(row.name)
+                    .append(" | ")
+                    .append(row.iterations)
+                    .append(" | ")
+                    .append(format(row.deliveredGbpsRelativeSpreadPct))
+                    .append("% | ")
+                    .append(format(row.probeP99RelativeSpreadPct))
+                    .append("% | ")
+                    .append(row.unstable)
+                    .append(" | `")
+                    .append(String.join(",", row.unstableReasons))
+                    .append("` |\n");
+        }
+        summary.append('\n');
+        summary.append("Rows with spread above 10% should be treated as unstable and repeated with longer duration or less host contention.\n");
+        return summary.toString();
+    }
+
+    private static List<StabilityRow> stabilityRows(List<BenchmarkIterationResult> iterations) {
+        Map<String, List<BenchmarkIterationResult>> byName = new LinkedHashMap<>();
+        for (BenchmarkIterationResult iteration : iterations) {
+            byName.computeIfAbsent(iteration.name, ignored -> new ArrayList<>()).add(iteration);
+        }
+
+        List<StabilityRow> rows = new ArrayList<>();
+        for (Map.Entry<String, List<BenchmarkIterationResult>> entry : byName.entrySet()) {
+            rows.add(stabilityRow(entry.getKey(), entry.getValue()));
+        }
+        return rows;
+    }
+
+    private static StabilityRow stabilityRow(String name, List<BenchmarkIterationResult> iterations) {
         List<Double> throughput = new ArrayList<>();
         List<Double> p99 = new ArrayList<>();
         for (BenchmarkIterationResult iteration : iterations) {
             throughput.add(iteration.deliveredGbps);
             p99.add(iteration.probeRtt.percentileMillis(99.0D));
         }
-        double throughputVariance = relativeSpread(throughput);
-        double p99Variance = relativeSpread(p99);
-        return "Delivered throughput relative spread: `" + format(throughputVariance * 100.0D) + "%`.\n"
-                + "Probe p99 RTT relative spread: `" + format(p99Variance * 100.0D) + "%`.\n"
-                + "Runs with spread above 10% should be treated as unstable and repeated with longer duration or less host contention.\n";
+
+        double throughputSpreadPct = relativeSpread(throughput) * 100.0D;
+        double p99SpreadPct = relativeSpread(p99) * 100.0D;
+        List<String> unstableReasons = new ArrayList<>();
+        if (iterations.size() < 2) {
+            unstableReasons.add("insufficient-iterations");
+        }
+        if (throughputSpreadPct > 10.0D) {
+            unstableReasons.add("throughput-spread");
+        }
+        if (p99SpreadPct > 10.0D) {
+            unstableReasons.add("p99-spread");
+        }
+        return new StabilityRow(name, iterations.size(), throughputSpreadPct, p99SpreadPct, !unstableReasons.isEmpty(), unstableReasons);
     }
 
     private static double relativeSpread(List<Double> values) {
@@ -162,6 +211,16 @@ public final class BenchmarkResultWriter {
 
     private static BufferedWriter writer(File file) throws IOException {
         return new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8));
+    }
+
+    private record StabilityRow(
+            String name,
+            int iterations,
+            double deliveredGbpsRelativeSpreadPct,
+            double probeP99RelativeSpreadPct,
+            boolean unstable,
+            List<String> unstableReasons
+    ) {
     }
 
     @JsonPropertyOrder({
@@ -302,6 +361,7 @@ public final class BenchmarkResultWriter {
             long durationMillis,
             int iterationsRequested,
             EnvironmentJson environment,
+            List<StabilityJson> stability,
             List<IterationJson> iterations
     ) {
         static SummaryJson from(BenchmarkRunResult result) {
@@ -309,6 +369,10 @@ public final class BenchmarkResultWriter {
             List<IterationJson> iterations = new ArrayList<>();
             for (BenchmarkIterationResult iteration : result.iterations()) {
                 iterations.add(IterationJson.from(iteration));
+            }
+            List<StabilityJson> stability = new ArrayList<>();
+            for (StabilityRow row : stabilityRows(result.iterations())) {
+                stability.add(StabilityJson.from(row));
             }
             return new SummaryJson(
                     result.runId(),
@@ -330,7 +394,28 @@ public final class BenchmarkResultWriter {
                     config.durationMillis(),
                     config.iterations(),
                     EnvironmentJson.from(result.environment()),
+                    stability,
                     iterations
+            );
+        }
+    }
+
+    private record StabilityJson(
+            String name,
+            int iterations,
+            double deliveredGbpsRelativeSpreadPct,
+            double probeP99RelativeSpreadPct,
+            boolean unstable,
+            List<String> unstableReasons
+    ) {
+        static StabilityJson from(StabilityRow row) {
+            return new StabilityJson(
+                    row.name,
+                    row.iterations,
+                    row.deliveredGbpsRelativeSpreadPct,
+                    row.probeP99RelativeSpreadPct,
+                    row.unstable,
+                    row.unstableReasons
             );
         }
     }

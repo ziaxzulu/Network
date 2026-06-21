@@ -28,6 +28,8 @@ Each run writes:
 - `latency.hdr`
 - `report.md`
 
+`summary.json` and `report.md` include per-case stability rows. For curve and matrix scenarios, read stability per rate/payload/reliability case rather than across the whole run.
+
 ## Local Smoke Runs
 
 Local loopback runs are useful for regression checks, but they are not proof of NIC line rate.
@@ -174,6 +176,7 @@ Important fields:
 - `offeredGbps`: benchmark sender payload rate
 - `targetClientMbps`: configured or derived per-client offered target
 - `packetLimit` and `globalPacketLimit`: configured RakNet server packet-limit overrides, or `null` when library defaults were used
+- `stability`: per-case delivered-throughput and p99 probe RTT spread, plus unstable reasons
 - `deliveredLogicalPacketsPerSecond`: synthetic logical game packets delivered per second for batch runs
 - `disappearanceMode`: clean close or stop-reading behavior for disappearance runs
 - `probeRttP95Millis` and `probeRttP99Millis`: latency under bulk load
@@ -184,4 +187,4 @@ Important fields:
 - `staleDatagrams`, `nackIn`, `nackOut`: retransmission pressure
 - `maxQueuedBytes`: largest observed RakNet queued payload bytes per channel
 
-Treat results as unstable when throughput or p99 probe RTT spread is above 10 percent across measured iterations. Increase duration, reduce unrelated host activity, and rerun before comparing code changes.
+Treat a case as unstable when throughput or p99 probe RTT spread is above 10 percent across measured iterations, or when there are not enough iterations to calculate spread. Increase duration, reduce unrelated host activity, and rerun before comparing code changes.

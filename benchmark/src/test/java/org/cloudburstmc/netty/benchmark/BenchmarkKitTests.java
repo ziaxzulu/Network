@@ -183,6 +183,21 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testStabilitySummaryGroupsByCaseName() {
+        String summary = BenchmarkResultWriter.stabilitySummary(Arrays.asList(
+                iteration("case-a", 1, 1000, 1.0D),
+                iteration("case-a", 2, 1010, 1.0D),
+                iteration("case-b", 1, 2000, 1.0D),
+                iteration("case-b", 2, 1000, 2.0D)
+        ));
+
+        Assertions.assertTrue(summary.contains("| case-a | 2 |"));
+        Assertions.assertTrue(summary.contains("| case-b | 2 |"));
+        Assertions.assertTrue(summary.contains("| case-a | 2 | 0.990099% | 0.000000% | false | `` |"));
+        Assertions.assertTrue(summary.contains("| case-b | 2 | 50.000000% | 50.000000% | true | `throughput-spread,p99-spread` |"));
+    }
+
+    @Test
     public void testNetemPlannerDryRunCommands() {
         List<String> apply = NetemCommandPlanner.apply("eth0", "50ms", "5ms", "2%");
         Assertions.assertEquals("tc qdisc replace dev eth0 root netem delay 50ms 5ms loss 2%", apply.get(0));
@@ -243,6 +258,10 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summary.has("perClientTargetMbps"));
         Assertions.assertTrue(summary.has("packetLimit"));
         Assertions.assertTrue(summary.has("globalPacketLimit"));
+        Assertions.assertTrue(summary.has("stability"));
+        Assertions.assertEquals("unit", summary.path("stability").get(0).path("name").asText());
+        Assertions.assertTrue(summary.path("stability").get(0).path("unstable").asBoolean());
+        Assertions.assertEquals("insufficient-iterations", summary.path("stability").get(0).path("unstableReasons").get(0).asText());
         Assertions.assertTrue(summary.has("disappearingClients"));
         Assertions.assertEquals("close", summary.path("disappearanceMode").asText());
         Assertions.assertEquals(20, summary.path("batchIntervalMillis").asLong());
@@ -281,5 +300,29 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_in"));
         Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_out"));
         Assertions.assertTrue(rows.get(0).containsKey("max_queued_bytes"));
+    }
+
+    private static BenchmarkIterationResult iteration(String name, int iteration, int receivedBytes, double p99Millis) {
+        LatencyHistogram histogram = new LatencyHistogram();
+        histogram.record((long) (p99Millis * 1_000_000.0D));
+        PeerStats peer = new PeerStats(0, false);
+        peer.addBulkReceived(receivedBytes);
+        return new BenchmarkIterationResult(
+                name,
+                iteration,
+                1,
+                64,
+                RakReliability.RELIABLE_ORDERED,
+                0.0D,
+                0.0D,
+                DisappearanceMode.CLOSE,
+                false,
+                20,
+                1,
+                1,
+                1000,
+                histogram.snapshot(),
+                Arrays.asList(peer.snapshot())
+        );
     }
 }
