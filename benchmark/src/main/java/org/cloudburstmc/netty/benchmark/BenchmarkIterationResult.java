@@ -44,6 +44,12 @@ public final class BenchmarkIterationResult {
     public final long logicalPacketsReceived;
     public final long probesSent;
     public final long probesAcked;
+    public final long serverBytesOut;
+    public final long serverDatagramsOut;
+    public final long healthyServerBytesOut;
+    public final long affectedServerBytesOut;
+    public final long healthyServerDatagramsOut;
+    public final long affectedServerDatagramsOut;
     public final long staleDatagrams;
     public final long nackIn;
     public final long nackOut;
@@ -57,6 +63,13 @@ public final class BenchmarkIterationResult {
     public final double deliveredMessagesPerSecond;
     public final double deliveredLogicalPacketsPerSecond;
     public final double offeredGbps;
+    public final double serverDatagramsOutPerSecond;
+    public final double staleDatagramsPerSecond;
+    public final double nackInPerSecond;
+    public final double nackOutPerSecond;
+    public final double sentToDeliveredBytesRatio;
+    public final double healthySentToDeliveredBytesRatio;
+    public final double affectedSentToDeliveredBytesRatio;
     public final int affectedClients;
     public final double fairnessIndex;
     public final double healthyFairnessIndex;
@@ -96,6 +109,12 @@ public final class BenchmarkIterationResult {
         long receivedLogicalPackets = 0L;
         long sentProbes = 0L;
         long ackedProbes = 0L;
+        long bytesOut = 0L;
+        long datagramsOut = 0L;
+        long healthyBytesOut = 0L;
+        long affectedBytesOut = 0L;
+        long healthyDatagramsOut = 0L;
+        long affectedDatagramsOut = 0L;
         long stale = 0L;
         long nacksIn = 0L;
         long nacksOut = 0L;
@@ -119,6 +138,8 @@ public final class BenchmarkIterationResult {
             receivedLogicalPackets += peer.logicalPacketsReceived;
             sentProbes += peer.probesSent;
             ackedProbes += peer.probesAcked;
+            bytesOut += peer.serverBytesOut;
+            datagramsOut += peer.serverDatagramsOut;
             stale += peer.staleDatagrams;
             nacksIn += peer.nackIn;
             nacksOut += peer.nackOut;
@@ -130,9 +151,13 @@ public final class BenchmarkIterationResult {
             if (peer.impaired) {
                 affected++;
                 affectedReceivedBytes += peer.bulkReceivedBytes;
+                affectedBytesOut += peer.serverBytesOut;
+                affectedDatagramsOut += peer.serverDatagramsOut;
                 affectedClientReceived.add(peer.bulkReceivedBytes);
             } else {
                 healthyReceivedBytes += peer.bulkReceivedBytes;
+                healthyBytesOut += peer.serverBytesOut;
+                healthyDatagramsOut += peer.serverDatagramsOut;
                 healthyClientReceived.add(peer.bulkReceivedBytes);
             }
         }
@@ -145,6 +170,12 @@ public final class BenchmarkIterationResult {
         this.logicalPacketsReceived = receivedLogicalPackets;
         this.probesSent = sentProbes;
         this.probesAcked = ackedProbes;
+        this.serverBytesOut = bytesOut;
+        this.serverDatagramsOut = datagramsOut;
+        this.healthyServerBytesOut = healthyBytesOut;
+        this.affectedServerBytesOut = affectedBytesOut;
+        this.healthyServerDatagramsOut = healthyDatagramsOut;
+        this.affectedServerDatagramsOut = affectedDatagramsOut;
         this.staleDatagrams = stale;
         this.nackIn = nacksIn;
         this.nackOut = nacksOut;
@@ -158,6 +189,13 @@ public final class BenchmarkIterationResult {
         this.deliveredMessagesPerSecond = BenchmarkMath.messagesPerSecond(receivedMessages, elapsedMillis);
         this.deliveredLogicalPacketsPerSecond = BenchmarkMath.messagesPerSecond(receivedLogicalPackets, elapsedMillis);
         this.offeredGbps = BenchmarkMath.gigabitsPerSecond(sentBytes, elapsedMillis);
+        this.serverDatagramsOutPerSecond = BenchmarkMath.messagesPerSecond(datagramsOut, elapsedMillis);
+        this.staleDatagramsPerSecond = BenchmarkMath.messagesPerSecond(stale, elapsedMillis);
+        this.nackInPerSecond = BenchmarkMath.messagesPerSecond(nacksIn, elapsedMillis);
+        this.nackOutPerSecond = BenchmarkMath.messagesPerSecond(nacksOut, elapsedMillis);
+        this.sentToDeliveredBytesRatio = sendToDeliveredRatio(bytesOut, receivedBytes);
+        this.healthySentToDeliveredBytesRatio = sendToDeliveredRatio(healthyBytesOut, healthyReceivedBytes);
+        this.affectedSentToDeliveredBytesRatio = sendToDeliveredRatio(affectedBytesOut, affectedReceivedBytes);
         this.affectedClients = affected;
         this.fairnessIndex = BenchmarkMath.jainFairness(perClientReceived);
         this.healthyFairnessIndex = BenchmarkMath.jainFairness(healthyClientReceived);
@@ -165,5 +203,9 @@ public final class BenchmarkIterationResult {
         this.perClientThroughput = ThroughputDistribution.fromBytes(perClientReceived, elapsedMillis);
         this.healthyClientThroughput = ThroughputDistribution.fromBytes(healthyClientReceived, elapsedMillis);
         this.affectedClientThroughput = ThroughputDistribution.fromBytes(affectedClientReceived, elapsedMillis);
+    }
+
+    private static double sendToDeliveredRatio(long serverBytesOut, long deliveredBytes) {
+        return serverBytesOut / (double) Math.max(1L, deliveredBytes);
     }
 }

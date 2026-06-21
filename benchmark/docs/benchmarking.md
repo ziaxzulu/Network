@@ -82,8 +82,8 @@ The baseline runner executes named cases and writes:
 
 - per-case benchmark artifacts under the suite output directory
 - `manifest.jsonl` with command, status, timestamps, and artifact path
-- `suite-summary.csv` and `suite-summary.jsonl` with key metrics extracted from each successful case, including per-client delivered Mbps percentiles
-- `suite-aggregate.csv` and `suite-aggregate.jsonl` with per-case median throughput, healthy/affected throughput, per-client delivered Mbps percentiles, median p99 probe RTT, impairment profile, spread, retry-pressure totals, and unstable flags
+- `suite-summary.csv` and `suite-summary.jsonl` with key metrics extracted from each successful case, including per-client delivered Mbps percentiles, server send-work ratios, and retry-pressure rates
+- `suite-aggregate.csv` and `suite-aggregate.jsonl` with per-case median throughput, healthy/affected throughput, per-client delivered Mbps percentiles, send/deliver ratios, median p99 probe RTT, impairment profile, spread, retry-pressure rates/totals, and unstable flags
 - `README.md` with a compact case table
 
 Profiles:
@@ -131,7 +131,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --out benchmark/build/benchmark-results/lab-comparison.md
 ```
 
-The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when the impairment profile differs, or when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds. Reports also include per-client delivered Mbps percentiles plus healthy-vs-affected throughput and fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
+The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when the impairment profile differs, or when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds. Reports also include per-client delivered Mbps percentiles, send/deliver ratio deltas, datagram/NACK/stale rate deltas, and healthy-vs-affected throughput/fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
 
 When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggregate.jsonl` if present, so baseline-of-record comparisons operate on per-case medians and include throughput/p99 stability spread. Pass explicit `suite-summary.jsonl` paths only when you want raw per-iteration comparison.
 
@@ -185,6 +185,10 @@ Important fields:
 - `targetClientMbps`: configured or derived per-client offered target
 - `perClientThroughput`: min/p50/p95/p99/max delivered Mbps across all clients
 - `healthyClientThroughput` and `affectedClientThroughput`: delivered Mbps percentiles split by clients not marked impaired/disappearing versus clients that are affected
+- `sentToDeliveredBytesRatio`: server outbound bytes divided by receiver-observed delivered bulk bytes; sustained increases can indicate retransmit or ACK/NACK overhead
+- `healthySentToDeliveredBytesRatio` and `affectedSentToDeliveredBytesRatio`: the same ratio split by healthy versus impaired/disappearing clients
+- `serverDatagramsOutPerSecond`: server outbound datagram work rate
+- `staleDatagramsPerSecond`, `nackInPerSecond`, and `nackOutPerSecond`: normalized retry-pressure indicators for comparing runs with different durations
 - `packetLimit` and `globalPacketLimit`: configured RakNet server packet-limit overrides, or `null` when library defaults were used
 - `impairmentLatencyMillis`, `impairmentJitterMillis`, and `impairmentLossPercent`: benchmark-managed client impairment applied to marked impaired clients
 - `stability`: per-case delivered-throughput and p99 probe RTT spread, plus unstable reasons
@@ -196,7 +200,7 @@ Important fields:
 - `affectedDeliveredGbps` and `affectedFairnessIndex`: throughput and fairness for impaired/disappearing clients
 - `disconnects`: established channels closed during the measured iteration
 - `blackholedDatagramsIn` and `blackholedDatagramsOut`: benchmark-managed datagrams dropped by `--disappear-mode blackhole`
-- `staleDatagrams`, `nackIn`, `nackOut`: retransmission pressure
+- `staleDatagrams`, `nackIn`, `nackOut`: raw retransmission-pressure counters
 - `maxQueuedBytes`: largest observed RakNet queued payload bytes per channel
 
 Treat a case as unstable when throughput or p99 probe RTT spread is above 10 percent across measured iterations, or when there are not enough iterations to calculate spread. Increase duration, reduce unrelated host activity, and rerun before comparing code changes.

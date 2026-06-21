@@ -119,10 +119,10 @@ suite_aggregate_csv="$output_root/suite-aggregate.csv"
 : >"$suite_summary_jsonl"
 : >"$suite_aggregate_jsonl"
 cat >"$suite_summary_csv" <<'CSV'
-case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,elapsed_ms,offered_gbps,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_min,client_mbps_p50,client_mbps_p95,client_mbps_p99,client_mbps_max,healthy_client_mbps_p50,healthy_client_mbps_p99,affected_client_mbps_p50,affected_client_mbps_p99,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,max_queued_bytes,artifact
+case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,elapsed_ms,offered_gbps,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,server_bytes_out,server_datagrams_out,server_datagrams_out_s,sent_delivered_bytes_ratio,healthy_sent_delivered_bytes_ratio,affected_sent_delivered_bytes_ratio,client_mbps_min,client_mbps_p50,client_mbps_p95,client_mbps_p99,client_mbps_max,healthy_client_mbps_p50,healthy_client_mbps_p99,affected_client_mbps_p50,affected_client_mbps_p99,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,stale_datagrams_s,nack_in,nack_in_s,nack_out,nack_out_s,max_queued_bytes,artifact
 CSV
 cat >"$suite_aggregate_csv" <<'CSV'
-case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,median_delivered_gbps,median_healthy_delivered_gbps,median_affected_delivered_gbps,median_client_mbps_p50,median_client_mbps_p99,median_healthy_client_mbps_p50,median_healthy_client_mbps_p99,median_affected_client_mbps_p50,median_affected_client_mbps_p99,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_fairness,median_healthy_fairness,median_affected_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact
+case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,median_delivered_gbps,median_healthy_delivered_gbps,median_affected_delivered_gbps,median_server_datagrams_out_s,median_sent_delivered_bytes_ratio,median_healthy_sent_delivered_bytes_ratio,median_affected_sent_delivered_bytes_ratio,median_client_mbps_p50,median_client_mbps_p99,median_healthy_client_mbps_p50,median_healthy_client_mbps_p99,median_affected_client_mbps_p50,median_affected_client_mbps_p99,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_stale_datagrams_s,median_nack_out_s,median_fairness,median_healthy_fairness,median_affected_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact
 CSV
 
 json_escape() {
@@ -214,6 +214,12 @@ append_case_metrics() {
       deliveredGbps: .deliveredGbps,
       healthyDeliveredGbps: (.healthyDeliveredGbps // .deliveredGbps),
       affectedDeliveredGbps: (.affectedDeliveredGbps // 0),
+      serverBytesOut: (.serverBytesOut // 0),
+      serverDatagramsOut: (.serverDatagramsOut // 0),
+      serverDatagramsOutPerSecond: (.serverDatagramsOutPerSecond // 0),
+      sentToDeliveredBytesRatio: (.sentToDeliveredBytesRatio // 0),
+      healthySentToDeliveredBytesRatio: (.healthySentToDeliveredBytesRatio // 0),
+      affectedSentToDeliveredBytesRatio: (.affectedSentToDeliveredBytesRatio // 0),
       clientMbpsMin: (.perClientThroughput.minMbps // 0),
       clientMbpsP50: (.perClientThroughput.p50Mbps // 0),
       clientMbpsP95: (.perClientThroughput.p95Mbps // 0),
@@ -235,8 +241,11 @@ append_case_metrics() {
       blackholedDatagramsIn: (.blackholedDatagramsIn // 0),
       blackholedDatagramsOut: (.blackholedDatagramsOut // 0),
       staleDatagrams: .staleDatagrams,
+      staleDatagramsPerSecond: (.staleDatagramsPerSecond // 0),
       nackIn: .nackIn,
+      nackInPerSecond: (.nackInPerSecond // 0),
       nackOut: .nackOut,
+      nackOutPerSecond: (.nackOutPerSecond // 0),
       maxQueuedBytes: .maxQueuedBytes,
       artifact: $artifact
     }
@@ -264,6 +273,12 @@ append_case_metrics() {
       .deliveredGbps,
       (.healthyDeliveredGbps // .deliveredGbps),
       (.affectedDeliveredGbps // 0),
+      (.serverBytesOut // 0),
+      (.serverDatagramsOut // 0),
+      (.serverDatagramsOutPerSecond // 0),
+      (.sentToDeliveredBytesRatio // 0),
+      (.healthySentToDeliveredBytesRatio // 0),
+      (.affectedSentToDeliveredBytesRatio // 0),
       (.perClientThroughput.minMbps // 0),
       (.perClientThroughput.p50Mbps // 0),
       (.perClientThroughput.p95Mbps // 0),
@@ -285,8 +300,11 @@ append_case_metrics() {
       (.blackholedDatagramsIn // 0),
       (.blackholedDatagramsOut // 0),
       .staleDatagrams,
+      (.staleDatagramsPerSecond // 0),
       .nackIn,
+      (.nackInPerSecond // 0),
       .nackOut,
+      (.nackOutPerSecond // 0),
       .maxQueuedBytes,
       $artifact
     ] | @csv
@@ -358,6 +376,10 @@ write_suite_aggregates() {
       deliveredGbps: ($throughput | median),
       healthyDeliveredGbps: ($rows | map(.healthyDeliveredGbps) | median),
       affectedDeliveredGbps: ($rows | map(.affectedDeliveredGbps) | median),
+      serverDatagramsOutPerSecond: ($rows | map(.serverDatagramsOutPerSecond) | median),
+      sentToDeliveredBytesRatio: ($rows | map(.sentToDeliveredBytesRatio) | median),
+      healthySentToDeliveredBytesRatio: ($rows | map(.healthySentToDeliveredBytesRatio) | median),
+      affectedSentToDeliveredBytesRatio: ($rows | map(.affectedSentToDeliveredBytesRatio) | median),
       clientMbpsP50: ($rows | map(.clientMbpsP50) | median),
       clientMbpsP99: ($rows | map(.clientMbpsP99) | median),
       healthyClientMbpsP50: ($rows | map(.healthyClientMbpsP50) | median),
@@ -382,8 +404,11 @@ write_suite_aggregates() {
       blackholedDatagramsIn: ($rows | map(.blackholedDatagramsIn) | add),
       blackholedDatagramsOut: ($rows | map(.blackholedDatagramsOut) | add),
       staleDatagrams: ($rows | map(.staleDatagrams) | add),
+      staleDatagramsPerSecond: ($rows | map(.staleDatagramsPerSecond) | median),
       nackIn: ($rows | map(.nackIn) | add),
+      nackInPerSecond: ($rows | map(.nackInPerSecond) | median),
       nackOut: ($rows | map(.nackOut) | add),
+      nackOutPerSecond: ($rows | map(.nackOutPerSecond) | median),
       maxQueuedBytes: ($rows | map(.maxQueuedBytes) | max),
       maxQueuedBytesMedian: ($rows | map(.maxQueuedBytes) | median),
       unstable: (($unstableReasons | length) > 0),
@@ -410,6 +435,10 @@ write_suite_aggregates() {
       .deliveredGbps,
       .healthyDeliveredGbps,
       .affectedDeliveredGbps,
+      .serverDatagramsOutPerSecond,
+      .sentToDeliveredBytesRatio,
+      .healthySentToDeliveredBytesRatio,
+      .affectedSentToDeliveredBytesRatio,
       .clientMbpsP50,
       .clientMbpsP99,
       .healthyClientMbpsP50,
@@ -420,6 +449,8 @@ write_suite_aggregates() {
       .probeRttP99Millis,
       .probeRttP99MillisSpreadPct,
       .maxQueuedBytes,
+      .staleDatagramsPerSecond,
+      .nackOutPerSecond,
       .fairnessIndex,
       .healthyFairnessIndex,
       .affectedFairnessIndex,
@@ -443,8 +474,8 @@ write_suite_aggregates() {
     echo "- Aggregate JSONL: \`$suite_aggregate_jsonl\`"
     echo "- Aggregate CSV: \`$suite_aggregate_csv\`"
     echo
-    echo "| Case | Scenario | Impairment | Iterations | Median Gbps | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Throughput Spread | Median p99 ms | p99 Spread | Max Queue | Unstable | Reasons |"
-    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+    echo "| Case | Scenario | Impairment | Iterations | Median Gbps | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Send/Deliver | Datagram Out/s | Stale/s | NACK Out/s | Throughput Spread | Median p99 ms | p99 Spread | Max Queue | Unstable | Reasons |"
+    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -462,6 +493,10 @@ write_suite_aggregates() {
         fmt(.affectedDeliveredGbps),
         fmt(.clientMbpsP50),
         fmt(.clientMbpsP99),
+        fmt(.sentToDeliveredBytesRatio),
+        fmt(.serverDatagramsOutPerSecond),
+        fmt(.staleDatagramsPerSecond),
+        fmt(.nackOutPerSecond),
         fmt(.deliveredGbpsSpreadPct) + "%",
         fmt(.probeRttP99Millis),
         fmt(.probeRttP99MillisSpreadPct) + "%",
@@ -469,8 +504,8 @@ write_suite_aggregates() {
         (.unstable | tostring),
         "`" + ((.unstableReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$suite_aggregate_jsonl" | while IFS=$'\t' read -r case_name scenario impairment iterations gbps healthy_gbps affected_gbps client_p50 client_p99 throughput_spread p99 p99_spread queue unstable reasons; do
-      echo "| $case_name | $scenario | $impairment | $iterations | $gbps | $healthy_gbps | $affected_gbps | $client_p50 | $client_p99 | $throughput_spread | $p99 | $p99_spread | $queue | $unstable | $reasons |"
+    ' "$suite_aggregate_jsonl" | while IFS=$'\t' read -r case_name scenario impairment iterations gbps healthy_gbps affected_gbps client_p50 client_p99 send_ratio datagram_out_s stale_s nack_out_s throughput_spread p99 p99_spread queue unstable reasons; do
+      echo "| $case_name | $scenario | $impairment | $iterations | $gbps | $healthy_gbps | $affected_gbps | $client_p50 | $client_p99 | $send_ratio | $datagram_out_s | $stale_s | $nack_out_s | $throughput_spread | $p99 | $p99_spread | $queue | $unstable | $reasons |"
     done
   } >>"$report"
 }

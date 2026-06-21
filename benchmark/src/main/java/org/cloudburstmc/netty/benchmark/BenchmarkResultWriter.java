@@ -90,8 +90,8 @@ public final class BenchmarkResultWriter {
             writer.write("- Impairment: `" + impairmentSummary(result.config()) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
-            writer.write("| Name | Iteration | Clients | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Stale | NACK In | Max Queue |\n");
-            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+            writer.write("| Name | Iteration | Clients | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | Send/Deliver | Affected Send/Deliver | Datagram Out/s | Stale/s | NACK Out/s | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Max Queue |\n");
+            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
                 writer.write("| " + iteration.name
                         + " | " + iteration.iteration
@@ -111,6 +111,11 @@ public final class BenchmarkResultWriter {
                         + " | " + format(iteration.perClientThroughput.p99Mbps())
                         + " | " + format(iteration.healthyClientThroughput.p50Mbps())
                         + " | " + format(iteration.affectedClientThroughput.p50Mbps())
+                        + " | " + format(iteration.sentToDeliveredBytesRatio)
+                        + " | " + format(iteration.affectedSentToDeliveredBytesRatio)
+                        + " | " + format(iteration.serverDatagramsOutPerSecond)
+                        + " | " + format(iteration.staleDatagramsPerSecond)
+                        + " | " + format(iteration.nackOutPerSecond)
                         + " | " + format(iteration.probeRtt.percentileMillis(95.0D))
                         + " | " + format(iteration.probeRtt.percentileMillis(99.0D))
                         + " | " + format(iteration.fairnessIndex)
@@ -119,8 +124,6 @@ public final class BenchmarkResultWriter {
                         + " | " + iteration.disconnects
                         + " | " + iteration.blackholedDatagramsIn
                         + " | " + iteration.blackholedDatagramsOut
-                        + " | " + iteration.staleDatagrams
-                        + " | " + iteration.nackIn
                         + " | " + iteration.maxQueuedBytes
                         + " |\n");
             }
@@ -257,6 +260,16 @@ public final class BenchmarkResultWriter {
             "delivered_gbps",
             "healthy_delivered_gbps",
             "affected_delivered_gbps",
+            "server_bytes_out",
+            "server_datagrams_out",
+            "server_datagrams_out_s",
+            "healthy_server_bytes_out",
+            "affected_server_bytes_out",
+            "healthy_server_datagrams_out",
+            "affected_server_datagrams_out",
+            "sent_delivered_bytes_ratio",
+            "healthy_sent_delivered_bytes_ratio",
+            "affected_sent_delivered_bytes_ratio",
             "client_mbps_min",
             "client_mbps_p50",
             "client_mbps_p95",
@@ -288,8 +301,11 @@ public final class BenchmarkResultWriter {
             "blackholed_datagrams_in",
             "blackholed_datagrams_out",
             "stale_datagrams",
+            "stale_datagrams_s",
             "nack_in",
+            "nack_in_s",
             "nack_out",
+            "nack_out_s",
             "max_queued_bytes"
     })
     private record TimeseriesCsv(
@@ -310,6 +326,16 @@ public final class BenchmarkResultWriter {
             @JsonProperty("delivered_gbps") double deliveredGbps,
             @JsonProperty("healthy_delivered_gbps") double healthyDeliveredGbps,
             @JsonProperty("affected_delivered_gbps") double affectedDeliveredGbps,
+            @JsonProperty("server_bytes_out") long serverBytesOut,
+            @JsonProperty("server_datagrams_out") long serverDatagramsOut,
+            @JsonProperty("server_datagrams_out_s") double serverDatagramsOutPerSecond,
+            @JsonProperty("healthy_server_bytes_out") long healthyServerBytesOut,
+            @JsonProperty("affected_server_bytes_out") long affectedServerBytesOut,
+            @JsonProperty("healthy_server_datagrams_out") long healthyServerDatagramsOut,
+            @JsonProperty("affected_server_datagrams_out") long affectedServerDatagramsOut,
+            @JsonProperty("sent_delivered_bytes_ratio") double sentToDeliveredBytesRatio,
+            @JsonProperty("healthy_sent_delivered_bytes_ratio") double healthySentToDeliveredBytesRatio,
+            @JsonProperty("affected_sent_delivered_bytes_ratio") double affectedSentToDeliveredBytesRatio,
             @JsonProperty("client_mbps_min") double clientMbpsMin,
             @JsonProperty("client_mbps_p50") double clientMbpsP50,
             @JsonProperty("client_mbps_p95") double clientMbpsP95,
@@ -341,8 +367,11 @@ public final class BenchmarkResultWriter {
             @JsonProperty("blackholed_datagrams_in") long blackholedDatagramsIn,
             @JsonProperty("blackholed_datagrams_out") long blackholedDatagramsOut,
             @JsonProperty("stale_datagrams") long staleDatagrams,
+            @JsonProperty("stale_datagrams_s") double staleDatagramsPerSecond,
             @JsonProperty("nack_in") long nackIn,
+            @JsonProperty("nack_in_s") double nackInPerSecond,
             @JsonProperty("nack_out") long nackOut,
+            @JsonProperty("nack_out_s") double nackOutPerSecond,
             @JsonProperty("max_queued_bytes") long maxQueuedBytes
     ) {
         static TimeseriesCsv from(BenchmarkIterationResult iteration) {
@@ -364,6 +393,16 @@ public final class BenchmarkResultWriter {
                     iteration.deliveredGbps,
                     iteration.healthyDeliveredGbps,
                     iteration.affectedDeliveredGbps,
+                    iteration.serverBytesOut,
+                    iteration.serverDatagramsOut,
+                    iteration.serverDatagramsOutPerSecond,
+                    iteration.healthyServerBytesOut,
+                    iteration.affectedServerBytesOut,
+                    iteration.healthyServerDatagramsOut,
+                    iteration.affectedServerDatagramsOut,
+                    iteration.sentToDeliveredBytesRatio,
+                    iteration.healthySentToDeliveredBytesRatio,
+                    iteration.affectedSentToDeliveredBytesRatio,
                     iteration.perClientThroughput.minMbps(),
                     iteration.perClientThroughput.p50Mbps(),
                     iteration.perClientThroughput.p95Mbps(),
@@ -395,8 +434,11 @@ public final class BenchmarkResultWriter {
                     iteration.blackholedDatagramsIn,
                     iteration.blackholedDatagramsOut,
                     iteration.staleDatagrams,
+                    iteration.staleDatagramsPerSecond,
                     iteration.nackIn,
+                    iteration.nackInPerSecond,
                     iteration.nackOut,
+                    iteration.nackOutPerSecond,
                     iteration.maxQueuedBytes
             );
         }
@@ -537,6 +579,16 @@ public final class BenchmarkResultWriter {
             double offeredGbps,
             double healthyDeliveredGbps,
             double affectedDeliveredGbps,
+            long serverBytesOut,
+            long serverDatagramsOut,
+            double serverDatagramsOutPerSecond,
+            long healthyServerBytesOut,
+            long affectedServerBytesOut,
+            long healthyServerDatagramsOut,
+            long affectedServerDatagramsOut,
+            double sentToDeliveredBytesRatio,
+            double healthySentToDeliveredBytesRatio,
+            double affectedSentToDeliveredBytesRatio,
             ThroughputDistribution perClientThroughput,
             ThroughputDistribution healthyClientThroughput,
             ThroughputDistribution affectedClientThroughput,
@@ -557,8 +609,11 @@ public final class BenchmarkResultWriter {
             double probeRttP99Millis,
             double probeRttMaxMillis,
             long staleDatagrams,
+            double staleDatagramsPerSecond,
             long nackIn,
+            double nackInPerSecond,
             long nackOut,
+            double nackOutPerSecond,
             long maxQueuedBytes,
             List<PeerJson> peers
     ) {
@@ -591,6 +646,16 @@ public final class BenchmarkResultWriter {
                     iteration.offeredGbps,
                     iteration.healthyDeliveredGbps,
                     iteration.affectedDeliveredGbps,
+                    iteration.serverBytesOut,
+                    iteration.serverDatagramsOut,
+                    iteration.serverDatagramsOutPerSecond,
+                    iteration.healthyServerBytesOut,
+                    iteration.affectedServerBytesOut,
+                    iteration.healthyServerDatagramsOut,
+                    iteration.affectedServerDatagramsOut,
+                    iteration.sentToDeliveredBytesRatio,
+                    iteration.healthySentToDeliveredBytesRatio,
+                    iteration.affectedSentToDeliveredBytesRatio,
                     iteration.perClientThroughput,
                     iteration.healthyClientThroughput,
                     iteration.affectedClientThroughput,
@@ -611,8 +676,11 @@ public final class BenchmarkResultWriter {
                     iteration.probeRtt.percentileMillis(99.0D),
                     iteration.probeRtt.maxMillis(),
                     iteration.staleDatagrams,
+                    iteration.staleDatagramsPerSecond,
                     iteration.nackIn,
+                    iteration.nackInPerSecond,
                     iteration.nackOut,
+                    iteration.nackOutPerSecond,
                     iteration.maxQueuedBytes,
                     peers
             );

@@ -14,7 +14,7 @@ The benchmark suite is meant to answer two different questions:
 The current RakNet runner is a useful starting synthetic for established-channel server-to-client throughput:
 
 - It uses normal `RakServerChannel`, `RakClientChannel`, and `RakMessage` APIs.
-- It measures delivered payload throughput, offered throughput, probe RTT under load, per-client delivered Mbps percentiles, Jain fairness, queue growth, ACK/NACK counters, stale datagrams, disconnects, benchmark-managed blackholed datagrams, and channel state.
+- It measures delivered payload throughput, offered throughput, probe RTT under load, per-client delivered Mbps percentiles, server send-work ratios, datagram/NACK/stale rates, Jain fairness, queue growth, ACK/NACK counters, stale datagrams, disconnects, benchmark-managed blackholed datagrams, and channel state.
 - It supports local loopback runs for regression checks and remote server/client worker roles for lab runs.
 - It can sweep payload size, reliability mode, offered rate, and client count.
 - It supports `--per-client-mbps` so fanout and fairness runs can express production-style per-client pull targets directly.
@@ -169,6 +169,7 @@ Primary acceptance metrics:
 
 - healthy-client delivered Mbps and p99 probe RTT
 - impaired-client queued bytes, NACKs, stale datagrams, and disconnects
+- server send/deliver byte ratio and datagrams per second for all, healthy, and affected clients
 - Jain fairness for all clients and healthy-only clients
 - whether healthy clients regress when impaired clients are present
 
@@ -190,7 +191,7 @@ The scenario can:
 - stop reads on a configurable percentage of local clients after warmup while leaving server peers active
 - blackhole datagrams on a configurable percentage of established local or receiver-worker clients after warmup
 - keep healthy clients on the same configured per-client target
-- report per-client delivered Mbps percentiles, all-client fairness, healthy-client fairness, disconnects, blackholed datagrams, queue growth, retransmits, stale datagrams, and channel state
+- report per-client delivered Mbps percentiles, send/deliver byte ratios, datagram/NACK/stale rates, all-client fairness, healthy-client fairness, disconnects, blackholed datagrams, queue growth, retransmits, stale datagrams, and channel state
 
 The remaining required gap is harsher host/NIC-level blackhole behavior:
 
@@ -317,5 +318,5 @@ benchmark/scripts/run-baseline-matrix.sh --profile smoke
 - Use `suite-aggregate.jsonl` for baseline-of-record comparisons; keep `suite-summary.jsonl` for per-iteration diagnosis.
 - Use local loopback only for quick regression and profiling. Do not use it for external line-rate claims.
 - Prefer median delivered throughput across measured iterations, but fail the run if p99 latency or queue growth is unstable.
-- Record healthy-client metrics separately from impaired-client metrics for fairness scenarios, including delivered throughput and per-client delivered Mbps percentiles.
+- Record healthy-client metrics separately from impaired-client metrics for fairness scenarios, including delivered throughput, per-client delivered Mbps percentiles, and send/deliver byte ratios.
 - Treat rising queue bytes before rising loss as an early congestion signal.

@@ -264,6 +264,11 @@ public class BenchmarkKitTests {
         PeerStats peer = new PeerStats(0, false);
         peer.addBulkSent(64, 4);
         peer.addBulkReceived(64, 4);
+        peer.addServerBytesOut(128);
+        peer.addServerDatagramsOut(2);
+        peer.addStaleDatagrams(3);
+        peer.addNackIn(4);
+        peer.addNackOut(5);
         peer.addProbeSent();
         peer.addProbeAcked();
         peer.addBlackholedDatagramIn();
@@ -314,6 +319,11 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("close", summary.path("iterations").get(0).path("disappearanceMode").asText());
         Assertions.assertEquals(4, summary.path("iterations").get(0).path("logicalPacketsReceived").asLong());
         Assertions.assertTrue(summary.path("iterations").get(0).has("healthyFairnessIndex"));
+        Assertions.assertEquals(128, summary.path("iterations").get(0).path("serverBytesOut").asLong());
+        Assertions.assertEquals(2.0D, summary.path("iterations").get(0).path("serverDatagramsOutPerSecond").asDouble(), 0.001D);
+        Assertions.assertEquals(2.0D, summary.path("iterations").get(0).path("sentToDeliveredBytesRatio").asDouble(), 0.001D);
+        Assertions.assertEquals(3.0D, summary.path("iterations").get(0).path("staleDatagramsPerSecond").asDouble(), 0.001D);
+        Assertions.assertEquals(5.0D, summary.path("iterations").get(0).path("nackOutPerSecond").asDouble(), 0.001D);
         Assertions.assertEquals(0.000512D, summary.path("iterations").get(0).path("perClientThroughput").path("p50Mbps").asDouble(), 0.000001D);
         Assertions.assertTrue(summary.path("iterations").get(0).has("healthyClientThroughput"));
         Assertions.assertTrue(summary.path("iterations").get(0).has("affectedClientThroughput"));
@@ -336,6 +346,10 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("RELIABLE_ORDERED", rows.get(0).get("reliability"));
         Assertions.assertTrue(rows.get(0).containsKey("delivered_gbps"));
         Assertions.assertTrue(rows.get(0).containsKey("target_client_mbps"));
+        Assertions.assertTrue(rows.get(0).containsKey("server_datagrams_out_s"));
+        Assertions.assertTrue(rows.get(0).containsKey("sent_delivered_bytes_ratio"));
+        Assertions.assertTrue(rows.get(0).containsKey("stale_datagrams_s"));
+        Assertions.assertTrue(rows.get(0).containsKey("nack_out_s"));
         Assertions.assertTrue(rows.get(0).containsKey("client_mbps_p50"));
         Assertions.assertTrue(rows.get(0).containsKey("client_mbps_p99"));
         Assertions.assertTrue(rows.get(0).containsKey("healthy_client_mbps_p50"));

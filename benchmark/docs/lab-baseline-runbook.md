@@ -136,11 +136,11 @@ Treat a lab baseline as usable only when:
 
 - every selected case produces `summary.json`, `timeseries.csv`, `latency.hdr`, and `report.md`
 - `suite-summary.jsonl` has one row per successful measured iteration
-- `suite-aggregate.jsonl` has one row per case/scenario and records median throughput, per-client delivered Mbps percentiles, median p99 probe RTT, spread, retry-pressure totals, and unstable flags
+- `suite-aggregate.jsonl` has one row per case/scenario and records median throughput, per-client delivered Mbps percentiles, send/deliver ratios, datagram/NACK/stale rates, median p99 probe RTT, spread, retry-pressure totals, and unstable flags
 - at least three measured iterations exist for baseline-of-record runs
 - repeated runs under the same topology have delivered throughput and p99 probe RTT spread within the configured stability threshold
 - no unexpected disconnects occur in best-case and fanout scenarios
-- blackhole or stop-reading scenarios show retry-pressure indicators such as stale datagrams, queue growth, NACKs, or blackholed datagram counters
-- healthy-client throughput, per-client delivered Mbps percentiles, and p99 latency are reviewed separately from affected-client metrics
+- blackhole or stop-reading scenarios show retry-pressure indicators such as stale datagrams, queue growth, NACKs, blackholed datagram counters, or rising send/deliver ratios
+- healthy-client throughput, per-client delivered Mbps percentiles, send/deliver ratios, and p99 latency are reviewed separately from affected-client metrics
 
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.
