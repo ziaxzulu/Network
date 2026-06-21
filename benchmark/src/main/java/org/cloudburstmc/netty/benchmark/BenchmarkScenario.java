@@ -21,6 +21,7 @@ public enum BenchmarkScenario {
     BANDWIDTH_LATENCY_CURVE("bandwidth-latency-curve"),
     MULTI_CLIENT_FANOUT("multi-client-fanout"),
     FAIRNESS("fairness"),
+    DISAPPEARING_CLIENTS("disappearing-clients"),
     MATRIX("matrix"),
     RECEIVER_WORKER("receiver-worker"),
     SERVER_WORKER("server-worker");

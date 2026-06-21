@@ -46,6 +46,7 @@ public class BenchmarkKitTests {
                 "--payload-size", "128",
                 "--reliability", "unreliable",
                 "--target-gbps", "1.5",
+                "--per-client-mbps", "5",
                 "--rates-mbps", "100,unlimited"
         });
 
@@ -56,7 +57,29 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(128, config.payloadSize());
         Assertions.assertEquals(RakReliability.UNRELIABLE, config.reliability());
         Assertions.assertEquals(1500.0D, config.rateMbps(), 0.001D);
+        Assertions.assertEquals(5.0D, config.perClientRateMbps(), 0.001D);
+        Assertions.assertEquals(35.0D, config.effectiveTargetMbps(config.rateMbps(), config.clients()), 0.001D);
         Assertions.assertEquals(Arrays.asList(100.0D, 0.0D), config.ratesMbps());
+    }
+
+    @Test
+    public void testProductionRateAndDisappearingParsing() {
+        BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
+                "disappearing-clients",
+                "--clients", "100",
+                "--per-client-mbps", "5",
+                "--disappearing-clients", "10",
+                "--disappear-after", "250ms",
+                "--duration", "1s",
+                "--payload-size", "500"
+        });
+
+        Assertions.assertEquals(BenchmarkScenario.DISAPPEARING_CLIENTS, config.scenario());
+        Assertions.assertEquals(10, config.disappearingClients());
+        Assertions.assertEquals(250, config.disappearAfterMillis());
+        Assertions.assertEquals(500.0D, config.effectiveTargetMbps(config.rateMbps(), config.clients()), 0.001D);
+        Assertions.assertEquals(5.0D, config.effectiveTargetClientMbps(500.0D, config.clients()), 0.001D);
+        Assertions.assertEquals(125000L, config.effectiveMessageRate(config.payloadSize(), config.rateMbps(), config.clients()));
     }
 
     @Test
@@ -117,6 +140,7 @@ public class BenchmarkKitTests {
                 64,
                 RakReliability.RELIABLE_ORDERED,
                 0.0D,
+                0.0D,
                 1000,
                 histogram.snapshot(),
                 Arrays.asList(peer.snapshot())
@@ -130,8 +154,12 @@ public class BenchmarkKitTests {
         JsonNode summary = JSON.readTree(Files.readString(directory.resolve("summary.json"), StandardCharsets.UTF_8));
         Assertions.assertEquals("baseline-bandwidth", summary.path("scenario").asText());
         Assertions.assertEquals("unit", summary.path("runId").asText());
+        Assertions.assertTrue(summary.has("perClientTargetMbps"));
+        Assertions.assertTrue(summary.has("disappearingClients"));
         Assertions.assertEquals(1, summary.path("iterations").size());
         Assertions.assertTrue(summary.path("iterations").get(0).has("deliveredGbps"));
+        Assertions.assertTrue(summary.path("iterations").get(0).has("healthyFairnessIndex"));
+        Assertions.assertTrue(summary.path("iterations").get(0).has("disconnects"));
         Assertions.assertTrue(summary.path("iterations").get(0).path("peers").get(0).has("serverBytesOut"));
 
         List<Map<String, String>> rows = CSV
@@ -144,6 +172,9 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("unit", rows.get(0).get("name"));
         Assertions.assertEquals("RELIABLE_ORDERED", rows.get(0).get("reliability"));
         Assertions.assertTrue(rows.get(0).containsKey("delivered_gbps"));
+        Assertions.assertTrue(rows.get(0).containsKey("target_client_mbps"));
+        Assertions.assertTrue(rows.get(0).containsKey("healthy_fairness"));
+        Assertions.assertTrue(rows.get(0).containsKey("disconnects"));
         Assertions.assertTrue(rows.get(0).containsKey("max_queued_bytes"));
     }
 }

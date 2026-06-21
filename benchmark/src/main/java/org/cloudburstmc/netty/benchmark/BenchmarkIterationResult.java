@@ -29,6 +29,7 @@ public final class BenchmarkIterationResult {
     public final int payloadSize;
     public final RakReliability reliability;
     public final double targetMbps;
+    public final double targetClientMbps;
     public final long elapsedMillis;
     public final long bulkSentMessages;
     public final long bulkSentBytes;
@@ -40,22 +41,29 @@ public final class BenchmarkIterationResult {
     public final long nackIn;
     public final long nackOut;
     public final long maxQueuedBytes;
+    public final long disconnects;
     public final double deliveredGbps;
+    public final double healthyDeliveredGbps;
+    public final double affectedDeliveredGbps;
     public final double deliveredMessagesPerSecond;
     public final double offeredGbps;
+    public final int affectedClients;
     public final double fairnessIndex;
+    public final double healthyFairnessIndex;
+    public final double affectedFairnessIndex;
     public final LatencyHistogram.Snapshot probeRtt;
     public final List<PeerStats.Snapshot> peers;
 
     public BenchmarkIterationResult(String name, int iteration, int clients, int payloadSize, RakReliability reliability,
-                                    double targetMbps, long elapsedMillis, LatencyHistogram.Snapshot probeRtt,
-                                    List<PeerStats.Snapshot> peers) {
+                                    double targetMbps, double targetClientMbps, long elapsedMillis,
+                                    LatencyHistogram.Snapshot probeRtt, List<PeerStats.Snapshot> peers) {
         this.name = name;
         this.iteration = iteration;
         this.clients = clients;
         this.payloadSize = payloadSize;
         this.reliability = reliability;
         this.targetMbps = targetMbps;
+        this.targetClientMbps = targetClientMbps;
         this.elapsedMillis = elapsedMillis;
         this.probeRtt = probeRtt;
         this.peers = Collections.unmodifiableList(new ArrayList<>(peers));
@@ -70,7 +78,13 @@ public final class BenchmarkIterationResult {
         long nacksIn = 0L;
         long nacksOut = 0L;
         long queued = 0L;
+        long disconnectCount = 0L;
+        long healthyReceivedBytes = 0L;
+        long affectedReceivedBytes = 0L;
+        int affected = 0;
         List<Long> perClientReceived = new ArrayList<>();
+        List<Long> healthyClientReceived = new ArrayList<>();
+        List<Long> affectedClientReceived = new ArrayList<>();
 
         for (PeerStats.Snapshot peer : peers) {
             sentMessages += peer.bulkSentMessages;
@@ -83,7 +97,16 @@ public final class BenchmarkIterationResult {
             nacksIn += peer.nackIn;
             nacksOut += peer.nackOut;
             queued = Math.max(queued, peer.maxQueuedBytes);
+            disconnectCount += peer.disconnects;
             perClientReceived.add(peer.bulkReceivedBytes);
+            if (peer.impaired) {
+                affected++;
+                affectedReceivedBytes += peer.bulkReceivedBytes;
+                affectedClientReceived.add(peer.bulkReceivedBytes);
+            } else {
+                healthyReceivedBytes += peer.bulkReceivedBytes;
+                healthyClientReceived.add(peer.bulkReceivedBytes);
+            }
         }
 
         this.bulkSentMessages = sentMessages;
@@ -96,9 +119,15 @@ public final class BenchmarkIterationResult {
         this.nackIn = nacksIn;
         this.nackOut = nacksOut;
         this.maxQueuedBytes = queued;
+        this.disconnects = disconnectCount;
         this.deliveredGbps = BenchmarkMath.gigabitsPerSecond(receivedBytes, elapsedMillis);
+        this.healthyDeliveredGbps = BenchmarkMath.gigabitsPerSecond(healthyReceivedBytes, elapsedMillis);
+        this.affectedDeliveredGbps = BenchmarkMath.gigabitsPerSecond(affectedReceivedBytes, elapsedMillis);
         this.deliveredMessagesPerSecond = BenchmarkMath.messagesPerSecond(receivedMessages, elapsedMillis);
         this.offeredGbps = BenchmarkMath.gigabitsPerSecond(sentBytes, elapsedMillis);
+        this.affectedClients = affected;
         this.fairnessIndex = BenchmarkMath.jainFairness(perClientReceived);
+        this.healthyFairnessIndex = BenchmarkMath.jainFairness(healthyClientReceived);
+        this.affectedFairnessIndex = BenchmarkMath.jainFairness(affectedClientReceived);
     }
 }

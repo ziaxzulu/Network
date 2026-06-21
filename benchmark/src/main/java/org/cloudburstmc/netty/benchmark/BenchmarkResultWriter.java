@@ -85,18 +85,22 @@ public final class BenchmarkResultWriter {
             writer.write("- Role: `" + result.config().role().name().toLowerCase(Locale.ROOT) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
-            writer.write("| Name | Iteration | Clients | Payload | Target Mbps | Delivered Gbps | p95 RTT ms | p99 RTT ms | Fairness | Stale | NACK In | Max Queue |\n");
-            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+            writer.write("| Name | Iteration | Clients | Payload | Target Mbps | Target/client Mbps | Delivered Gbps | Healthy Gbps | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Disconnects | Stale | NACK In | Max Queue |\n");
+            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
                 writer.write("| " + iteration.name
                         + " | " + iteration.iteration
                         + " | " + iteration.clients
                         + " | " + iteration.payloadSize
                         + " | " + format(iteration.targetMbps)
+                        + " | " + format(iteration.targetClientMbps)
                         + " | " + format(iteration.deliveredGbps)
+                        + " | " + format(iteration.healthyDeliveredGbps)
                         + " | " + format(iteration.probeRtt.percentileMillis(95.0D))
                         + " | " + format(iteration.probeRtt.percentileMillis(99.0D))
                         + " | " + format(iteration.fairnessIndex)
+                        + " | " + format(iteration.healthyFairnessIndex)
+                        + " | " + iteration.disconnects
                         + " | " + iteration.staleDatagrams
                         + " | " + iteration.nackIn
                         + " | " + iteration.maxQueuedBytes
@@ -154,15 +158,22 @@ public final class BenchmarkResultWriter {
             "payload_size",
             "reliability",
             "target_mbps",
+            "target_client_mbps",
             "elapsed_ms",
             "offered_gbps",
             "delivered_gbps",
+            "healthy_delivered_gbps",
+            "affected_delivered_gbps",
             "delivered_msg_s",
             "p50_ms",
             "p95_ms",
             "p99_ms",
             "max_ms",
             "fairness",
+            "healthy_fairness",
+            "affected_fairness",
+            "affected_clients",
+            "disconnects",
             "stale_datagrams",
             "nack_in",
             "nack_out",
@@ -175,15 +186,22 @@ public final class BenchmarkResultWriter {
             @JsonProperty("payload_size") int payloadSize,
             String reliability,
             @JsonProperty("target_mbps") double targetMbps,
+            @JsonProperty("target_client_mbps") double targetClientMbps,
             @JsonProperty("elapsed_ms") long elapsedMillis,
             @JsonProperty("offered_gbps") double offeredGbps,
             @JsonProperty("delivered_gbps") double deliveredGbps,
+            @JsonProperty("healthy_delivered_gbps") double healthyDeliveredGbps,
+            @JsonProperty("affected_delivered_gbps") double affectedDeliveredGbps,
             @JsonProperty("delivered_msg_s") double deliveredMessagesPerSecond,
             @JsonProperty("p50_ms") double p50Millis,
             @JsonProperty("p95_ms") double p95Millis,
             @JsonProperty("p99_ms") double p99Millis,
             @JsonProperty("max_ms") double maxMillis,
             double fairness,
+            @JsonProperty("healthy_fairness") double healthyFairness,
+            @JsonProperty("affected_fairness") double affectedFairness,
+            @JsonProperty("affected_clients") int affectedClients,
+            long disconnects,
             @JsonProperty("stale_datagrams") long staleDatagrams,
             @JsonProperty("nack_in") long nackIn,
             @JsonProperty("nack_out") long nackOut,
@@ -197,15 +215,22 @@ public final class BenchmarkResultWriter {
                     iteration.payloadSize,
                     iteration.reliability.name(),
                     iteration.targetMbps,
+                    iteration.targetClientMbps,
                     iteration.elapsedMillis,
                     iteration.offeredGbps,
                     iteration.deliveredGbps,
+                    iteration.healthyDeliveredGbps,
+                    iteration.affectedDeliveredGbps,
                     iteration.deliveredMessagesPerSecond,
                     iteration.probeRtt.percentileMillis(50.0D),
                     iteration.probeRtt.percentileMillis(95.0D),
                     iteration.probeRtt.percentileMillis(99.0D),
                     iteration.probeRtt.maxMillis(),
                     iteration.fairnessIndex,
+                    iteration.healthyFairnessIndex,
+                    iteration.affectedFairnessIndex,
+                    iteration.affectedClients,
+                    iteration.disconnects,
                     iteration.staleDatagrams,
                     iteration.nackIn,
                     iteration.nackOut,
@@ -220,6 +245,9 @@ public final class BenchmarkResultWriter {
             String role,
             int clients,
             int impairedClients,
+            int disappearingClients,
+            Double perClientTargetMbps,
+            long disappearAfterMillis,
             long warmupMillis,
             long durationMillis,
             int iterationsRequested,
@@ -238,6 +266,9 @@ public final class BenchmarkResultWriter {
                     config.role().name().toLowerCase(Locale.ROOT),
                     config.clients(),
                     config.impairedClients(),
+                    config.disappearingClients(),
+                    config.perClientRateMbps() >= 0.0D ? config.perClientRateMbps() : null,
+                    config.disappearAfterMillis(),
                     config.warmupMillis(),
                     config.durationMillis(),
                     config.iterations(),
@@ -280,6 +311,7 @@ public final class BenchmarkResultWriter {
             int payloadSize,
             String reliability,
             double targetMbps,
+            double targetClientMbps,
             long elapsedMillis,
             long bulkSentMessages,
             long bulkSentBytes,
@@ -287,8 +319,14 @@ public final class BenchmarkResultWriter {
             long bulkReceivedBytes,
             double deliveredGbps,
             double offeredGbps,
+            double healthyDeliveredGbps,
+            double affectedDeliveredGbps,
             double deliveredMessagesPerSecond,
             double fairnessIndex,
+            double healthyFairnessIndex,
+            double affectedFairnessIndex,
+            int affectedClients,
+            long disconnects,
             long probesSent,
             long probesAcked,
             int probeRttCount,
@@ -314,6 +352,7 @@ public final class BenchmarkResultWriter {
                     iteration.payloadSize,
                     iteration.reliability.name(),
                     iteration.targetMbps,
+                    iteration.targetClientMbps,
                     iteration.elapsedMillis,
                     iteration.bulkSentMessages,
                     iteration.bulkSentBytes,
@@ -321,8 +360,14 @@ public final class BenchmarkResultWriter {
                     iteration.bulkReceivedBytes,
                     iteration.deliveredGbps,
                     iteration.offeredGbps,
+                    iteration.healthyDeliveredGbps,
+                    iteration.affectedDeliveredGbps,
                     iteration.deliveredMessagesPerSecond,
                     iteration.fairnessIndex,
+                    iteration.healthyFairnessIndex,
+                    iteration.affectedFairnessIndex,
+                    iteration.affectedClients,
+                    iteration.disconnects,
                     iteration.probesSent,
                     iteration.probesAcked,
                     iteration.probeRtt.count(),

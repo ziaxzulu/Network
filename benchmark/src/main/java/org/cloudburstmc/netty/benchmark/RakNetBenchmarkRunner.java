@@ -20,8 +20,6 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -80,6 +78,8 @@ public final class RakNetBenchmarkRunner {
             cases.add(singleCase(config, "multi-client-fanout", config.payloadSize(), config.reliability(), config.rateMbps()));
         } else if (config.scenario() == BenchmarkScenario.FAIRNESS) {
             cases.add(singleCase(config, "fairness", config.payloadSize(), config.reliability(), config.rateMbps()));
+        } else if (config.scenario() == BenchmarkScenario.DISAPPEARING_CLIENTS) {
+            cases.add(singleCase(config, "disappearing-clients", config.payloadSize(), config.reliability(), config.rateMbps()));
         } else {
             cases.add(singleCase(config, "baseline-bandwidth", config.payloadSize(), config.reliability(), config.rateMbps()));
         }
@@ -88,14 +88,36 @@ public final class RakNetBenchmarkRunner {
 
     private static BenchmarkCase singleCase(BenchmarkConfig config, String name, int payloadSize,
                                             org.cloudburstmc.netty.channel.raknet.RakReliability reliability, double rateMbps) {
-        return new BenchmarkCase(name, config.clients(), config.impairedClients(), payloadSize, reliability, rateMbps);
+        double targetMbps = config.effectiveTargetMbps(rateMbps, config.clients());
+        double targetClientMbps = config.effectiveTargetClientMbps(targetMbps, config.clients());
+        int affectedClients = Math.max(config.impairedClients(), config.disappearingClients());
+        return new BenchmarkCase(name, config.clients(), affectedClients, config.disappearingClients(), payloadSize,
+                reliability, targetMbps, targetClientMbps, config.disappearAfterMillis());
     }
 
     private void runLocal(BenchmarkConfig config, BenchmarkCase benchmarkCase, BenchmarkRunResult result) throws Exception {
+        if (benchmarkCase.disappearingClients() > 0) {
+            for (int iteration = 1; iteration <= config.iterations(); iteration++) {
+                try (LocalSession session = openLocalSession(config, benchmarkCase)) {
+                    runLocalIteration(config, benchmarkCase, result, session, iteration);
+                }
+            }
+            return;
+        }
+
+        try (LocalSession session = openLocalSession(config, benchmarkCase)) {
+            for (int iteration = 1; iteration <= config.iterations(); iteration++) {
+                runLocalIteration(config, benchmarkCase, result, session, iteration);
+            }
+        }
+    }
+
+    private LocalSession openLocalSession(BenchmarkConfig config, BenchmarkCase benchmarkCase) throws Exception {
         EventLoopGroup serverGroup = new NioEventLoopGroup(config.workers());
         EventLoopGroup clientGroup = new NioEventLoopGroup(config.workers());
         Channel serverChannel = null;
         List<Channel> clientChannels = new ArrayList<>();
+        boolean success = false;
         try {
             LatencyHistogram probeRtt = new LatencyHistogram();
             BenchmarkServerMetrics metrics = new BenchmarkServerMetrics();
@@ -114,36 +136,42 @@ public final class RakNetBenchmarkRunner {
             }
 
             waitForServerPeers(serverPeers, benchmarkCase.clients());
-            for (int iteration = 1; iteration <= config.iterations(); iteration++) {
-                runTraffic(config, benchmarkCase, serverPeers, probeRtt, metrics, config.warmupMillis());
-                drainWarmup(config);
-                metrics.resetMeasurement();
-                probeRtt.clear();
-                long started = System.nanoTime();
-                runTraffic(config, benchmarkCase, serverPeers, probeRtt, metrics, config.durationMillis());
-                long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-                result.add(new BenchmarkIterationResult(
-                        benchmarkCase.name(),
-                        iteration,
-                        benchmarkCase.clients(),
-                        benchmarkCase.payloadSize(),
-                        benchmarkCase.reliability(),
-                        benchmarkCase.rateMbps(),
-                        elapsedMillis,
-                        probeRtt.snapshot(),
-                        metrics.peerSnapshots()
-                ));
-            }
+            success = true;
+            return new LocalSession(serverGroup, clientGroup, serverChannel, clientChannels, probeRtt, metrics, serverPeers);
         } finally {
-            for (Channel channel : clientChannels) {
-                channel.close().awaitUninterruptibly();
+            if (!success) {
+                closeChannels(clientChannels);
+                if (serverChannel != null) {
+                    serverChannel.close().awaitUninterruptibly();
+                }
+                clientGroup.shutdownGracefully().awaitUninterruptibly();
+                serverGroup.shutdownGracefully().awaitUninterruptibly();
             }
-            if (serverChannel != null) {
-                serverChannel.close().awaitUninterruptibly();
-            }
-            clientGroup.shutdownGracefully().awaitUninterruptibly();
-            serverGroup.shutdownGracefully().awaitUninterruptibly();
         }
+    }
+
+    private void runLocalIteration(BenchmarkConfig config, BenchmarkCase benchmarkCase, BenchmarkRunResult result,
+                                   LocalSession session, int iteration) {
+        runTraffic(config, benchmarkCase, session.serverPeers, session.probeRtt, session.metrics, config.warmupMillis());
+        drainWarmup(config);
+        session.metrics.resetMeasurement();
+        session.probeRtt.clear();
+        long started = System.nanoTime();
+        runTraffic(config, benchmarkCase, session.serverPeers, session.probeRtt, session.metrics,
+                config.durationMillis(), session.clientChannels, true);
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        result.add(new BenchmarkIterationResult(
+                benchmarkCase.name(),
+                iteration,
+                benchmarkCase.clients(),
+                benchmarkCase.payloadSize(),
+                benchmarkCase.reliability(),
+                benchmarkCase.targetMbps(),
+                benchmarkCase.targetClientMbps(),
+                elapsedMillis,
+                session.probeRtt.snapshot(),
+                session.metrics.peerSnapshots()
+        ));
     }
 
     private void runServerWorker(BenchmarkConfig config, BenchmarkRunResult result) throws Exception {
@@ -176,7 +204,8 @@ public final class RakNetBenchmarkRunner {
                         serverPeers.size(),
                         benchmarkCase.payloadSize(),
                         benchmarkCase.reliability(),
-                        benchmarkCase.rateMbps(),
+                        benchmarkCase.targetMbps(),
+                        benchmarkCase.targetClientMbps(),
                         elapsedMillis,
                         probeRtt.snapshot(),
                         metrics.peerSnapshots()
@@ -208,7 +237,7 @@ public final class RakNetBenchmarkRunner {
             CountDownLatch connected = new CountDownLatch(config.clients());
             InetSocketAddress address = new InetSocketAddress(config.host(), config.port());
             for (int i = 0; i < config.clients(); i++) {
-                PeerStats peer = new PeerStats(i, i < config.impairedClients());
+                PeerStats peer = new PeerStats(i, i < benchmarkCase.impairedClients());
                 peers.add(peer);
                 channels.add(startClient(group, address, peer, connected, benchmarkCase));
             }
@@ -232,7 +261,8 @@ public final class RakNetBenchmarkRunner {
                     config.clients(),
                     benchmarkCase.payloadSize(),
                     benchmarkCase.reliability(),
-                    benchmarkCase.rateMbps(),
+                    benchmarkCase.targetMbps(),
+                    benchmarkCase.targetClientMbps(),
                     elapsedMillis,
                     new LatencyHistogram().snapshot(),
                     snapshots
@@ -274,13 +304,6 @@ public final class RakNetBenchmarkRunner {
                         metrics.register(ch, assignedPeer);
                         serverPeers.add(new ServerPeer(ch, assignedPeer));
                         ch.pipeline().addLast(new ServerProbeAckHandler(assignedPeer, probeRtt));
-                        ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
-                            @Override
-                            public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-                                assignedPeer.addDisconnect();
-                                super.channelInactive(ctx);
-                            }
-                        });
                     }
                 });
         return bootstrap.bind(new InetSocketAddress(config.bindHost(), config.port())).awaitUninterruptibly().channel();
@@ -327,21 +350,34 @@ public final class RakNetBenchmarkRunner {
 
     private void runTraffic(BenchmarkConfig config, BenchmarkCase benchmarkCase, List<ServerPeer> peers,
                             LatencyHistogram probeRtt, BenchmarkServerMetrics metrics, long durationMillis) {
+        runTraffic(config, benchmarkCase, peers, probeRtt, metrics, durationMillis, Collections.emptyList(), false);
+    }
+
+    private void runTraffic(BenchmarkConfig config, BenchmarkCase benchmarkCase, List<ServerPeer> peers,
+                            LatencyHistogram probeRtt, BenchmarkServerMetrics metrics, long durationMillis,
+                            List<Channel> clientChannels, boolean allowDisappearance) {
         if (durationMillis <= 0L || peers.isEmpty()) {
             return;
         }
         final long endNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durationMillis);
         final long probeIntervalNanos = TimeUnit.MILLISECONDS.toNanos(config.probeIntervalMillis());
-        final long aggregateMessageRate = config.effectiveMessageRate(benchmarkCase.payloadSize(), benchmarkCase.rateMbps());
+        final long aggregateMessageRate = config.effectiveMessageRate(benchmarkCase.payloadSize(), benchmarkCase.targetMbps());
         final long bulkIntervalNanos = aggregateMessageRate > 0L ? Math.max(1L, 1_000_000_000L / aggregateMessageRate) : 0L;
+        final long disappearAtNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(benchmarkCase.disappearAfterMillis());
         long nextBulkNanos = System.nanoTime();
         long nextProbeNanos = nextBulkNanos;
         long bulkSequence = 0L;
         long probeSequence = 0L;
         int peerIndex = 0;
+        boolean disappeared = benchmarkCase.disappearingClients() == 0 || !allowDisappearance;
 
         while (System.nanoTime() < endNanos) {
             long now = System.nanoTime();
+            if (!disappeared && now >= disappearAtNanos) {
+                closeDisappearingClients(clientChannels, peers, benchmarkCase.disappearingClients());
+                disappeared = true;
+            }
+
             if (now >= nextProbeNanos) {
                 probeSequence = sendProbes(peers, benchmarkCase, probeSequence);
                 nextProbeNanos += probeIntervalNanos;
@@ -366,6 +402,38 @@ public final class RakNetBenchmarkRunner {
             if (sleepNanos > 0L) {
                 LockSupport.parkNanos(sleepNanos);
             }
+        }
+    }
+
+    private static void closeDisappearingClients(List<Channel> clientChannels, List<ServerPeer> peers, int count) {
+        int limit = Math.min(count, clientChannels.size());
+        for (int i = 0; i < limit; i++) {
+            Channel channel = clientChannels.get(i);
+            if (channel.isOpen()) {
+                channel.close();
+            }
+        }
+
+        int closedPeers = 0;
+        synchronized (peers) {
+            for (ServerPeer peer : peers) {
+                if (!peer.stats().impaired()) {
+                    continue;
+                }
+                if (peer.channel().isOpen()) {
+                    peer.channel().close();
+                }
+                closedPeers++;
+                if (closedPeers >= count) {
+                    break;
+                }
+            }
+        }
+    }
+
+    private static void closeChannels(List<Channel> channels) {
+        for (Channel channel : channels) {
+            channel.close().awaitUninterruptibly();
         }
     }
 
@@ -395,6 +463,36 @@ public final class RakNetBenchmarkRunner {
             current++;
         }
         return current;
+    }
+
+    private static final class LocalSession implements AutoCloseable {
+        private final EventLoopGroup serverGroup;
+        private final EventLoopGroup clientGroup;
+        private final Channel serverChannel;
+        private final List<Channel> clientChannels;
+        private final LatencyHistogram probeRtt;
+        private final BenchmarkServerMetrics metrics;
+        private final List<ServerPeer> serverPeers;
+
+        private LocalSession(EventLoopGroup serverGroup, EventLoopGroup clientGroup, Channel serverChannel,
+                             List<Channel> clientChannels, LatencyHistogram probeRtt, BenchmarkServerMetrics metrics,
+                             List<ServerPeer> serverPeers) {
+            this.serverGroup = serverGroup;
+            this.clientGroup = clientGroup;
+            this.serverChannel = serverChannel;
+            this.clientChannels = clientChannels;
+            this.probeRtt = probeRtt;
+            this.metrics = metrics;
+            this.serverPeers = serverPeers;
+        }
+
+        @Override
+        public void close() {
+            closeChannels(this.clientChannels);
+            this.serverChannel.close().awaitUninterruptibly();
+            this.clientGroup.shutdownGracefully().awaitUninterruptibly();
+            this.serverGroup.shutdownGracefully().awaitUninterruptibly();
+        }
     }
 
     private static String rateName(Double rate) {

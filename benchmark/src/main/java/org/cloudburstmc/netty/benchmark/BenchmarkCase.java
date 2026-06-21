@@ -18,6 +18,6 @@ package org.cloudburstmc.netty.benchmark;
 
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 
-record BenchmarkCase(String name, int clients, int impairedClients, int payloadSize, RakReliability reliability,
-                     double rateMbps) {
+record BenchmarkCase(String name, int clients, int impairedClients, int disappearingClients, int payloadSize,
+                     RakReliability reliability, double targetMbps, double targetClientMbps, long disappearAfterMillis) {
 }
