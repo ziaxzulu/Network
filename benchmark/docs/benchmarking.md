@@ -97,7 +97,7 @@ benchmark/scripts/run-baseline-matrix.sh --profile local --out benchmark/build/b
 benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-baseline
 ```
 
-`smoke` is short and intended for local regression. `local` is longer but still loopback-only. `lab` matches the recurring baseline matrix and should be used on controlled hosts/NICs, optionally with `tc netem` applied outside the JVM.
+`smoke` is short and intended for local regression. Because smoke cases use one measured iteration, aggregate rows are marked `insufficient-iterations`; use them to verify execution and artifact shape, not baseline stability. `local` is longer but still loopback-only. `lab` matches the recurring baseline matrix and should be used on controlled hosts/NICs, optionally with `tc netem` applied outside the JVM.
 
 For baseline-of-record runs, follow [`lab-baseline-runbook.md`](lab-baseline-runbook.md) and capture host reports with `benchmark/scripts/capture-lab-host.sh` before running the suite.
 
@@ -320,4 +320,4 @@ Important fields:
 - `staleDatagrams`, `nackIn`, `nackOut`: raw retransmission-pressure counters
 - `maxQueuedBytes`: largest observed RakNet queued payload bytes per channel
 
-Treat a case as unstable when throughput or p99 probe RTT spread is above 10 percent across measured iterations, or when there are not enough iterations to calculate spread. Increase duration, reduce unrelated host activity, and rerun before comparing code changes.
+Treat a case as unstable when it has fewer than three measured iterations, throughput spread is above 10 percent, or p99 probe RTT spread is above 10 percent across measured iterations. Increase duration, reduce unrelated host activity, and rerun before comparing code changes.

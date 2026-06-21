@@ -234,8 +234,8 @@ public class BenchmarkKitTests {
 
         Assertions.assertTrue(summary.contains("| case-a | 2 |"));
         Assertions.assertTrue(summary.contains("| case-b | 2 |"));
-        Assertions.assertTrue(summary.contains("| case-a | 2 | 0.990099% | 0.000000% | false | `` |"));
-        Assertions.assertTrue(summary.contains("| case-b | 2 | 50.000000% | 50.000000% | true | `throughput-spread,p99-spread` |"));
+        Assertions.assertTrue(summary.contains("| case-a | 2 | 0.990099% | 0.000000% | true | `insufficient-iterations` |"));
+        Assertions.assertTrue(summary.contains("| case-b | 2 | 50.000000% | 50.000000% | true | `insufficient-iterations,throughput-spread,p99-spread` |"));
     }
 
     @Test
@@ -298,6 +298,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(Files.exists(directory.resolve("timeseries.csv")));
         Assertions.assertTrue(Files.exists(directory.resolve("latency.hdr")));
         Assertions.assertTrue(Files.exists(directory.resolve("report.md")));
+        Assertions.assertTrue(Files.readString(directory.resolve("report.md"), StandardCharsets.UTF_8)
+                .contains("| unit | 1 | 0.000000% | 0.000000% | true | `insufficient-iterations` |"));
         JsonNode summary = JSON.readTree(Files.readString(directory.resolve("summary.json"), StandardCharsets.UTF_8));
         Assertions.assertEquals("baseline-bandwidth", summary.path("scenario").asText());
         Assertions.assertEquals("unit", summary.path("runId").asText());

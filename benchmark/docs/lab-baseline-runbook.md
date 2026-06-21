@@ -97,7 +97,7 @@ benchmark/scripts/plan-lab-baseline.sh \
   --start-delay 90s
 ```
 
-Add a raised-limiter curve pass when you need to separate out-of-box packet-limit behavior from the established-channel capacity ceiling:
+Include a raised-limiter curve pass in baseline-of-record capacity plans. Keep the default-limiter curve to show out-of-box behavior, but use the paired raised-limiter curve to estimate the established-channel capacity ceiling for production-like deployments that raise or disable packet/global packet limits:
 
 ```bash
 benchmark/scripts/plan-lab-baseline.sh \
@@ -199,6 +199,16 @@ benchmark/scripts/plan-remote-contention.sh \
 ```
 
 The generated manifest records the scheduled start times, receiver distribution, and affected-client counts. When using host/NIC-level impairment, place the affected receiver clients on the impaired host or network namespace. With multiple receiver hosts, server-side affected-client splits are accept-order based and should be treated as advisory unless the affected clients are isolated to one receiver.
+
+For host-level blackhole validation, isolate the clients that should disappear onto a dedicated receiver host or network namespace, then apply the drop outside the JVM after connection establishment and warmup. A simple lab recipe is:
+
+1. Generate a remote contention plan with a dedicated affected receiver, for example `receiver-healthy=90` and `receiver-affected=10`.
+2. Start the server and both receiver scripts with a shared future `--start-at-epoch-ms`.
+3. On the affected receiver host or namespace, wait until the planned disappearance point, then apply `tc netem loss 100%` or an equivalent route/firewall drop for the benchmark UDP port.
+4. Capture `tc qdisc show` or firewall rule output immediately after applying the drop and again before clearing it.
+5. Clear the qdisc/rule after the case, copy the affected receiver artifacts and netem evidence back, then merge and validate normally.
+
+Use benchmark-managed `--disappear-mode blackhole` for repeatable local smoke and for labeling affected clients in remote runs. Treat host-level blackhole evidence as stronger only when the drop is applied by `tc`, routing, firewall, or the lab network outside the benchmark JVM.
 
 ## Impairment Profiles
 

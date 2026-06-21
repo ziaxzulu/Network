@@ -39,7 +39,7 @@ Geyser, public Cloudburst/Nukkit, and CubeCraft production usage make the most i
 - The dominant reliability mode is `RELIABLE_ORDERED` on channel `0`; raw `RakMessage(ByteBuf)` sends default to that shape and production Bedrock frame paths expect it.
 - Fanout is common. Some sends are the same payload to many clients, while others are grouped by protocol version, palette, dimension, world, or radius.
 - Chunk/bootstrap delivery creates bursty high-volume traffic and has pacing in production code.
-- Resource-pack style flows can be split-heavy; Geyser uses `256KiB` resource-pack chunks paced over time.
+- Resource-pack style flows can be split-heavy; Geyser uses `256KiB` resource-pack chunks paced around `200ms`, while public Nukkit has smaller resource-pack chunk responses around `8KiB`.
 - Public Cloudburst/Nukkit/Geyser style code uses batch flush cadences around `20ms` and `50ms`, while CubeCraft also has a `10ms` transport flush path.
 - Compression thresholds vary by project/config. Useful threshold profiles are `1`, `256`, and `512` bytes.
 - Geyser has normal session tick/batch behavior as well as selected immediate sends, so latency-sensitive probes should be tested both inside and outside bulk/batch pressure.
@@ -51,12 +51,14 @@ Benchmark implications:
 - Prefer payload sizes near real RakNet/Bedrock shapes: small control packets, threshold-adjacent packets around `512B`, near-MTU batches around `1200-1400B`, and split-heavy chunk/resource-pack payloads.
 - Use `batched-game-traffic` for bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
 - Add a future Bedrock-like workload layer that uses captured logical packet distributions and optionally compresses batches with thresholds `1`, `256`, and `512`.
+- Add future immediate-send and resource-pack profiles so split-heavy payload coverage is not limited to an always-on bulk stream.
+- Add future queue/backlog cap sweeps for `RAK_MAX_QUEUED_BYTES`; current rows observe queue growth but do not vary the cap.
 - Add host/NIC-level impairment and blackhole disappearance profiles before treating the suite as production-representative.
 - Add a later proxy profile with one downstream and one upstream RakNet channel per user to represent pass-through deployments.
 
 ## Baseline Matrix
 
-Run each baseline with at least `3` measured iterations after warmup. Treat a run as unstable when delivered throughput or p99 probe RTT spread exceeds `10%`.
+Run each baseline with at least `3` measured iterations after warmup. Treat a run as unstable when it has fewer than `3` measured iterations, delivered throughput spread exceeds `10%`, or p99 probe RTT spread exceeds `10%`.
 
 ### 1. Best-Case Bandwidth
 
@@ -209,6 +211,7 @@ The remaining required gap is harsher host/NIC-level blackhole behavior:
 
 - blackhole a configurable percentage of client traffic with `tc` or routing rules outside the JVM
 - keep retry pressure alive under real packet drops long enough to measure retransmit storms and queue drain behavior
+- sweep lower `RAK_MAX_QUEUED_BYTES` caps to measure when slow clients are disconnected and whether healthy clients remain isolated
 
 Initial target shape:
 
@@ -242,6 +245,8 @@ The current workload can:
 
 Remaining batch gaps:
 
+- immediate-send lane outside periodic batch flushes
+- resource-pack profiles such as Geyser-style `256KiB` chunks paced around `200ms` and Nukkit-style smaller chunk responses
 - captured gameplay packet-size distributions
 - compression threshold and algorithm modeling around `1B`, `256B`, and `512B`
 - batch-size histograms beyond the configured payload-size list
@@ -279,7 +284,7 @@ Initial target shape:
 
 ## Recommended Baseline Set
 
-Use this smaller set as the first recurring baseline before expanding the full matrix:
+Use this smaller set as the first recurring perfect-network baseline before expanding the full matrix. These rows match the executable `lab` profile shape:
 
 | Name | Clients | Payload | Reliability | Network | Offered load |
 | --- | ---: | ---: | --- | --- | --- |
@@ -287,18 +292,24 @@ Use this smaller set as the first recurring baseline before expanding the full m
 | `bestcase-1c-medium` | `1` | `512` | `reliable_ordered` | perfect | ramp |
 | `bestcase-1c-mtu` | `1` | `1200`, `1340`, `1400` | `reliable_ordered` | perfect | ramp |
 | `bestcase-1c-split` | `1` | `262144` | `reliable_ordered` | perfect | ramp |
-| `fanout-20x5` | `20` | `512` | `reliable_ordered` | perfect | `5Mbps` per client |
 | `fanout-100x5` | `100` | `512` | `reliable_ordered` | perfect | `5Mbps` per client |
-| `fanout-500x5` | `500` | `512` | `reliable_ordered` | perfect | `5Mbps` per client |
+| `fanout-500x5` | `500` | `512` | `reliable_ordered` | perfect aggregate/proxy fanout | `5Mbps` per client |
 | `fairness-100-10poor` | `100` | `512` | `reliable_ordered` | 10 poor clients | `5Mbps` per client |
-| `loss-1c-50ms-2pct` | `1` | `1200` | `reliable_ordered` | `50ms`, `2%` loss | ramp |
-| `loss-100-50ms-2pct` | `100` | `512` | `reliable_ordered` | `50ms`, `2%` loss | `5Mbps` per client |
 | `disappear-100-10pct-close` | `100` | `512` | `reliable_ordered` | close 10 clients | `5Mbps` per client |
 | `disappear-100-10pct-stopread` | `100` | `512` | `reliable_ordered` | stop reads on 10 clients | `5Mbps` per client |
 | `disappear-100-10pct-blackhole` | `100` | `512` | `reliable_ordered` | blackhole 10 clients | `5Mbps` per client |
 | `batch-fanout-100-10ms` | `100` | mixed | `reliable_ordered` | perfect | `10ms`, `5Mbps` per client |
 | `batch-fanout-100-20ms` | `100` | mixed | `reliable_ordered` | perfect | `20ms`, `5Mbps` per client |
 | `batch-fanout-100-50ms` | `100` | mixed | `reliable_ordered` | perfect | `50ms`, `5Mbps` per client |
+
+Use host-level impairment as a companion baseline, not as part of the unshaped perfect-network profile:
+
+| Name | Clients | Payload | Reliability | Network | Offered load |
+| --- | ---: | ---: | --- | --- | --- |
+| `loss-1c-50ms-2pct` | `1` | `1200`, `1340`, `1400` | `reliable_ordered` | `50ms`, `2%` loss | ramp |
+| `loss-100-50ms-2pct` | `100+` | `512` | `reliable_ordered` | `50ms`, `2%` loss | `5Mbps` per client |
+| `loss-100-100ms-5pct` | `100+` | `512` | `reliable_ordered` | `100ms`, `5%` loss | `5Mbps` per client |
+| `blackhole-100-10pct` | `100+` | `512` | `reliable_ordered` | affected receiver host or namespace blackholed after warmup | `5Mbps` per client |
 
 Run the executable profile with:
 
@@ -318,7 +329,7 @@ benchmark/scripts/run-impairment-matrix.sh \
   --execute
 ```
 
-For baseline-of-record capacity, prefer the remote planner over single-process loopback:
+For baseline-of-record capacity, prefer the remote planner over single-process loopback and include the raised-limiter curve pass. The default-limiter rows explain out-of-box behavior; the raised-limiter rows are the capacity ceiling to compare against production-like deployments that raise or disable packet/global packet limits:
 
 ```bash
 benchmark/scripts/plan-lab-baseline.sh \

@@ -185,6 +185,7 @@ jq -s \
   (spread_pct($server_p99_values)) as $probe_p99_spread_pct |
   (
     []
+    + (if $server_iteration_count < 3 then ["insufficient-iterations"] else [] end)
     + (if $delivered_gbps_spread_pct > 10 then ["throughput-spread"] else [] end)
     + (if $probe_p99_spread_pct > 10 then ["p99-spread"] else [] end)
   ) as $unstable_reasons |

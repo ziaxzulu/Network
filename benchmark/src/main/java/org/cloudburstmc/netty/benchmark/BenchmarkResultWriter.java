@@ -135,9 +135,6 @@ public final class BenchmarkResultWriter {
     }
 
     static String stabilitySummary(List<BenchmarkIterationResult> iterations) {
-        if (iterations.size() < 2) {
-            return "Only one measured iteration was recorded; variance cannot be calculated.\n";
-        }
         StringBuilder summary = new StringBuilder();
         summary.append("Stability is calculated per benchmark case.\n\n");
         summary.append("| Name | Iterations | Delivered Gbps Spread | Probe p99 RTT Spread | Unstable | Reasons |\n");
@@ -158,7 +155,7 @@ public final class BenchmarkResultWriter {
                     .append("` |\n");
         }
         summary.append('\n');
-        summary.append("Rows with spread above 10% should be treated as unstable and repeated with longer duration or less host contention.\n");
+        summary.append("Rows with fewer than three measured iterations or spread above 10% should be treated as unstable and repeated with longer duration or less host contention.\n");
         return summary.toString();
     }
 
@@ -186,7 +183,7 @@ public final class BenchmarkResultWriter {
         double throughputSpreadPct = relativeSpread(throughput) * 100.0D;
         double p99SpreadPct = relativeSpread(p99) * 100.0D;
         List<String> unstableReasons = new ArrayList<>();
-        if (iterations.size() < 2) {
+        if (iterations.size() < 3) {
             unstableReasons.add("insufficient-iterations");
         }
         if (throughputSpreadPct > 10.0D) {

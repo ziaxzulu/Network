@@ -21,7 +21,7 @@ Options:
   --dry-run                     Print Gradle commands and write a manifest without running benchmarks.
   --only PATTERN                Run only cases whose name contains PATTERN.
   --common-args "..."           Extra benchmark args appended to every case.
-  --stability-threshold-pct N   Mark aggregate rows unstable when throughput or p99 spread exceeds N percent. Default: 10.
+  --stability-threshold-pct N   Mark aggregate rows unstable when fewer than 3 measured iterations exist or throughput/p99 spread exceeds N percent. Default: 10.
   --gradle ./gradlew            Gradle executable to use.
   --continue-on-error           Keep running remaining cases after a benchmark failure.
   --help                        Show this help.
@@ -358,6 +358,7 @@ write_suite_aggregates() {
     (spread_pct($p99)) as $p99Spread |
     (
       []
+      + (if ($rows | length) < 3 then ["insufficient-iterations"] else [] end)
       + (if $throughputSpread > $stabilityThreshold then ["throughput-spread"] else [] end)
       + (if $p99Spread > $stabilityThreshold then ["p99-spread"] else [] end)
     ) as $unstableReasons |
@@ -482,7 +483,7 @@ write_suite_aggregates() {
     echo
     echo "## Aggregate Stability"
     echo
-    echo "- Stability threshold: \`$stability_threshold_pct%\` relative spread for delivered throughput or p99 probe RTT."
+    echo "- Stability threshold: fewer than \`3\` measured iterations, or \`$stability_threshold_pct%\` relative spread for delivered throughput or p99 probe RTT."
     echo "- Aggregate JSONL: \`$suite_aggregate_jsonl\`"
     echo "- Aggregate CSV: \`$suite_aggregate_csv\`"
     echo
