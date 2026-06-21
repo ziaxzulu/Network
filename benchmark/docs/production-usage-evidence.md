@@ -44,10 +44,12 @@ The private source supported these benchmark assumptions:
 - Bedrock capacity is role-specific, including roles in the tens to hundreds of players; this supports recurring `100+` and `500+` client fanout tests.
 - RakNet is configured with one ordering channel.
 - RakNet auto-flush is `10ms`.
+- The inspected proxy path disables Rak packet and global packet limits; keep default-limiter curves for out-of-box library behavior and raised-limiter curves for production-like capacity ceilings.
 - Downstream client batch flushing includes a `50ms` cadence.
 - Batch framing preserves whole Bedrock batches through the proxy path.
 - Compression settings include threshold `1` with zlib in the inspected path; no production evidence was found for thresholds `256` or `512`.
 - Backlog protection disconnects slow clients after queue limits are exceeded.
+- Production metrics expose active Rak channels, bytes/datagrams, ACK/NACK, stale datagrams, disconnect reasons, connection state, and per-session datagram percentiles; benchmark result rows should keep these indicators in the baseline.
 - No production constant equivalent to `5Mbps` per client was found; the `5Mbps` benchmark target is a stress target, not a copied production configuration.
 
 ## Matrix Consequences

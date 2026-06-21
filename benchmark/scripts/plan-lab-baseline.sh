@@ -40,6 +40,10 @@ max_p99_ms="20"
 max_queue_bytes="1048576"
 max_send_deliver_ratio="1.2"
 max_nack_out_s="0"
+min_healthy_fairness="0.95"
+max_healthy_send_deliver_ratio="1.2"
+max_affected_send_deliver_ratio="5"
+max_contention_p99_ms="0"
 
 usage() {
   cat <<'USAGE'
@@ -95,6 +99,10 @@ Options:
   --max-queue-bytes N               Stable bandwidth selector queue gate. Default: 1048576.
   --max-send-deliver-ratio N        Stable bandwidth selector send/deliver gate. Default: 1.2.
   --max-nack-out-s N                Stable bandwidth selector NACK/s gate. Default: 0, disabled.
+  --min-healthy-fairness N          Lab validation healthy-client fairness gate. Default: 0.95.
+  --max-healthy-send-deliver-ratio N Lab validation healthy-client send/deliver gate. Default: 1.2.
+  --max-affected-send-deliver-ratio N Lab validation affected-client send/deliver gate. Default: 5.
+  --max-contention-p99-ms N         Lab validation contention p99 gate. Default: 0, disabled.
   --help                            Show this help.
 
 Outputs:
@@ -268,6 +276,22 @@ while [[ $# -gt 0 ]]; do
       max_nack_out_s="$2"
       shift 2
       ;;
+    --min-healthy-fairness)
+      min_healthy_fairness="$2"
+      shift 2
+      ;;
+    --max-healthy-send-deliver-ratio)
+      max_healthy_send_deliver_ratio="$2"
+      shift 2
+      ;;
+    --max-affected-send-deliver-ratio)
+      max_affected_send_deliver_ratio="$2"
+      shift 2
+      ;;
+    --max-contention-p99-ms)
+      max_contention_p99_ms="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -308,6 +332,10 @@ duration_millis() {
 
 positive_int() {
   [[ "$1" =~ ^[0-9]+$ && "$1" -gt 0 ]]
+}
+
+non_negative_number() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
 }
 
 non_empty_csv() {
@@ -374,6 +402,12 @@ if [[ -n "$raised_packet_limit" && -z "$raised_global_packet_limit" ]] || [[ -z 
   echo "--raised-packet-limit and --raised-global-packet-limit must be supplied together" >&2
   exit 2
 fi
+for value_name in max_p99_ms max_queue_bytes max_send_deliver_ratio max_nack_out_s min_healthy_fairness max_healthy_send_deliver_ratio max_affected_send_deliver_ratio max_contention_p99_ms; do
+  if ! non_negative_number "${!value_name}"; then
+    echo "--${value_name//_/-} must be a non-negative number: ${!value_name}" >&2
+    exit 2
+  fi
+done
 for value in "$curve_payload_sizes" "$curve_rates_mbps" "$contention_cases"; do
   if ! non_empty_csv "$value"; then
     echo "CSV options must be non-empty and cannot start or end with a comma: $value" >&2
@@ -706,7 +740,7 @@ This directory combines the remote bandwidth-curve and remote contention campaig
 - Keep the sibling curve/, optional curve-raised/, contention/, and host report directories with this combined output.
 REPORT
 
-benchmark/scripts/validate-lab-baseline.sh --input "$ARTIFACT_ROOT" --out "$COMBINED_OUT" __CURVE_MANIFEST_ARG__ __RAISED_MANIFEST_ARG__ __CONTENTION_MANIFEST_ARG__ --min-iterations __MIN_ITERATIONS__ --required-scenarios __REQUIRED_SCENARIOS__
+benchmark/scripts/validate-lab-baseline.sh --input "$ARTIFACT_ROOT" --out "$COMBINED_OUT" __CURVE_MANIFEST_ARG__ __RAISED_MANIFEST_ARG__ __CONTENTION_MANIFEST_ARG__ --min-iterations __MIN_ITERATIONS__ --required-scenarios __REQUIRED_SCENARIOS__ --min-healthy-fairness __MIN_HEALTHY_FAIRNESS__ --max-healthy-send-deliver-ratio __MAX_HEALTHY_SEND_DELIVER_RATIO__ --max-affected-send-deliver-ratio __MAX_AFFECTED_SEND_DELIVER_RATIO__ --max-contention-p99-ms __MAX_CONTENTION_P99_MS__
 
 echo "Combined suite aggregate: $COMBINED_OUT/suite-aggregate.jsonl"
 EOF
@@ -720,6 +754,10 @@ fi
 sed -i "s#__CONTENTION_MANIFEST_ARG__#--manifest $contention_plan/manifest.jsonl#g" "$merge_all_script"
 sed -i "s#__MIN_ITERATIONS__#$iterations#g" "$merge_all_script"
 sed -i "s#__REQUIRED_SCENARIOS__#$required_validation_scenarios#g" "$merge_all_script"
+sed -i "s#__MIN_HEALTHY_FAIRNESS__#$min_healthy_fairness#g" "$merge_all_script"
+sed -i "s#__MAX_HEALTHY_SEND_DELIVER_RATIO__#$max_healthy_send_deliver_ratio#g" "$merge_all_script"
+sed -i "s#__MAX_AFFECTED_SEND_DELIVER_RATIO__#$max_affected_send_deliver_ratio#g" "$merge_all_script"
+sed -i "s#__MAX_CONTENTION_P99_MS__#$max_contention_p99_ms#g" "$merge_all_script"
 
 cat >"$topology_template" <<EOF
 # Lab Baseline Topology
@@ -759,6 +797,7 @@ cat >"$topology_template" <<EOF
 - Record CPU governor, IRQ pinning, NIC offloads, queue sizes, and any non-default kernel settings.
 - Record whether affected contention clients are isolated to one receiver host or distributed.
 - Record exact \`tc qdisc show\` output before and after each externally impaired run.
+- Record any reason for changing validation gates from healthy fairness \`$min_healthy_fairness\`, healthy send/deliver \`$max_healthy_send_deliver_ratio\`, affected send/deliver \`$max_affected_send_deliver_ratio\`, and contention p99 \`$max_contention_p99_ms\`.
 EOF
 
 {
@@ -776,6 +815,7 @@ EOF
   echo "- Host capture: \`$host_capture_script\`"
   echo "- Topology template: \`$topology_template\`"
   echo "- Validation scenarios: \`$required_validation_scenarios\`"
+  echo "- Validation gates: healthy fairness >= \`$min_healthy_fairness\`; healthy send/deliver <= \`$max_healthy_send_deliver_ratio\`; affected send/deliver <= \`$max_affected_send_deliver_ratio\`; contention p99 <= \`$max_contention_p99_ms\` when non-zero"
   echo
   echo "## Run Order"
   echo

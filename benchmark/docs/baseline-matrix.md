@@ -306,6 +306,32 @@ Run the executable profile with:
 benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-baseline
 ```
 
+That command is the perfect-network executable baseline. It covers the recommended one-client bandwidth curve, split-heavy bandwidth, fanout, fairness, disappearance, and batched-game-traffic cases under the current host conditions. For the latency/loss rows in the matrix, wrap the same profile with host-level impairment rather than treating benchmark-managed client impairment as line-rate evidence:
+
+```bash
+benchmark/scripts/run-impairment-matrix.sh \
+  --interface <nic> \
+  --runner-profile lab \
+  --out benchmark/build/benchmark-results/lab-impairment \
+  --profiles perfect,near-loss,regional-loss,poor,severe \
+  --sudo-netem \
+  --execute
+```
+
+For baseline-of-record capacity, prefer the remote planner over single-process loopback:
+
+```bash
+benchmark/scripts/plan-lab-baseline.sh \
+  --out benchmark/build/benchmark-results/lab-baseline-plan \
+  --artifact-root benchmark/build/benchmark-results/lab-baseline \
+  --server-host <server-ip> \
+  --interface <nic> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=500 \
+  --raised-packet-limit 100000 \
+  --raised-global-packet-limit 1000000
+```
+
 After running the same profile on a candidate branch, compare the suite summaries:
 
 ```bash
@@ -331,7 +357,7 @@ The merged directory exposes a `suite-aggregate.jsonl` row, so it can be compare
 
 For a full lab baseline campaign, prefer `benchmark/scripts/plan-lab-baseline.sh`. It composes the remote bandwidth curve and contention planners, writes host-capture commands and a topology template, schedules non-overlapping case starts, and produces a combined `suite-aggregate.jsonl` for baseline-of-record comparisons.
 
-Use `benchmark/scripts/validate-lab-baseline.sh` on the combined output before accepting a lab run as the baseline of record. The validator checks required scenario families, planned manifest rows when manifests are supplied, measured iteration counts, unstable flags, unexpected curve/fanout disconnects, retry-pressure signals in disappearance rows, selected bandwidth-capacity rows, topology metadata, and host reports.
+Use `benchmark/scripts/validate-lab-baseline.sh` on the combined output before accepting a lab run as the baseline of record. The validator checks required scenario families, planned manifest rows when manifests are supplied, measured iteration counts, unstable flags, unexpected curve/fanout disconnects, retry-pressure signals in disappearance rows, selected bandwidth-capacity rows, topology metadata, host reports, and optional contention gates for healthy-client fairness, healthy-client send work, affected-client send work, and contention p99 latency. `plan-lab-baseline.sh` enables healthy fairness and send-work gates by default.
 
 For multi-rate remote bandwidth curves, prefer `benchmark/scripts/plan-remote-worker-curve.sh`. It generates per-host server/receiver scripts, fixed `--start-at-epoch-ms` values, merge commands, a campaign `suite-aggregate.jsonl`, and `bandwidth-capacity.*` selector artifacts.
 

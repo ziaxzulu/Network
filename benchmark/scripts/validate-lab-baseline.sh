@@ -12,6 +12,10 @@ allow_missing_capacity=false
 allow_unselected_capacity=false
 allow_missing_host_context=false
 min_host_reports="2"
+min_healthy_fairness="0"
+max_healthy_send_deliver_ratio="0"
+max_affected_send_deliver_ratio="0"
+max_contention_p99_ms="0"
 
 usage() {
   cat <<'USAGE'
@@ -35,6 +39,10 @@ Options:
   --allow-unselected-capacity      Do not fail capacity rows without a selected stable candidate.
   --allow-missing-host-context     Do not require topology.md and host reports.
   --min-host-reports N             Minimum host-report.md files when host context is required. Default: 2.
+  --min-healthy-fairness N         Fail fairness/disappearance rows below this healthy-client Jain fairness. Default: 0, disabled.
+  --max-healthy-send-deliver-ratio N Fail fairness/disappearance rows above this healthy-client send/deliver ratio. Default: 0, disabled.
+  --max-affected-send-deliver-ratio N Fail affected-client rows above this send/deliver ratio. Default: 0, disabled.
+  --max-contention-p99-ms N        Fail fanout/fairness/disappearance rows above this p99 probe RTT. Default: 0, disabled.
   --help                           Show this help.
 
 Outputs:
@@ -89,6 +97,22 @@ while [[ $# -gt 0 ]]; do
       min_host_reports="$2"
       shift 2
       ;;
+    --min-healthy-fairness)
+      min_healthy_fairness="$2"
+      shift 2
+      ;;
+    --max-healthy-send-deliver-ratio)
+      max_healthy_send_deliver_ratio="$2"
+      shift 2
+      ;;
+    --max-affected-send-deliver-ratio)
+      max_affected_send_deliver_ratio="$2"
+      shift 2
+      ;;
+    --max-contention-p99-ms)
+      max_contention_p99_ms="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -113,6 +137,15 @@ if [[ ! "$min_host_reports" =~ ^[0-9]+$ ]]; then
   echo "--min-host-reports must be a non-negative integer" >&2
   exit 2
 fi
+is_non_negative_number() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+for value_name in min_healthy_fairness max_healthy_send_deliver_ratio max_affected_send_deliver_ratio max_contention_p99_ms; do
+  if ! is_non_negative_number "${!value_name}"; then
+    echo "--${value_name//_/-} must be a non-negative number: ${!value_name}" >&2
+    exit 2
+  fi
+done
 if [[ -z "$required_scenarios" || "$required_scenarios" == *, || "$required_scenarios" == ,* ]]; then
   echo "--required-scenarios must be a non-empty CSV value" >&2
   exit 2
@@ -209,7 +242,10 @@ append_artifact_issue() {
   local case_name="$3"
   local benchmark_name="$4"
   local artifact="$5"
-  local extra="${6:-{}}"
+  local extra="${6:-}"
+  if [[ -z "$extra" ]]; then
+    extra="{}"
+  fi
   jq -n \
     --arg code "$code" \
     --arg message "$message" \
@@ -239,7 +275,7 @@ while IFS=$'\t' read -r case_name benchmark_name artifact; do
       [[ -s "$artifact_path/$file" ]] || missing_files+=("$file")
     done
     if [[ "${#missing_files[@]}" -gt 0 ]]; then
-      missing_json="$(printf '%s\n' "${missing_files[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+      missing_json="$(printf '%s\n' "${missing_files[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
       append_artifact_issue "missing-merged-artifact-files" "merged artifact directory is incomplete" "$case_name" "$benchmark_name" "$artifact_path" "{\"missingFiles\":$missing_json}"
     fi
     warnings_json="$(jq -c '.warnings // []' "$artifact_path/lab-summary.json")"
@@ -258,7 +294,7 @@ while IFS=$'\t' read -r case_name benchmark_name artifact; do
         [[ -s "$summary_dir/$file" ]] || raw_missing+=("$file")
       done
       if [[ "${#raw_missing[@]}" -gt 0 ]]; then
-        raw_missing_json="$(printf '%s\n' "${raw_missing[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+        raw_missing_json="$(printf '%s\n' "${raw_missing[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
         append_artifact_issue "missing-raw-worker-artifact-files" "raw worker artifact directory is incomplete" "$case_name" "$benchmark_name" "$summary_dir" "{\"missingFiles\":$raw_missing_json}"
       fi
     done < <(jq -r '([.serverSummary] + (.receiverSummaries // []))[]?' "$artifact_path/lab-summary.json")
@@ -268,7 +304,7 @@ while IFS=$'\t' read -r case_name benchmark_name artifact; do
       [[ -s "$artifact_path/$file" ]] || missing_files+=("$file")
     done
     if [[ "${#missing_files[@]}" -gt 0 ]]; then
-      missing_json="$(printf '%s\n' "${missing_files[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+      missing_json="$(printf '%s\n' "${missing_files[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
       append_artifact_issue "missing-raw-artifact-files" "benchmark artifact directory is incomplete" "$case_name" "$benchmark_name" "$artifact_path" "{\"missingFiles\":$missing_json}"
     fi
   else
@@ -310,6 +346,10 @@ jq -n \
   --argjson minIterations "$min_iterations" \
   --argjson minHostReports "$min_host_reports" \
   --argjson hostReportCount "$host_report_count" \
+  --argjson minHealthyFairness "$min_healthy_fairness" \
+  --argjson maxHealthySendDeliverRatio "$max_healthy_send_deliver_ratio" \
+  --argjson maxAffectedSendDeliverRatio "$max_affected_send_deliver_ratio" \
+  --argjson maxContentionP99Millis "$max_contention_p99_ms" \
   --argjson allowUnstable "$allow_unstable_json" \
   --argjson allowDisconnects "$allow_disconnects_json" \
   --argjson allowMissingCapacity "$allow_missing_capacity_json" \
@@ -366,6 +406,13 @@ jq -n \
     or n($row.nackOutPerSecond) > 0
     or n($row.maxQueuedBytes) > 0
     or (n($row.affectedSentToDeliveredBytesRatio) > (n($row.healthySentToDeliveredBytesRatio) * 1.05));
+  def contention_scenario($row):
+    (scenario($row) == "multi-client-fanout")
+    or (scenario($row) == "fairness")
+    or (scenario($row) == "disappearing-clients");
+  def affected_scenario($row):
+    (scenario($row) == "fairness")
+    or (scenario($row) == "disappearing-clients");
 
   ($rows[0] // []) as $aggregateRows |
   ($capacities[0] // []) as $capacityRows |
@@ -419,6 +466,18 @@ jq -n \
         + (if (scenario($row) == "disappearing-clients" and n($row.affectedClients) > 0 and (retry_pressure($row) | not)) then
             [issue("missing-retry-pressure"; "disappearing-client row has no retry-pressure signal"; $row; {})]
           else [] end)
+        + (if ($minHealthyFairness > 0 and affected_scenario($row) and n($row.healthyFairnessIndex) < $minHealthyFairness) then
+            [issue("healthy-fairness-below-threshold"; "healthy-client Jain fairness is below the configured threshold"; $row; {healthyFairnessIndex: n($row.healthyFairnessIndex), minHealthyFairness: $minHealthyFairness})]
+          else [] end)
+        + (if ($maxHealthySendDeliverRatio > 0 and affected_scenario($row) and n($row.healthySentToDeliveredBytesRatio) > $maxHealthySendDeliverRatio) then
+            [issue("healthy-send-deliver-ratio-above-threshold"; "healthy-client send/deliver byte ratio is above the configured threshold"; $row; {healthySentToDeliveredBytesRatio: n($row.healthySentToDeliveredBytesRatio), maxHealthySendDeliverRatio: $maxHealthySendDeliverRatio})]
+          else [] end)
+        + (if ($maxAffectedSendDeliverRatio > 0 and affected_scenario($row) and n($row.affectedClients) > 0 and n($row.affectedSentToDeliveredBytesRatio) > $maxAffectedSendDeliverRatio) then
+            [issue("affected-send-deliver-ratio-above-threshold"; "affected-client send/deliver byte ratio is above the configured threshold"; $row; {affectedSentToDeliveredBytesRatio: n($row.affectedSentToDeliveredBytesRatio), maxAffectedSendDeliverRatio: $maxAffectedSendDeliverRatio})]
+          else [] end)
+        + (if ($maxContentionP99Millis > 0 and contention_scenario($row) and n($row.probeRttP99Millis) > $maxContentionP99Millis) then
+            [issue("contention-p99-above-threshold"; "contention p99 probe RTT is above the configured threshold"; $row; {probeRttP99Millis: n($row.probeRttP99Millis), maxContentionP99Millis: $maxContentionP99Millis})]
+          else [] end)
       ) | add
     )
     + (if (($allowMissingCapacity | not) and ($capacityRows | length) == 0) then
@@ -451,6 +510,10 @@ jq -n \
     hostReportCount: $hostReportCount,
     minHostReports: $minHostReports,
     minIterations: $minIterations,
+    minHealthyFairness: $minHealthyFairness,
+    maxHealthySendDeliverRatio: $maxHealthySendDeliverRatio,
+    maxAffectedSendDeliverRatio: $maxAffectedSendDeliverRatio,
+    maxContentionP99Millis: $maxContentionP99Millis,
     requiredScenarios: $required,
     allowUnstable: $allowUnstable,
     allowDisconnects: $allowDisconnects,

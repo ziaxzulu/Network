@@ -558,6 +558,7 @@ bestcase-1c-medium|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30
 bestcase-1c-mtu1200|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1200 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
 bestcase-1c-mtu1340|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1340 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
 bestcase-1c-mtu1400|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 1400 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
+bestcase-1c-split|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 262144 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
 fanout-100x5|multi-client-fanout --clients 100 --warmup 5s --duration 30s --iterations 3 --payload-size 512 --per-client-mbps 5
 fanout-500x5|multi-client-fanout --clients 500 --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5
 fairness-100-10poor|fairness --clients 100 --impaired-clients 10 --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --impairment-latency 100ms --impairment-jitter 10ms --impairment-loss 5
