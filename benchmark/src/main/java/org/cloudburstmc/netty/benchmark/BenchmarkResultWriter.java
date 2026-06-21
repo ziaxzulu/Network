@@ -87,6 +87,7 @@ public final class BenchmarkResultWriter {
             writer.write("- Role: `" + result.config().role().name().toLowerCase(Locale.ROOT) + "`\n");
             writer.write("- Packet limit: `" + optionalLimit(result.config().packetLimit()) + "`\n");
             writer.write("- Global packet limit: `" + optionalLimit(result.config().globalPacketLimit()) + "`\n");
+            writer.write("- Max queued bytes cap: `" + optionalLimit(result.config().maxQueuedBytes()) + "`\n");
             writer.write("- Impairment: `" + impairmentSummary(result.config()) + "`\n");
             writer.write("- Start at epoch ms: `" + startAt(result.config()) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
@@ -456,6 +457,7 @@ public final class BenchmarkResultWriter {
             Double perClientTargetMbps,
             Integer packetLimit,
             Integer globalPacketLimit,
+            Integer configuredMaxQueuedBytes,
             long impairmentLatencyMillis,
             long impairmentJitterMillis,
             double impairmentLossPercent,
@@ -493,6 +495,7 @@ public final class BenchmarkResultWriter {
                     config.perClientRateMbps() >= 0.0D ? config.perClientRateMbps() : null,
                     config.packetLimit() > 0 ? config.packetLimit() : null,
                     config.globalPacketLimit() > 0 ? config.globalPacketLimit() : null,
+                    config.maxQueuedBytes() > 0 ? config.maxQueuedBytes() : null,
                     config.impairmentLatencyMillis(),
                     config.impairmentJitterMillis(),
                     config.impairmentLossPercent(),

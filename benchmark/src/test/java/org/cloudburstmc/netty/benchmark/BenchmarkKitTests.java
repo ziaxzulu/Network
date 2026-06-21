@@ -56,6 +56,7 @@ public class BenchmarkKitTests {
                 "--batch-groups", "4",
                 "--packet-limit", "1000",
                 "--global-packet-limit", "1000000",
+                "--max-queued-bytes", "1048576",
                 "--start-at-epoch-ms", "1767225600000",
                 "--impairment-latency", "50ms",
                 "--impairment-jitter", "5ms",
@@ -78,6 +79,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(4, config.batchGroups());
         Assertions.assertEquals(1000, config.packetLimit());
         Assertions.assertEquals(1_000_000, config.globalPacketLimit());
+        Assertions.assertEquals(1_048_576, config.maxQueuedBytes());
         Assertions.assertEquals(1_767_225_600_000L, config.startAtEpochMillis());
         Assertions.assertEquals(50, config.impairmentLatencyMillis());
         Assertions.assertEquals(5, config.impairmentJitterMillis());
@@ -257,7 +259,8 @@ public class BenchmarkKitTests {
                 "--duration", "1s",
                 "--warmup", "0ms",
                 "--iterations", "1",
-                "--payload-size", "64"
+                "--payload-size", "64",
+                "--max-queued-bytes", "1048576"
         });
         BenchmarkRunResult run = new BenchmarkRunResult(config, EnvironmentInfo.capture());
         LatencyHistogram histogram = new LatencyHistogram();
@@ -306,6 +309,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summary.has("perClientTargetMbps"));
         Assertions.assertTrue(summary.has("packetLimit"));
         Assertions.assertTrue(summary.has("globalPacketLimit"));
+        Assertions.assertEquals(1_048_576, summary.path("configuredMaxQueuedBytes").asInt());
         Assertions.assertTrue(summary.has("startAtEpochMillis"));
         Assertions.assertTrue(summary.has("impairmentLatencyMillis"));
         Assertions.assertTrue(summary.has("impairmentJitterMillis"));

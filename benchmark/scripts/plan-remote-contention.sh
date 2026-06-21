@@ -20,6 +20,7 @@ start_offset="120s"
 case_spacing=""
 packet_limit=""
 global_packet_limit=""
+max_queued_bytes=""
 workers=""
 reliability="reliable_ordered"
 case_prefix="remote-contention"
@@ -63,6 +64,7 @@ Options:
   --impairment-loss N               Benchmark-managed fairness loss percent. Default: 5.
   --packet-limit N                  Optional RakNet packet limit override.
   --global-packet-limit N           Optional RakNet global packet limit override.
+  --max-queued-bytes N              Optional per-session RAK_MAX_QUEUED_BYTES override.
   --workers N                       Optional benchmark worker count.
   --reliability MODE                Reliability mode. Default: reliable_ordered.
   --case-prefix NAME                Prefix for generated case names. Default: remote-contention.
@@ -176,6 +178,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --global-packet-limit)
       global_packet_limit="$2"
+      shift 2
+      ;;
+    --max-queued-bytes)
+      max_queued_bytes="$2"
       shift 2
       ;;
     --workers)
@@ -336,6 +342,10 @@ if [[ -n "$workers" ]] && ! positive_int "$workers"; then
   echo "--workers must be a positive integer" >&2
   exit 2
 fi
+if [[ -n "$max_queued_bytes" ]] && ! positive_int "$max_queued_bytes"; then
+  echo "--max-queued-bytes must be a positive integer" >&2
+  exit 2
+fi
 if ! non_empty_csv "$cases"; then
   echo "--cases must be a non-empty CSV value" >&2
   exit 2
@@ -424,6 +434,9 @@ if [[ -n "$packet_limit" ]]; then
 fi
 if [[ -n "$global_packet_limit" ]]; then
   common_worker_args="$common_worker_args --global-packet-limit $global_packet_limit"
+fi
+if [[ -n "$max_queued_bytes" ]]; then
+  common_worker_args="$common_worker_args --max-queued-bytes $max_queued_bytes"
 fi
 if [[ -n "$workers" ]]; then
   common_worker_args="$common_worker_args --workers $workers"
@@ -596,13 +609,14 @@ for selected_case in "${case_array[@]}"; do
   echo "benchmark/scripts/merge-worker-results.sh --server \"\$SERVER_OUT/$run_id\" ${merge_args[*]} --out \"\$MERGED_OUT/$run_id\" --case \"$case_name\" --benchmark-name \"$benchmark_name\"" >>"$merge_script"
   echo "cat \"\$MERGED_OUT/$run_id/suite-aggregate.jsonl\" >>\"\$MERGED_OUT/suite-aggregate.jsonl\"" >>"$merge_script"
 
-  printf '{"case":"%s","benchmarkName":"%s","runId":"%s","clients":%s,"payloadSize":%s,"perClientMbps":%s,"affectedKind":"%s","affectedClients":%s,"startAtEpochMillis":%s,"receiverDistribution":[%s],"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
+  printf '{"case":"%s","benchmarkName":"%s","runId":"%s","clients":%s,"payloadSize":%s,"perClientMbps":%s,"configuredMaxQueuedBytes":%s,"affectedKind":"%s","affectedClients":%s,"startAtEpochMillis":%s,"receiverDistribution":[%s],"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
     "$(json_escape "$case_name")" \
     "$(json_escape "$benchmark_name")" \
     "$(json_escape "$run_id")" \
     "$clients" \
     "$payload_size" \
     "$per_client_mbps" \
+    "${max_queued_bytes:-null}" \
     "$(json_escape "$affected_kind")" \
     "$affected_total" \
     "$start_at" \
@@ -630,6 +644,7 @@ chmod +x "$server_script" "$merge_script"
   echo "- Warmup: \`$warmup\`"
   echo "- Duration: \`$duration\`"
   echo "- Iterations: \`$iterations\`"
+  echo "- Max queued bytes cap: \`${max_queued_bytes:-library default}\`"
   echo "- Start offset: \`$start_offset\`"
   echo "- Case spacing: \`$case_spacing\`"
   echo

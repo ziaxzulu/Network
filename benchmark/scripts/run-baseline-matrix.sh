@@ -119,10 +119,10 @@ suite_aggregate_csv="$output_root/suite-aggregate.csv"
 : >"$suite_summary_jsonl"
 : >"$suite_aggregate_jsonl"
 cat >"$suite_summary_csv" <<'CSV'
-case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,elapsed_ms,offered_gbps,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,server_bytes_out,server_datagrams_out,server_datagrams_out_s,sent_delivered_bytes_ratio,healthy_sent_delivered_bytes_ratio,affected_sent_delivered_bytes_ratio,client_mbps_min,client_mbps_p50,client_mbps_p95,client_mbps_p99,client_mbps_max,healthy_client_mbps_p50,healthy_client_mbps_p99,affected_client_mbps_p50,affected_client_mbps_p99,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,stale_datagrams_s,nack_in,nack_in_s,nack_out,nack_out_s,max_queued_bytes,artifact,scenario,packet_limit,global_packet_limit
+case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,elapsed_ms,offered_gbps,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,server_bytes_out,server_datagrams_out,server_datagrams_out_s,sent_delivered_bytes_ratio,healthy_sent_delivered_bytes_ratio,affected_sent_delivered_bytes_ratio,client_mbps_min,client_mbps_p50,client_mbps_p95,client_mbps_p99,client_mbps_max,healthy_client_mbps_p50,healthy_client_mbps_p99,affected_client_mbps_p50,affected_client_mbps_p99,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,stale_datagrams_s,nack_in,nack_in_s,nack_out,nack_out_s,max_queued_bytes,artifact,scenario,packet_limit,global_packet_limit,configured_max_queued_bytes
 CSV
 cat >"$suite_aggregate_csv" <<'CSV'
-case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,median_delivered_gbps,median_healthy_delivered_gbps,median_affected_delivered_gbps,median_server_datagrams_out_s,median_sent_delivered_bytes_ratio,median_healthy_sent_delivered_bytes_ratio,median_affected_sent_delivered_bytes_ratio,median_client_mbps_p50,median_client_mbps_p99,median_healthy_client_mbps_p50,median_healthy_client_mbps_p99,median_affected_client_mbps_p50,median_affected_client_mbps_p99,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_stale_datagrams_s,median_nack_out_s,median_fairness,median_healthy_fairness,median_affected_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact,scenario,packet_limit,global_packet_limit
+case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,median_delivered_gbps,median_healthy_delivered_gbps,median_affected_delivered_gbps,median_server_datagrams_out_s,median_sent_delivered_bytes_ratio,median_healthy_sent_delivered_bytes_ratio,median_affected_sent_delivered_bytes_ratio,median_client_mbps_p50,median_client_mbps_p99,median_healthy_client_mbps_p50,median_healthy_client_mbps_p99,median_affected_client_mbps_p50,median_affected_client_mbps_p99,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_stale_datagrams_s,median_nack_out_s,median_fairness,median_healthy_fairness,median_affected_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact,scenario,packet_limit,global_packet_limit,configured_max_queued_bytes
 CSV
 
 json_escape() {
@@ -212,6 +212,7 @@ append_case_metrics() {
       scenario: ($summary.scenario // null),
       packetLimit: ($summary.packetLimit // null),
       globalPacketLimit: ($summary.globalPacketLimit // null),
+      configuredMaxQueuedBytes: ($summary.configuredMaxQueuedBytes // null),
       elapsedMillis: .elapsedMillis,
       offeredGbps: .offeredGbps,
       deliveredGbps: .deliveredGbps,
@@ -312,7 +313,8 @@ append_case_metrics() {
       $artifact,
       ($summary.scenario // null),
       ($summary.packetLimit // null),
-      ($summary.globalPacketLimit // null)
+      ($summary.globalPacketLimit // null),
+      ($summary.configuredMaxQueuedBytes // null)
     ] | @csv
   ' "$summary" >>"$suite_summary_csv"
 }
@@ -377,6 +379,7 @@ write_suite_aggregates() {
       scenario: ($first.scenario // null),
       packetLimit: ($first.packetLimit // null),
       globalPacketLimit: ($first.globalPacketLimit // null),
+      configuredMaxQueuedBytes: ($first.configuredMaxQueuedBytes // null),
       impairmentProfile: ($first.impairmentProfile // "0ms/0ms/0%"),
       impairmentLatencyMillis: ($first.impairmentLatencyMillis // 0),
       impairmentJitterMillis: ($first.impairmentJitterMillis // 0),
@@ -475,7 +478,8 @@ write_suite_aggregates() {
       .artifact,
       .scenario,
       .packetLimit,
-      .globalPacketLimit
+      .globalPacketLimit,
+      .configuredMaxQueuedBytes
     ] | @csv
   ' "$suite_aggregate_jsonl" >>"$suite_aggregate_csv"
 

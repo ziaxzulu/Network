@@ -52,7 +52,7 @@ Benchmark implications:
 - Use `batched-game-traffic` for bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
 - Add a future Bedrock-like workload layer that uses captured logical packet distributions and optionally compresses batches with thresholds `1`, `256`, and `512`.
 - Add future immediate-send and resource-pack profiles so split-heavy payload coverage is not limited to an always-on bulk stream.
-- Add future queue/backlog cap sweeps for `RAK_MAX_QUEUED_BYTES`; current rows observe queue growth but do not vary the cap.
+- Use `--max-queued-bytes` queue/backlog cap sweeps on fairness and disappearance rows when measuring slow-client disconnect thresholds.
 - Add host/NIC-level impairment and blackhole disappearance profiles before treating the suite as production-representative.
 - Add a later proxy profile with one downstream and one upstream RakNet channel per user to represent pass-through deployments.
 
@@ -211,7 +211,7 @@ The remaining required gap is harsher host/NIC-level blackhole behavior:
 
 - blackhole a configurable percentage of client traffic with `tc` or routing rules outside the JVM
 - keep retry pressure alive under real packet drops long enough to measure retransmit storms and queue drain behavior
-- sweep lower `RAK_MAX_QUEUED_BYTES` caps to measure when slow clients are disconnected and whether healthy clients remain isolated
+- sweep lower `RAK_MAX_QUEUED_BYTES` caps with `--max-queued-bytes` to measure when slow clients are disconnected and whether healthy clients remain isolated
 
 Initial target shape:
 
@@ -363,6 +363,8 @@ benchmark/scripts/plan-lab-impairment.sh \
 
 The generated netem scripts write timestamped `tc` command output under each profile artifact root's `netem/` directory. The generated `validate-all.sh` requires `<profile>-status-*.txt` evidence by default, so keep those files with the merged benchmark artifacts before promoting the adverse-network run to a baseline.
 
+For slow-client backlog sensitivity, repeat the fairness or disappearance rows with explicit queue caps, for example `--max-queued-bytes 1048576` and `--max-queued-bytes 4194304`. The configured cap is recorded as `configuredMaxQueuedBytes`, selected bandwidth rows are grouped by it, and baseline comparisons fail if a candidate changes it while reusing the same case key.
+
 After running the same profile on a candidate branch, compare the suite summaries:
 
 ```bash
@@ -373,7 +375,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --require-validation
 ```
 
-The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run, when matched rows change matrix shape (clients, payload, reliability, batching, target rate, impairment, or packet limits), when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds, or when either input contains a failed `validation.json`. For lab sign-off, use `--require-validation` so candidate runs without validation metadata also fail.
+The comparison tool writes a Markdown report and raw comparison JSONL. It fails when a case is missing from the candidate run, when matched rows change matrix shape (clients, payload, reliability, batching, target rate, impairment, packet limits, or queue cap), when matched rows breach the configured throughput, p99 latency, or queue-growth thresholds, or when either input contains a failed `validation.json`. For lab sign-off, use `--require-validation` so candidate runs without validation metadata also fail.
 
 For remote server/receiver worker runs, merge the server and receiver artifact directories first:
 

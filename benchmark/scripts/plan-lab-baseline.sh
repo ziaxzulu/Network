@@ -31,6 +31,7 @@ contention_start_offset=""
 case_spacing=""
 packet_limit=""
 global_packet_limit=""
+max_queued_bytes=""
 raised_packet_limit=""
 raised_global_packet_limit=""
 workers=""
@@ -90,6 +91,7 @@ Options:
   --case-spacing DURATION           Gap between scheduled case starts. Default: planner defaults.
   --packet-limit N                  Optional RakNet packet limit override.
   --global-packet-limit N           Optional RakNet global packet limit override.
+  --max-queued-bytes N              Optional per-session RAK_MAX_QUEUED_BYTES override.
   --raised-packet-limit N           Add a second raised-limiter curve campaign with this packet limit.
   --raised-global-packet-limit N    Raised-limiter curve global packet limit.
   --workers N                       Optional benchmark worker count.
@@ -238,6 +240,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --global-packet-limit)
       global_packet_limit="$2"
+      shift 2
+      ;;
+    --max-queued-bytes)
+      max_queued_bytes="$2"
       shift 2
       ;;
     --raised-packet-limit)
@@ -398,6 +404,10 @@ if [[ -n "$raised_global_packet_limit" ]] && ! positive_int "$raised_global_pack
   echo "--raised-global-packet-limit must be a positive integer" >&2
   exit 2
 fi
+if [[ -n "$max_queued_bytes" ]] && ! positive_int "$max_queued_bytes"; then
+  echo "--max-queued-bytes must be a positive integer" >&2
+  exit 2
+fi
 if [[ -n "$raised_packet_limit" && -z "$raised_global_packet_limit" ]] || [[ -z "$raised_packet_limit" && -n "$raised_global_packet_limit" ]]; then
   echo "--raised-packet-limit and --raised-global-packet-limit must be supplied together" >&2
   exit 2
@@ -516,6 +526,9 @@ fi
 if [[ -n "$global_packet_limit" ]]; then
   curve_cmd+=(--global-packet-limit "$global_packet_limit")
 fi
+if [[ -n "$max_queued_bytes" ]]; then
+  curve_cmd+=(--max-queued-bytes "$max_queued_bytes")
+fi
 if [[ -n "$workers" ]]; then
   curve_cmd+=(--workers "$workers")
 fi
@@ -549,6 +562,9 @@ if [[ -n "$raised_packet_limit" ]]; then
     --packet-limit "$raised_packet_limit"
     --global-packet-limit "$raised_global_packet_limit"
   )
+  if [[ -n "$max_queued_bytes" ]]; then
+    raised_curve_cmd+=(--max-queued-bytes "$max_queued_bytes")
+  fi
   for receiver in "${curve_receivers[@]}"; do
     raised_curve_cmd+=(--receiver "$receiver")
   done
@@ -598,6 +614,9 @@ if [[ -n "$packet_limit" ]]; then
 fi
 if [[ -n "$global_packet_limit" ]]; then
   contention_cmd+=(--global-packet-limit "$global_packet_limit")
+fi
+if [[ -n "$max_queued_bytes" ]]; then
+  contention_cmd+=(--max-queued-bytes "$max_queued_bytes")
 fi
 if [[ -n "$workers" ]]; then
   contention_cmd+=(--workers "$workers")
@@ -787,6 +806,7 @@ cat >"$topology_template" <<EOF
 - Warmup: \`$warmup\`
 - Duration: \`$duration\`
 - Iterations: \`$iterations\`
+- Max queued bytes cap: \`${max_queued_bytes:-library default}\`
 - Contention clients: \`$validation_min_contention_clients\`
 - Contention per-client Mbps: \`$per_client_mbps\`
 
@@ -826,6 +846,7 @@ EOF
     echo "- Raised-limiter curve packet limits: \`$raised_packet_limit/$raised_global_packet_limit\`"
   fi
   echo "- Contention plan: \`$contention_plan\`"
+  echo "- Max queued bytes cap: \`${max_queued_bytes:-library default}\`"
   echo "- Combined merge: \`$merge_all_script\`"
   echo "- Host capture: \`$host_capture_script\`"
   echo "- Topology template: \`$topology_template\`"

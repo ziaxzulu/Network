@@ -46,6 +46,7 @@ public final class BenchmarkConfig {
     private int workers = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
     private int packetLimit;
     private int globalPacketLimit;
+    private int maxQueuedBytes;
     private long impairmentLatencyMillis;
     private long impairmentJitterMillis;
     private double impairmentLossPercent;
@@ -147,6 +148,8 @@ public final class BenchmarkConfig {
             this.packetLimit = parsePositiveInt(key, value);
         } else if ("global-packet-limit".equals(key)) {
             this.globalPacketLimit = parsePositiveInt(key, value);
+        } else if ("max-queued-bytes".equals(key) || "rak-max-queued-bytes".equals(key)) {
+            this.maxQueuedBytes = parsePositiveInt(key, value);
         } else if ("impairment-latency".equals(key) || "impaired-latency".equals(key)) {
             this.impairmentLatencyMillis = parseDurationMillis(value);
         } else if ("impairment-jitter".equals(key) || "impaired-jitter".equals(key)) {
@@ -336,6 +339,10 @@ public final class BenchmarkConfig {
 
     public int globalPacketLimit() {
         return this.globalPacketLimit;
+    }
+
+    public int maxQueuedBytes() {
+        return this.maxQueuedBytes;
     }
 
     public long impairmentLatencyMillis() {

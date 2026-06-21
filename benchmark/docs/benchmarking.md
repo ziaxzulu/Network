@@ -76,6 +76,8 @@ Use this for repeatable local healthy-versus-poor-client smoke runs. Use `tc net
 
 The `disappearing-clients` scenario supports `--disappear-mode close` for clean disconnect churn, `--disappear-mode stop-reading` for local retry-pressure smoke runs where selected clients stop reading while the server keeps sending, and `--disappear-mode blackhole` for benchmark-managed datagram drops after the connection is established. In remote-worker lab runs, pass matching `--disappearing-clients`, `--disappear-after`, and `--disappear-mode blackhole` values to the receiver workers and the server worker so both sides label the same affected client set. Use external `tc`/routing rules when you need host/NIC-level blackhole behavior outside the JVM.
 
+Use `--max-queued-bytes N` to override per-session `RAK_MAX_QUEUED_BYTES` for slow-client and disappearance cap sweeps. The configured cap is recorded as `configuredMaxQueuedBytes`; the observed `maxQueuedBytes` metric remains the largest queue depth seen during the run.
+
 The `batched-game-traffic` scenario sends bursty, length-framed synthetic batches on a fixed flush cadence. Use `--batch-interval 10ms|20ms|50ms`, `--logical-packets-per-batch`, `--batch-payload-sizes`, and `--batch-groups` to approximate CubeCraft, Nukkit, Cloudburst, and Geyser-style grouped fanout. Compression is not modeled yet; batch payload sizes represent already-encoded batch bytes.
 
 ## Baseline Suite Runner
@@ -190,7 +192,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --require-validation
 ```
 
-The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when matrix shape differs (clients, payload, reliability, batching, target rate, impairment, or packet limits), when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds, or when a present `validation.json` on either input is failed. For lab/promoted-baseline comparisons, pass `--require-validation` so both sides must include validation metadata. Reports also include per-client delivered Mbps percentiles, send/deliver ratio deltas, datagram/NACK/stale rate deltas, and healthy-vs-affected throughput/fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
+The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when matrix shape differs (clients, payload, reliability, batching, target rate, impairment, packet limits, or queue cap), when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds, or when a present `validation.json` on either input is failed. For lab/promoted-baseline comparisons, pass `--require-validation` so both sides must include validation metadata. Reports also include per-client delivered Mbps percentiles, send/deliver ratio deltas, datagram/NACK/stale rate deltas, and healthy-vs-affected throughput/fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
 
 When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggregate.jsonl` if present, so baseline-of-record comparisons operate on per-case medians and include throughput/p99 stability spread. Pass explicit `suite-summary.jsonl` paths only when you want raw per-iteration comparison.
 
@@ -306,7 +308,7 @@ Important fields:
 - `healthySentToDeliveredBytesRatio` and `affectedSentToDeliveredBytesRatio`: the same ratio split by healthy versus impaired/disappearing clients
 - `serverDatagramsOutPerSecond`: server outbound datagram work rate
 - `staleDatagramsPerSecond`, `nackInPerSecond`, and `nackOutPerSecond`: normalized retry-pressure indicators for comparing runs with different durations
-- `packetLimit` and `globalPacketLimit`: configured RakNet server packet-limit overrides, or `null` when library defaults were used
+- `packetLimit`, `globalPacketLimit`, and `configuredMaxQueuedBytes`: configured RakNet server/session overrides, or `null` when library defaults were used
 - `impairmentLatencyMillis`, `impairmentJitterMillis`, and `impairmentLossPercent`: benchmark-managed client impairment applied to marked impaired clients
 - `stability`: per-case delivered-throughput and p99 probe RTT spread, plus unstable reasons
 - `deliveredLogicalPacketsPerSecond`: synthetic logical game packets delivered per second for batch runs

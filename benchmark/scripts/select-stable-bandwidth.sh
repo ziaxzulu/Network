@@ -192,7 +192,8 @@ jq -c -s \
     (.reliability // ""),
     (.impairmentProfile // "0ms/0ms/0%"),
     n(.packetLimit),
-    n(.globalPacketLimit)
+    n(.globalPacketLimit),
+    n(.configuredMaxQueuedBytes)
   ]) |
   group_by([
     (.case // ""),
@@ -201,7 +202,8 @@ jq -c -s \
     (.reliability // ""),
     (.impairmentProfile // "0ms/0ms/0%"),
     n(.packetLimit),
-    n(.globalPacketLimit)
+    n(.globalPacketLimit),
+    n(.configuredMaxQueuedBytes)
   ])[] as $rows |
   ($rows[0]) as $first |
   (
@@ -228,6 +230,7 @@ jq -c -s \
     scenario: ($first.scenario // null),
     packetLimit: ($first.packetLimit // null),
     globalPacketLimit: ($first.globalPacketLimit // null),
+    configuredMaxQueuedBytes: ($first.configuredMaxQueuedBytes // null),
     minIterations: $minIterations,
     maxP99Millis: $maxP99Millis,
     maxQueueBytes: $maxQueueBytes,
@@ -244,7 +247,7 @@ jq -c -s \
 ' "$input_summary" >"$jsonl_out"
 
 {
-  echo "case,clients,payload_size,reliability,impairment_profile,packet_limit,global_packet_limit,selected,eligible_candidates,candidate_count,selected_benchmark,selected_target_mbps,selected_delivered_gbps,selected_p99_ms,selected_spread_pct,selected_max_queue_bytes,selected_send_deliver_ratio,selected_nack_out_s,best_observed_benchmark,best_observed_target_mbps,best_observed_delivered_gbps,best_observed_p99_ms,best_observed_reasons"
+  echo "case,clients,payload_size,reliability,impairment_profile,packet_limit,global_packet_limit,configured_max_queued_bytes,selected,eligible_candidates,candidate_count,selected_benchmark,selected_target_mbps,selected_delivered_gbps,selected_p99_ms,selected_spread_pct,selected_max_queue_bytes,selected_send_deliver_ratio,selected_nack_out_s,best_observed_benchmark,best_observed_target_mbps,best_observed_delivered_gbps,best_observed_p99_ms,best_observed_reasons"
   jq -r '
     def value($candidate; $name):
       if $candidate == null then null else $candidate[$name] end;
@@ -256,6 +259,7 @@ jq -c -s \
       .impairmentProfile,
       .packetLimit,
       .globalPacketLimit,
+      .configuredMaxQueuedBytes,
       .selected,
       .eligibleCandidateCount,
       .candidateCount,
@@ -290,8 +294,8 @@ jq -c -s \
   if [[ ! -s "$jsonl_out" ]]; then
     echo "No bandwidth-latency curve aggregate rows were found."
   else
-    echo "| Case | Payload | Reliability | Impairment | Packet limit | Global limit | Selected | Stable Gbps | Stable target Mbps | Stable p99 ms | Stable spread | Best observed Gbps | Best observed target Mbps | Best observed reasons |"
-    echo "| --- | ---: | --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+    echo "| Case | Payload | Reliability | Impairment | Packet limit | Global limit | Queue cap | Selected | Stable Gbps | Stable target Mbps | Stable p99 ms | Stable spread | Best observed Gbps | Best observed target Mbps | Best observed reasons |"
+    echo "| --- | ---: | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -310,6 +314,7 @@ jq -c -s \
         "`" + (.impairmentProfile // "0ms/0ms/0%") + "`",
         fmt(.packetLimit),
         fmt(.globalPacketLimit),
+        fmt(.configuredMaxQueuedBytes),
         (.selected | tostring),
         fmt(field(.selectedCandidate; "deliveredGbps")),
         fmt(field(.selectedCandidate; "targetMbps")),
@@ -319,8 +324,8 @@ jq -c -s \
         fmt(field(.bestObservedCandidate; "targetMbps")),
         "`" + ((field(.bestObservedCandidate; "rejectionReasons") // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_out" | while IFS=$'\t' read -r case_name payload reliability impairment packet_limit global_limit selected stable_gbps stable_target stable_p99 stable_spread best_gbps best_target best_reasons; do
-      echo "| $case_name | $payload | $reliability | $impairment | $packet_limit | $global_limit | $selected | $stable_gbps | $stable_target | $stable_p99 | $stable_spread | $best_gbps | $best_target | $best_reasons |"
+    ' "$jsonl_out" | while IFS=$'\t' read -r case_name payload reliability impairment packet_limit global_limit queue_cap selected stable_gbps stable_target stable_p99 stable_spread best_gbps best_target best_reasons; do
+      echo "| $case_name | $payload | $reliability | $impairment | $packet_limit | $global_limit | $queue_cap | $selected | $stable_gbps | $stable_target | $stable_p99 | $stable_spread | $best_gbps | $best_target | $best_reasons |"
     done
   fi
   echo

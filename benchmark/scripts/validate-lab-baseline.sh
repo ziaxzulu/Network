@@ -481,6 +481,9 @@ jq -n \
           + (if (($planned | has("perClientMbps")) and ((n($matched.targetClientMbps) - n($planned.perClientMbps)) | fabs) > 0.000001) then
               [issue("planned-per-client-mbps-mismatch"; "aggregate row per-client target Mbps differs from planned manifest"; $matched; {plannedPerClientMbps: n($planned.perClientMbps), actualTargetClientMbps: n($matched.targetClientMbps)})]
             else [] end)
+          + (if (($planned | has("configuredMaxQueuedBytes")) and n($matched.configuredMaxQueuedBytes) != n($planned.configuredMaxQueuedBytes)) then
+              [issue("planned-max-queued-bytes-mismatch"; "aggregate row configured max queued bytes differs from planned manifest"; $matched; {plannedMaxQueuedBytes: n($planned.configuredMaxQueuedBytes), actualConfiguredMaxQueuedBytes: n($matched.configuredMaxQueuedBytes)})]
+            else [] end)
         end
       ) | add // []
     )

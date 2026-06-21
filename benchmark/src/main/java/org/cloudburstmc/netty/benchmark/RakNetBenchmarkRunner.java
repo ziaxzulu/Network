@@ -374,6 +374,9 @@ public final class RakNetBenchmarkRunner {
         if (config.globalPacketLimit() > 0) {
             bootstrap.option(RakChannelOption.RAK_GLOBAL_PACKET_LIMIT, config.globalPacketLimit());
         }
+        if (config.maxQueuedBytes() > 0) {
+            bootstrap.childOption(RakChannelOption.RAK_MAX_QUEUED_BYTES, config.maxQueuedBytes());
+        }
         return bootstrap.bind(new InetSocketAddress(config.bindHost(), config.port())).awaitUninterruptibly().channel();
     }
 

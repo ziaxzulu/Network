@@ -269,6 +269,7 @@ jq -s \
       batched: ($server_iterations[0].batched // false),
       packetLimit: ($server.packetLimit // null),
       globalPacketLimit: ($server.globalPacketLimit // null),
+      configuredMaxQueuedBytes: ($server.configuredMaxQueuedBytes // null),
       targetMbps: ($server_iterations[0].targetMbps // 0),
       targetClientMbps: ($server_iterations[0].targetClientMbps // 0),
       startAtEpochMillis: ($server.startAtEpochMillis // 0),
@@ -370,7 +371,7 @@ jq -s \
 jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
 
 {
-  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,target_mbps,target_client_mbps,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
+  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,target_mbps,target_client_mbps,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
   jq -r '
     .aggregate as $a |
     [
@@ -396,6 +397,7 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.nackOutPerSecond,
       $a.probeRttP99Millis,
       $a.maxQueuedBytes,
+      $a.configuredMaxQueuedBytes,
       $a.fairnessIndex,
       $a.healthyFairnessIndex,
       $a.affectedFairnessIndex,

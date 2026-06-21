@@ -70,7 +70,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --require-validation
 ```
 
-The comparison script uses `suite-aggregate.jsonl` automatically when comparing suite directories. That means the comparison is based on per-case medians and includes stability spread. It fails when matched rows change matrix shape, including clients, payload, reliability, batching, target rate, impairment, or packet limits. For lab sign-off, pass `--require-validation`; the comparison then fails when either side lacks `validation.json` or when validation is failed, so invalid promoted baselines or invalid candidate lab runs do not look like clean regressions. Use the raw `suite-summary.jsonl` files only when diagnosing individual measured iterations.
+The comparison script uses `suite-aggregate.jsonl` automatically when comparing suite directories. That means the comparison is based on per-case medians and includes stability spread. It fails when matched rows change matrix shape, including clients, payload, reliability, batching, target rate, impairment, packet limits, or queue cap. For lab sign-off, pass `--require-validation`; the comparison then fails when either side lacks `validation.json` or when validation is failed, so invalid promoted baselines or invalid candidate lab runs do not look like clean regressions. Use the raw `suite-summary.jsonl` files only when diagnosing individual measured iterations.
 
 ## Remote Worker Runs
 
@@ -199,6 +199,8 @@ benchmark/scripts/plan-remote-contention.sh \
 ```
 
 The generated manifest records the scheduled start times, receiver distribution, and affected-client counts. When using host/NIC-level impairment, place the affected receiver clients on the impaired host or network namespace. With multiple receiver hosts, server-side affected-client splits are accept-order based and should be treated as advisory unless the affected clients are isolated to one receiver.
+
+For queue/backlog cap sweeps, pass `--max-queued-bytes <bytes>` to `plan-remote-contention.sh` or the combined `plan-lab-baseline.sh`. Use explicit case prefixes or separate artifact roots for each cap value so default-cap and low-cap runs are easy to compare. The generated manifests record `configuredMaxQueuedBytes`, and validation checks that merged aggregate rows keep the planned cap.
 
 For host-level blackhole validation, isolate the clients that should disappear onto a dedicated receiver host or network namespace, then apply the drop outside the JVM after connection establishment and warmup. A simple lab recipe is:
 
