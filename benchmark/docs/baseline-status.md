@@ -12,6 +12,8 @@ The benchmark is a good synthetic for established-channel transport pressure:
 - queue, ACK/NACK, stale datagram, disconnect, open/active peer, final channel-state, fairness, per-client throughput, send/deliver, undelivered send-work, healthy/affected datagram-rate, and probe-latency indicators
 - local loopback runs for regression and remote worker runs for separate-host lab evidence
 
+Candidate comparisons now fail on more than aggregate throughput, p99 latency, and queue growth. They also gate healthy-client throughput, healthy-client fairness, send-work growth, and retry-pressure growth, so a change that preserves total delivered Gbps while starving healthy clients or burning server send work on bad links is treated as a regression.
+
 It is not a full Bedrock production emulator yet. The main remaining workload gaps are compression modeling, captured logical packet distributions, pass-through versus re-encode batch behavior, proxy pass-through, and captured host/NIC-level impairment results. Source evidence and the gap list are in [`production-usage-evidence.md`](production-usage-evidence.md).
 
 ## Base Matrix
@@ -254,10 +256,10 @@ Before lab operators distribute commands, regenerate a fresh handoff from the ex
 Latest structural handoff generated during this status pass:
 
 ```text
-benchmark/build/benchmark-results/current-fresh-handoff-20260622T110854Z/
+benchmark/build/benchmark-results/current-fresh-handoff-20260622T114000Z/
 ```
 
-It was generated from Network revision `30aeb80673d2` and reported `ready=true`, `issueCount=0`, source-audit ready, preflight ready, `56` default curve rows, `56` raised-limiter curve rows, and `9` contention rows. The expected, manifest, and generated helper prereq roles matched: `receiver-a`, `receiver-b`, and `server`. Because any subsequent commit changes the source-audit revision fingerprint, regenerate the handoff again from the exact checkout used for lab execution.
+It was generated from Network revision `dab48165c2f9` and reported `ready=true`, `issueCount=0`, source-audit ready, preflight ready, `56` default curve rows, `56` raised-limiter curve rows, and `9` contention rows. The expected, manifest, and generated helper prereq roles matched: `receiver-a`, `receiver-b`, and `server`. Source audit confirmed Geyser `0d65b201f26c`, Cloudburst Protocol `f8295d3258fc`, Cloudburst Nukkit `dbbb7ca6fe7e`, private CubeCraft `c2ea06b92c19`, and optional TeamZiax eBPF `68f39f1d05db` checkouts were available with no dirty tracked files. Because any subsequent commit changes the source-audit revision fingerprint, regenerate the handoff again from the exact checkout used for lab execution.
 
 The readiness report's `proofChecklist` JSON and Markdown sections show the required evidence chain: fresh handoff, perfect-network execution, impairment execution, and promotion. It remains intentionally `ready=false` until separate-host lab execution produces promoted perfect-network and impairment baselines.
 
@@ -320,7 +322,9 @@ Current readiness audit in this worktree:
 
 ```bash
 benchmark/scripts/check-baseline-readiness.sh \
-  --out benchmark/build/benchmark-results/readiness-current-fresh-handoff-20260622T110911Z
+  --lab-baseline benchmark/build/benchmark-baselines/current-dab4816-lab \
+  --impairment-baseline benchmark/build/benchmark-baselines/current-dab4816-impairment \
+  --out benchmark/build/benchmark-results/readiness-current-dab4816-handoff-20260622T114000Z
 ```
 
 The audit correctly reports `not-ready` with `6` issues because no promoted perfect-network baseline or promoted impairment baseline exists yet. Its blocking issues are the missing promoted lab baseline manifest, `validation.json`, `suite-aggregate.jsonl`, `bandwidth-capacity.jsonl`, impairment baseline manifest, and impairment campaign summary. This is the expected state before the separate-host lab campaign has been run, validated, and promoted.
