@@ -721,6 +721,61 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testPromotionRejectsValidationBypassesByDefault() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-lab-promotion-bypass-test");
+
+        Path strictLab = output.resolve("strict-lab");
+        writeValidationLabArtifacts(strictLab, 2, 2);
+        ProcessResult strictPromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-baseline.sh").toString(),
+                "--input", strictLab.toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "strict",
+                "--no-latest"
+        );
+        Assertions.assertEquals(0, strictPromotion.exitCode, strictPromotion.output);
+        JsonNode strictManifest = JSON.readTree(Files.readString(
+                output.resolve("baselines/strict/baseline-manifest.json"), StandardCharsets.UTF_8));
+        Assertions.assertFalse(strictManifest.path("allowValidationBypasses").asBoolean());
+
+        Path looseLab = output.resolve("loose-lab");
+        writeValidationLabArtifacts(looseLab, 2, 2, false);
+        ProcessResult rejectedPromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-baseline.sh").toString(),
+                "--input", looseLab.toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "loose",
+                "--no-latest",
+                "--",
+                "--allow-loose-prereq-gates"
+        );
+        Assertions.assertEquals(1, rejectedPromotion.exitCode, rejectedPromotion.output);
+        Assertions.assertTrue(rejectedPromotion.output.contains("validation used baseline bypass flags"));
+        Assertions.assertFalse(Files.exists(output.resolve("baselines/loose/baseline-manifest.json")));
+
+        ProcessResult smokePromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-baseline.sh").toString(),
+                "--input", looseLab.toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "loose-smoke",
+                "--no-latest",
+                "--allow-validation-bypasses",
+                "--",
+                "--allow-loose-prereq-gates"
+        );
+        Assertions.assertEquals(0, smokePromotion.exitCode, smokePromotion.output);
+        JsonNode smokeManifest = JSON.readTree(Files.readString(
+                output.resolve("baselines/loose-smoke/baseline-manifest.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(smokeManifest.path("allowValidationBypasses").asBoolean());
+        Assertions.assertTrue(smokeManifest.path("validation").path("allowLoosePrereqGates").asBoolean());
+    }
+
+    @Test
     public void testNetnsWorkerSmokeDryRunProducesManifest() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();

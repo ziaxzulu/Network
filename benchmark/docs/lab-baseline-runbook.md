@@ -349,7 +349,7 @@ benchmark/scripts/validate-lab-baseline.sh \
 
 The lab planner's generated `merge-all.sh` runs the same validation automatically after it creates the combined aggregate, passing the curve and contention manifests so missing planned cases fail validation. Validation fails by default when `topology.md` is missing, fewer than two host reports were captured under the artifact root, those reports do not contain at least two distinct hostnames, fewer than two prereq reports were captured, any prereq report is not ready, prereq reports do not contain at least two distinct hostnames, or strict prereq evidence for clock sync, expected MTU, minimum CPU count, and no pre-existing netem qdisc is missing.
 
-After validation passes, package the baseline of record:
+After validation passes, package the baseline of record. Promotion refuses validation bypass flags by default; `--allow-validation-bypasses` is only for non-baseline smoke packages:
 
 ```bash
 benchmark/scripts/promote-lab-baseline.sh \

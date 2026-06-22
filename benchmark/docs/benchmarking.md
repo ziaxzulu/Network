@@ -146,7 +146,7 @@ benchmark/scripts/promote-lab-baseline.sh \
   --min-contention-target-client-mbps 5
 ```
 
-The promotion script reruns validation, then writes `BASELINE.md`, `baseline-manifest.json`, `suite-aggregate.jsonl`, `validation.*`, capacity selector files, topology metadata, host reports, prereq reports, and copied planning manifests under the promoted baseline directory. It also updates `benchmark/build/benchmark-baselines/latest` unless `--no-latest` is supplied.
+The promotion script reruns validation, refuses validation bypass flags by default, then writes `BASELINE.md`, `baseline-manifest.json`, `suite-aggregate.jsonl`, `validation.*`, capacity selector files, topology metadata, host reports, prereq reports, and copied planning manifests under the promoted baseline directory. It also updates `benchmark/build/benchmark-baselines/latest` unless `--no-latest` is supplied. Use `--allow-validation-bypasses` only for non-baseline smoke packages.
 
 For remote lab campaigns where the impairment must happen outside the JVM, generate one coordinated lab baseline plan per host-level profile:
 

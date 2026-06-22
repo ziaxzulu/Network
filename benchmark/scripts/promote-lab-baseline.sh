@@ -8,6 +8,7 @@ manifest_paths=()
 extra_validation_args=()
 allow_existing=false
 update_latest=true
+allow_validation_bypasses=false
 
 usage() {
   cat <<'USAGE'
@@ -23,11 +24,12 @@ Options before --:
   --name NAME              Baseline package name. Default: <timestamp>-<git-sha>.
   --manifest PATH          Planned manifest.jsonl. May be repeated and is passed to validation.
   --allow-existing         Allow writing into an existing baseline package directory.
+  --allow-validation-bypasses Allow promotion when validation used bypass flags. Smoke only.
   --no-latest              Do not update the latest symlink.
   --help                   Show this help.
 
 Arguments after -- are passed to validate-lab-baseline.sh, for example:
-  -- --min-iterations 3 --allow-missing-host-context --allow-missing-prereq-context
+  -- --min-iterations 3 --min-contention-clients 500 --min-contention-target-client-mbps 5
 
 Outputs under <out>/<name>/:
   baseline-manifest.json   Machine-readable promotion metadata.
@@ -68,6 +70,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-existing)
       allow_existing=true
+      shift
+      ;;
+    --allow-validation-bypasses)
+      allow_validation_bypasses=true
       shift
       ;;
     --no-latest)
@@ -162,6 +168,25 @@ validation_json="$validation_tmp/validation.json"
 validation_md="$validation_tmp/validation.md"
 if ! jq -e '.passed == true' "$validation_json" >/dev/null; then
   echo "validation did not pass; refusing to promote baseline" >&2
+  exit 1
+fi
+
+validation_bypass_flags="$(jq -r '
+  [
+    ["allowUnstable", (.allowUnstable // false)],
+    ["allowDisconnects", (.allowDisconnects // false)],
+    ["allowMissingCapacity", (.allowMissingCapacity // false)],
+    ["allowUnselectedCapacity", (.allowUnselectedCapacity // false)],
+    ["allowMissingHostContext", (.allowMissingHostContext // false)],
+    ["allowMissingPrereqContext", (.allowMissingPrereqContext // false)],
+    ["allowLoosePrereqGates", (.allowLoosePrereqGates // false)]
+  ]
+  | map(select(.[1] == true) | .[0])
+  | @tsv
+' "$validation_json")"
+if [[ -n "$validation_bypass_flags" && "$allow_validation_bypasses" != "true" ]]; then
+  echo "validation used baseline bypass flags; refusing to promote baseline: $validation_bypass_flags" >&2
+  echo "Use --allow-validation-bypasses only for non-baseline smoke packages." >&2
   exit 1
 fi
 
@@ -336,12 +361,14 @@ jq -n \
   --arg generatedAt "$checked_at" \
   --arg gitRevision "$git_revision" \
   --arg destination "$destination" \
+  --argjson allowValidationBypasses "$allow_validation_bypasses" \
   '{
     baselineKind: "raknet-lab-baseline",
     name: $name,
     generatedAt: $generatedAt,
     gitRevision: $gitRevision,
     destination: $destination,
+    allowValidationBypasses: $allowValidationBypasses,
     validation: $validation[0],
     sourcePaths: $sourcePaths[0],
     promotedFiles: $promotedFiles[0]
