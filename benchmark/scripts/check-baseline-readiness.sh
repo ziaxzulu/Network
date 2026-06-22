@@ -3,6 +3,7 @@ set -euo pipefail
 
 lab_baseline="benchmark/build/benchmark-baselines/latest"
 impairment_baseline="benchmark/build/benchmark-baselines/latest-impairment"
+handoff_root=""
 out_dir=""
 expected_impairment_profiles="perfect,near-loss,regional-loss,poor,severe"
 required_curve_payload_sizes="64,256,512,1200,1340,1400,262144"
@@ -33,6 +34,7 @@ baseline of record for performance engineering comparisons.
 Options:
   --lab-baseline PATH              Promoted perfect-network baseline directory. Default: benchmark/build/benchmark-baselines/latest.
   --impairment-baseline PATH       Promoted impairment campaign baseline directory. Default: benchmark/build/benchmark-baselines/latest-impairment.
+  --handoff PATH                   Optional fresh lab handoff directory to include in readiness evidence.
   --expected-impairment-profiles CSV Required impairment profiles. Default: perfect,near-loss,regional-loss,poor,severe.
   --required-curve-payload-sizes CSV Required perfect-network curve payload sizes. Default: 64,256,512,1200,1340,1400,262144.
   --required-impairment-contention-scenarios CSV Required contention scenarios per impairment profile. Default: multi-client-fanout,fairness,disappearing-clients,batched-game-traffic,resource-pack-transfer.
@@ -68,6 +70,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --impairment-baseline)
       impairment_baseline="$2"
+      shift 2
+      ;;
+    --handoff)
+      handoff_root="$2"
       shift 2
       ;;
     --expected-impairment-profiles)
@@ -205,6 +211,9 @@ resolve_path() {
 
 lab_baseline="$(resolve_path "$lab_baseline")"
 impairment_baseline="$(resolve_path "$impairment_baseline")"
+if [[ -n "$handoff_root" ]]; then
+  handoff_root="$(resolve_path "$handoff_root")"
+fi
 if [[ -z "$out_dir" ]]; then
   if [[ -d "$lab_baseline" ]]; then
     out_dir="$lab_baseline/readiness"
@@ -329,6 +338,49 @@ required_artifact_collection_groups_json="$(jq -n -c '[
   "impairment-campaign-summary",
   "promotion-readiness"
 ]')"
+handoff_summary_json="null"
+handoff_preflight_json="null"
+handoff_manifest_path=""
+handoff_summary_path=""
+handoff_preflight_path=""
+handoff_provided_json=false
+handoff_ready_json=false
+if [[ -n "$handoff_root" ]]; then
+  handoff_provided_json=true
+  handoff_manifest_path="$handoff_root/handoff-manifest.json"
+  handoff_summary_path="$handoff_root/fresh-handoff-summary.json"
+  handoff_preflight_path="$handoff_root/preflight/handoff-check.json"
+  if [[ ! -s "$handoff_manifest_path" ]]; then
+    append_issue "handoff-missing-manifest" "handoff" "fresh lab handoff manifest is missing" "{\"path\":\"$handoff_manifest_path\"}"
+  elif ! jq -e '.kind == "raknet-lab-handoff"' "$handoff_manifest_path" >/dev/null; then
+    append_issue "handoff-invalid-manifest-kind" "handoff" "fresh lab handoff manifest has an unexpected kind" "{\"path\":\"$handoff_manifest_path\"}"
+  fi
+  if [[ ! -s "$handoff_summary_path" ]]; then
+    append_issue "handoff-missing-summary" "handoff" "fresh lab handoff summary is missing" "{\"path\":\"$handoff_summary_path\"}"
+  else
+    handoff_summary_json="$(jq -c '.' "$handoff_summary_path")"
+    if ! jq -e '.ready == true and (.issueCount // 1) == 0' "$handoff_summary_path" >/dev/null; then
+      append_issue "handoff-summary-not-ready" "handoff" "fresh lab handoff summary is not ready" "{\"path\":\"$handoff_summary_path\"}"
+    fi
+    if jq -e '.networkDirtyTrackedFiles == true' "$handoff_summary_path" >/dev/null; then
+      append_issue "handoff-dirty-network-worktree" "handoff" "fresh lab handoff was generated from a dirty tracked Network worktree" "{\"path\":\"$handoff_summary_path\"}"
+    fi
+  fi
+  if [[ ! -s "$handoff_preflight_path" ]]; then
+    append_issue "handoff-missing-preflight" "handoff" "fresh lab handoff preflight result is missing" "{\"path\":\"$handoff_preflight_path\"}"
+  else
+    handoff_preflight_json="$(jq -c '.' "$handoff_preflight_path")"
+    if ! jq -e '.ready == true and (.issueCount // 1) == 0' "$handoff_preflight_path" >/dev/null; then
+      append_issue "handoff-preflight-not-ready" "handoff" "fresh lab handoff preflight is not ready" "{\"path\":\"$handoff_preflight_path\"}"
+    fi
+  fi
+  if [[ -s "$handoff_manifest_path" && -s "$handoff_summary_path" && -s "$handoff_preflight_path" ]] \
+    && jq -e '.kind == "raknet-lab-handoff"' "$handoff_manifest_path" >/dev/null \
+    && jq -e '.ready == true and (.issueCount // 1) == 0 and ((.networkDirtyTrackedFiles // false) == false)' "$handoff_summary_path" >/dev/null \
+    && jq -e '.ready == true and (.issueCount // 1) == 0' "$handoff_preflight_path" >/dev/null; then
+    handoff_ready_json=true
+  fi
+fi
 
 if [[ -d "$lab_baseline/host-reports" ]]; then
   lab_packaged_host_report_count="$(find "$lab_baseline/host-reports" -maxdepth 1 -type f -name '*-host-report.md' 2>/dev/null | wc -l | tr -d ' ')"
@@ -1002,19 +1054,21 @@ if [[ -s "$impairment_summary" ]]; then
 	fi
 
 issues_array="$(jq -s '.' "$issues_jsonl")"
-next_actions_json="$(jq -s '
+next_actions_json="$(jq -s --argjson handoffProvided "$handoff_provided_json" --argjson handoffReady "$handoff_ready_json" '
   def has_code($code): any(.[]; .code == $code);
   def has_any_code($codes): any(.[]; (.code as $code | ($codes | index($code)) != null));
   def has_prefix($prefix): any(.[]; (.code | startswith($prefix)));
+  def has_handoff_issue: has_prefix("handoff-");
   [
-    if has_any_code([
-      "missing-lab-baseline-manifest",
-      "missing-lab-validation",
-      "missing-lab-aggregate",
-      "missing-lab-capacity",
-      "missing-impairment-baseline-manifest",
-      "missing-impairment-summary"
-    ]) then {
+    if has_handoff_issue or
+      (((($handoffProvided | not) or ($handoffReady | not)) and has_any_code([
+        "missing-lab-baseline-manifest",
+        "missing-lab-validation",
+        "missing-lab-aggregate",
+        "missing-lab-capacity",
+        "missing-impairment-baseline-manifest",
+        "missing-impairment-summary"
+      ]))) then {
       code: "prepare-fresh-lab-handoff",
       title: "Generate a fresh lab handoff",
       detail: "Create a current-revision handoff before lab operators run remote workers so source audit, plans, preflight, and freshness checks match the checkout.",
@@ -1188,6 +1242,14 @@ jq -n \
   --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg labBaseline "$lab_baseline" \
   --arg impairmentBaseline "$impairment_baseline" \
+  --arg handoffRoot "$handoff_root" \
+  --arg handoffManifest "$handoff_manifest_path" \
+  --arg handoffSummaryPath "$handoff_summary_path" \
+  --arg handoffPreflightPath "$handoff_preflight_path" \
+  --argjson handoffProvided "$handoff_provided_json" \
+  --argjson handoffReady "$handoff_ready_json" \
+  --argjson handoffSummary "$handoff_summary_json" \
+  --argjson handoffPreflight "$handoff_preflight_json" \
   --argjson expectedImpairmentProfiles "$(csv_json_array "$expected_impairment_profiles")" \
   --argjson requiredCurvePayloadSizes "$required_curve_payloads_json" \
   --argjson requiredImpairmentContentionScenarios "$required_impairment_contention_json" \
@@ -1225,6 +1287,16 @@ jq -n \
     checkedAt: $checkedAt,
     ready: (($issues | length) == 0),
     issueCount: ($issues | length),
+    handoff: {
+      provided: $handoffProvided,
+      ready: $handoffReady,
+      path: (if $handoffRoot == "" then null else $handoffRoot end),
+      manifest: (if $handoffManifest == "" then null else $handoffManifest end),
+      summaryPath: (if $handoffSummaryPath == "" then null else $handoffSummaryPath end),
+      preflightPath: (if $handoffPreflightPath == "" then null else $handoffPreflightPath end),
+      summary: $handoffSummary,
+      preflight: $handoffPreflight
+    },
     labBaseline: {
       path: $labBaseline,
       packagedManifestCount: $packagedManifestCount,
@@ -1274,6 +1346,11 @@ jq -n \
   echo "- Issues: \`$(jq -r '.issueCount' "$readiness_json")\`"
   echo "- Lab baseline: \`$lab_baseline\`"
   echo "- Impairment baseline: \`$impairment_baseline\`"
+  if [[ -n "$handoff_root" ]]; then
+    echo "- Fresh handoff: \`$handoff_root\`"
+    echo "- Fresh handoff ready: \`$(jq -r 'if .handoff.summary == null then "unknown" elif .handoff.summary.ready then "true" else "false" end' "$readiness_json")\`"
+    echo "- Fresh handoff issues: \`$(jq -r '.handoff.summary.issueCount // "unknown"' "$readiness_json")\`"
+  fi
   echo "- Required curve payload sizes: \`$required_curve_payload_sizes\`"
   echo "- Required impairment contention scenarios: \`$required_impairment_contention_scenarios\`"
   echo "- Required batch intervals ms: \`$required_batch_intervals_ms\`"

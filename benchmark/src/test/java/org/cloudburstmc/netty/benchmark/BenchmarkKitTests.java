@@ -2479,6 +2479,42 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessCanAttachFreshHandoffEvidence() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-readiness-handoff-current-test");
+        Path labBaseline = output.resolve("missing-lab");
+        Path impairmentBaseline = output.resolve("missing-impairment");
+        Path handoff = output.resolve("handoff");
+        Path readiness = output.resolve("readiness");
+        writeReadyFreshHandoff(handoff);
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--handoff", handoff.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        JsonNode readinessJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(readinessJson.path("handoff").path("provided").asBoolean());
+        Assertions.assertTrue(readinessJson.path("handoff").path("ready").asBoolean());
+        Assertions.assertTrue(readinessJson.path("handoff").path("summary").path("ready").asBoolean());
+        Assertions.assertTrue(readinessJson.path("handoff").path("preflight").path("ready").asBoolean());
+
+        List<String> actionCodes = readinessJson.path("nextActions").findValuesAsText("code");
+        Assertions.assertFalse(actionCodes.contains("prepare-fresh-lab-handoff"));
+        Assertions.assertTrue(actionCodes.contains("run-perfect-lab-plan"));
+        Assertions.assertTrue(actionCodes.contains("run-impairment-campaign"));
+
+        String report = Files.readString(readiness.resolve("readiness.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(report.contains("Fresh handoff ready: `true`"));
+    }
+
+    @Test
     public void testBaselineReadinessRequiresCurvePayloadCoverage() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -3726,6 +3762,22 @@ public class BenchmarkKitTests {
                         + ",\"artifactCollectionJson\":\"" + jsonEscape(artifactCollectionJson.toString()) + "\""
                         + ",\"artifactCollectionMd\":\"" + jsonEscape(artifactCollectionMd.toString()) + "\""
                         + "}\n",
+                StandardCharsets.UTF_8);
+    }
+
+    private static void writeReadyFreshHandoff(Path handoff) throws Exception {
+        writeHandoffManifest(handoff.resolve("handoff-manifest.json"));
+        Files.writeString(handoff.resolve("fresh-handoff-summary.json"),
+                "{\"kind\":\"raknet-fresh-lab-handoff\","
+                        + "\"ready\":true,"
+                        + "\"issueCount\":0,"
+                        + "\"networkDirtyTrackedFiles\":false,"
+                        + "\"sourceAuditIssueCount\":0,"
+                        + "\"handoffIssueCount\":0}\n",
+                StandardCharsets.UTF_8);
+        Files.createDirectories(handoff.resolve("preflight"));
+        Files.writeString(handoff.resolve("preflight/handoff-check.json"),
+                "{\"ready\":true,\"issueCount\":0,\"issues\":[]}\n",
                 StandardCharsets.UTF_8);
     }
 

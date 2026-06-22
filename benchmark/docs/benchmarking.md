@@ -249,6 +249,7 @@ After promoting both the perfect-network lab baseline and adverse-network impair
 
 ```bash
 benchmark/scripts/check-baseline-readiness.sh \
+  --handoff benchmark/build/benchmark-results/lab-handoff-<date>-<topology> \
   --lab-baseline benchmark/build/benchmark-baselines/lab-<date>-<topology> \
   --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
   --required-min-contention-clients 500 \
