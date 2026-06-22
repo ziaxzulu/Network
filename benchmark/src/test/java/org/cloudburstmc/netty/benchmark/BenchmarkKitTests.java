@@ -1393,6 +1393,49 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testImpairmentComparisonRejectsMissingRetryPressureBypasses() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-impairment-compare-retry-fields-test");
+        Path baseline = output.resolve("baseline");
+        Path candidate = output.resolve("candidate");
+        writeComparableImpairmentSummary(baseline, false);
+        writeComparableImpairmentSummary(candidate, false);
+        Files.writeString(candidate.resolve("impairment-summary.json"),
+                Files.readString(candidate.resolve("impairment-summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"allowValidationBypasses\":false,",
+                                "\"allowValidationBypasses\":false,\"allowMissingRetryPressureFields\":true,")
+                        .replace(",\"affectedServerDatagramsOutPerSecond\":0", ""),
+                StandardCharsets.UTF_8);
+
+        ProcessResult rejectedComparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-lab-impairment.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("impairment-comparison.md").toString()
+        );
+        Assertions.assertEquals(1, rejectedComparison.exitCode, rejectedComparison.output);
+        String rejectedReport = Files.readString(output.resolve("impairment-comparison.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(rejectedReport.contains("| Missing retry-pressure policy | 1 |"));
+        Assertions.assertTrue(rejectedReport.contains("affectedServerDatagramsOutPerSecond"));
+        Assertions.assertTrue(rejectedReport.contains("1 retry-pressure field policy issue(s)"));
+
+        ProcessResult smokeComparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-lab-impairment.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("impairment-comparison-smoke.md").toString(),
+                "--allow-missing-retry-pressure-fields"
+        );
+        Assertions.assertEquals(0, smokeComparison.exitCode, smokeComparison.output);
+        String smokeReport = Files.readString(output.resolve("impairment-comparison-smoke.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(smokeReport.contains("- Allow missing retry-pressure fields: `true`"));
+        Assertions.assertTrue(smokeReport.contains("Comparison passed."));
+    }
+
+    @Test
     public void testImpairmentComparisonSeparatesBatchShapeRows() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();

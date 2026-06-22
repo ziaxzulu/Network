@@ -327,7 +327,7 @@ benchmark/scripts/compare-lab-impairment.sh \
   --out benchmark/build/benchmark-results/lab-impairment-comparison.md
 ```
 
-The impairment comparator rejects failed summaries, summaries generated without required netem evidence, and summaries that allowed profile validation bypass flags by default. Use `--allow-validation-bypasses` only for smoke comparisons that must inspect incomplete campaign output without treating it as baseline evidence.
+The impairment comparator rejects failed summaries, summaries generated without required netem evidence, summaries that allowed profile validation bypass flags, and summaries that allowed missing retry-pressure fields by default. Use `--allow-validation-bypasses` and `--allow-missing-retry-pressure-fields` only for smoke comparisons that must inspect incomplete campaign output without treating it as baseline evidence.
 
 Start with this impairment set:
 

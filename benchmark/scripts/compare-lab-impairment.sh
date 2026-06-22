@@ -11,6 +11,8 @@ queue_regression_pct="50"
 allow_failed_summary=false
 allow_missing_netem_evidence=false
 allow_validation_bypasses=false
+allow_missing_retry_pressure_fields=false
+required_retry_pressure_fields="undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond"
 
 usage() {
   cat <<'USAGE'
@@ -31,6 +33,11 @@ Options:
   --allow-failed-summary          Do not fail when either campaign summary is failed.
   --allow-missing-netem-evidence  Do not fail when a summary was generated without required netem evidence.
   --allow-validation-bypasses     Allow summaries that used profile validation bypass flags. Smoke only.
+  --allow-missing-retry-pressure-fields
+                                  Allow summaries that used missing retry-pressure-field bypasses. Smoke only.
+  --required-retry-pressure-fields CSV
+                                  Required contention-row retry-pressure metric fields.
+                                  Default: undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond.
   --help                          Show this help.
 USAGE
 }
@@ -76,6 +83,14 @@ while [[ $# -gt 0 ]]; do
     --allow-validation-bypasses)
       allow_validation_bypasses=true
       shift
+      ;;
+    --allow-missing-retry-pressure-fields)
+      allow_missing_retry_pressure_fields=true
+      shift
+      ;;
+    --required-retry-pressure-fields)
+      required_retry_pressure_fields="$2"
+      shift 2
       ;;
     --help|-h)
       usage
@@ -140,6 +155,12 @@ resolve_summary() {
 
 baseline_summary="$(resolve_summary "$baseline_path")"
 candidate_summary="$(resolve_summary "$candidate_path")"
+required_retry_pressure_fields_json="$(jq -cn --arg fields "$required_retry_pressure_fields" '
+  $fields
+  | split(",")
+  | map(gsub("^\\s+|\\s+$"; ""))
+  | map(select(length > 0))
+')"
 
 summary_failures=()
 for label_and_path in "baseline:$baseline_summary" "candidate:$candidate_summary"; do
@@ -171,6 +192,22 @@ if [[ "$allow_validation_bypasses" != "true" ]]; then
       or any((.profiles // [])[]; ((.validation.bypassFlags // []) | length) > 0)
     ' "$path" >/dev/null; then
       validation_bypass_failures+=("$label:$path")
+    fi
+  done
+fi
+
+retry_pressure_field_failures=()
+if [[ "$allow_missing_retry_pressure_fields" != "true" ]]; then
+  for label_and_path in "baseline:$baseline_summary" "candidate:$candidate_summary"; do
+    label="${label_and_path%%:*}"
+    path="${label_and_path#*:}"
+    if jq -e --argjson expected "$required_retry_pressure_fields_json" '
+      (.allowMissingRetryPressureFields == true)
+      or any((.profiles // [])[]; . as $profile
+        | any(($profile.aggregate.contentionRows // [])[]; . as $row
+          | any($expected[]; . as $field | (($row | has($field)) | not))))
+    ' "$path" >/dev/null; then
+      retry_pressure_field_failures+=("$label:$path")
     fi
   done
 fi
@@ -393,6 +430,7 @@ if [[ "$allow_failed_summary" == "true" ]]; then
 fi
 netem_failure_rows="${#netem_evidence_failures[@]}"
 validation_bypass_rows="${#validation_bypass_failures[@]}"
+retry_pressure_field_rows="${#retry_pressure_field_failures[@]}"
 
 write_report() {
   {
@@ -407,6 +445,8 @@ write_report() {
     echo "- Allow failed summary: \`$allow_failed_summary\`"
     echo "- Allow missing netem evidence: \`$allow_missing_netem_evidence\`"
     echo "- Allow validation bypasses: \`$allow_validation_bypasses\`"
+    echo "- Allow missing retry-pressure fields: \`$allow_missing_retry_pressure_fields\`"
+    echo "- Required retry-pressure fields: \`$required_retry_pressure_fields\`"
     echo
     echo "| Result | Count |"
     echo "| --- | ---: |"
@@ -418,6 +458,7 @@ write_report() {
     echo "| Failed campaign summaries | ${#summary_failures[@]} |"
     echo "| Missing netem-evidence policy | ${#netem_evidence_failures[@]} |"
     echo "| Validation bypass summaries | ${#validation_bypass_failures[@]} |"
+    echo "| Missing retry-pressure policy | ${#retry_pressure_field_failures[@]} |"
     echo
     if [[ "${#summary_failures[@]}" -gt 0 ]]; then
       echo "## Summary Failures"
@@ -463,6 +504,29 @@ write_report() {
       done
       echo
     fi
+    if [[ "${#retry_pressure_field_failures[@]}" -gt 0 ]]; then
+      echo "## Retry-Pressure Fields"
+      echo
+      echo "| Input | Summary | Missing fields | Bypass flag |"
+      echo "| --- | --- | --- | --- |"
+      for failure in "${retry_pressure_field_failures[@]}"; do
+        failure_label="${failure%%:*}"
+        failure_path="${failure#*:}"
+        fields="$(jq -r --argjson expected "$required_retry_pressure_fields_json" '
+          [
+            (.profiles // [])[] as $profile
+            | ($profile.aggregate.contentionRows // [])[] as $row
+            | $expected[] as $field
+            | select(($row | has($field)) | not)
+            | $field
+          ]
+          | unique
+          | join(",")
+        ' "$failure_path")"
+        echo "| $failure_label | \`$failure_path\` | \`${fields:-none}\` | \`$(jq -r '.allowMissingRetryPressureFields // false' "$failure_path")\` |"
+      done
+      echo
+    fi
     echo "## Rows"
     echo
 	    echo "| Status | Kind | Profile | Network | Case | Benchmark | Batch shape | Disappear mode | Delivered Gbps | Delta | Undelivered Gbps Delta | Affected Undelivered Gbps Delta | Affected Datagram Out/s Delta | p99 RTT ms | Delta | Max queue | Delta | Healthy fairness delta | Reasons |"
@@ -505,8 +569,8 @@ write_report() {
 	      echo "| $status | $kind | $profile | $network | $case_name | $benchmark | $batch_shape | $disappearance_mode | $delivered | $delivered_delta | $undelivered_delta | $affected_undelivered_delta | $affected_datagram_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $reasons |"
 	    done
     echo
-    if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then
-      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $summary_failure_rows failed campaign summary input(s), $netem_failure_rows netem evidence policy issue(s), $validation_bypass_rows validation bypass summary input(s)."
+    if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 || "$validation_bypass_rows" -gt 0 || "$retry_pressure_field_rows" -gt 0 ]]; then
+      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $summary_failure_rows failed campaign summary input(s), $netem_failure_rows netem evidence policy issue(s), $validation_bypass_rows validation bypass summary input(s), $retry_pressure_field_rows retry-pressure field policy issue(s)."
     else
       echo "Comparison passed."
     fi
@@ -525,6 +589,6 @@ else
   write_report
 fi
 
-if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then
+if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 || "$validation_bypass_rows" -gt 0 || "$retry_pressure_field_rows" -gt 0 ]]; then
   exit 1
 fi
