@@ -75,6 +75,7 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
   --server-host <server-ip> \
   --interface <nic> \
   --curve-receiver receiver-a=1 \
+  --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --contention-receiver receiver-a=250 \
   --contention-receiver receiver-b=250 \
   --sudo-netem
@@ -105,8 +106,8 @@ benchmark/scripts/plan-lab-baseline.sh \
 
 The generated plan schedules:
 
-- `40` default-limiter curve rows across payloads `256,512,1200,1340,1400`
-- `40` raised-limiter curve rows across the same payloads
+- `56` default-limiter curve rows across payloads `64,256,512,1200,1340,1400,262144`
+- `56` raised-limiter curve rows across the same payloads
 - `3` contention rows at `500` clients split across two receiver hosts
 
 Before promotion, the lab output must include:
@@ -158,6 +159,7 @@ benchmark/scripts/plan-lab-impairment.sh \
   -- \
   --server-host <server-ip> \
   --curve-receiver receiver-a=1 \
+  --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --contention-receiver receiver-a=250 \
   --contention-receiver receiver-b=250 \
   --contention-cases fanout,fairness,disappear-blackhole \
@@ -190,8 +192,8 @@ That plan contains five profiles:
 
 Each profile schedules:
 
-- `40` default-limiter one-client bandwidth curve rows
-- `40` raised-limiter one-client bandwidth curve rows
+- `56` default-limiter one-client bandwidth curve rows
+- `56` raised-limiter one-client bandwidth curve rows
 - `3` contention rows at `500` clients split across two receiver hosts
 
 The impairment planner also writes `check-plan-freshness.sh`, `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, `netem/<profile>-clear.sh`, and `summarize-campaign.sh`. Run the campaign freshness check before starting profile workers, then run the netem scripts on the shaped receiver host or network namespace before and after the matching profile plan. Keep the generated `<profile>-status-*.txt` files with the copied benchmark artifacts; `validate-all.sh` requires that evidence by default. After profile merge and validation, keep `campaign-summary/impairment-summary.json`, `impairment-summary.jsonl`, and `impairment-summary.md` with the baseline package so adverse-network capacity and contention behavior are reviewed as one campaign. Promote that campaign with `benchmark/scripts/promote-lab-impairment.sh`, then compare future candidate campaigns with `benchmark/scripts/compare-lab-impairment.sh`. The `perfect` profile is the no-impairment companion and should still capture qdisc status so later comparisons can prove the baseline host was unshaped.

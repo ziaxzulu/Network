@@ -336,6 +336,12 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("near-loss", handoffManifest.path("profiles").get(1).asText());
         Assertions.assertEquals(1, handoffManifest.path("curveReceivers").size());
         Assertions.assertEquals("receiver-a=1", handoffManifest.path("curveReceivers").get(0).asText());
+        Assertions.assertEquals(7, handoffManifest.path("curvePayloadSizes").size());
+        Assertions.assertEquals(64, handoffManifest.path("curvePayloadSizes").get(0).asInt());
+        Assertions.assertEquals(262144, handoffManifest.path("curvePayloadSizes").get(6).asInt());
+        Assertions.assertEquals(8, handoffManifest.path("curveRatesMbps").size());
+        Assertions.assertEquals("100", handoffManifest.path("curveRatesMbps").get(0).asText());
+        Assertions.assertEquals("unlimited", handoffManifest.path("curveRatesMbps").get(7).asText());
         Assertions.assertEquals(1, handoffManifest.path("contentionReceivers").size());
         Assertions.assertEquals("receiver-a=2", handoffManifest.path("contentionReceivers").get(0).asText());
         Assertions.assertEquals(1, handoffManifest.path("contentionCases").size());
@@ -356,6 +362,18 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(2, profiles.size());
         Assertions.assertTrue(profiles.get(0).contains("\"profile\":\"perfect\""));
         Assertions.assertTrue(profiles.get(1).contains("\"profile\":\"near-loss\""));
+
+        List<String> defaultCurveRows = Files.readAllLines(handoff.resolve("perfect-plan/curve-plan/manifest.jsonl"),
+                StandardCharsets.UTF_8);
+        Assertions.assertEquals(56, defaultCurveRows.size());
+        Assertions.assertTrue(defaultCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":64")));
+        Assertions.assertTrue(defaultCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")));
+
+        List<String> raisedCurveRows = Files.readAllLines(handoff.resolve("perfect-plan/curve-raised-plan/manifest.jsonl"),
+                StandardCharsets.UTF_8);
+        Assertions.assertEquals(56, raisedCurveRows.size());
+        Assertions.assertTrue(raisedCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":64")));
+        Assertions.assertTrue(raisedCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")));
 
         ProcessResult freshness = runProcess(root, Duration.ofSeconds(10),
                 "bash",

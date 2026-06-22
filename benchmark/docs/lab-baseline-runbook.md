@@ -102,7 +102,7 @@ benchmark/scripts/plan-lab-baseline.sh \
   --interface <nic> \
   --curve-receiver receiver-a=1 \
   --contention-receiver receiver-a=100 \
-  --curve-payload-sizes 256,512,1200,1340,1400 \
+  --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --curve-rates-mbps 100,250,500,750,1000,1500,2000,unlimited \
   --contention-cases fanout,fairness,disappear-blackhole \
   --contention-payload-size 512 \

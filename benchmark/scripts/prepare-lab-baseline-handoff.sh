@@ -11,6 +11,8 @@ case_prefix="lab"
 profiles="perfect,near-loss,regional-loss,poor,severe"
 target_host_role="receiver-a"
 curve_receivers=("receiver-a=1")
+curve_payload_sizes="64,256,512,1200,1340,1400,262144"
+curve_rates_mbps="100,250,500,750,1000,1500,2000,unlimited"
 contention_receivers=()
 contention_cases="fanout,fairness,disappear-blackhole"
 contention_payload_size="512"
@@ -48,6 +50,8 @@ Options:
   --port PORT                       UDP port. Default: 19132.
   --interface NIC                   Lab NIC used by host capture and netem scripts. Required.
   --curve-receiver NAME:CLIENTS     Receiver for curve. NAME=CLIENTS is accepted. May repeat. Default: receiver-a=1.
+  --curve-payload-sizes CSV         Payload sizes for bandwidth curve. Default: 64,256,512,1200,1340,1400,262144.
+  --curve-rates-mbps CSV            Offered Mbps points for bandwidth curve. Default: 100,250,500,750,1000,1500,2000,unlimited.
   --contention-receiver NAME:CLIENTS Receiver for contention. NAME=CLIENTS is accepted. May repeat. Default: receiver-a=250, receiver-b=250.
   --receiver NAME:CLIENTS           Alias for --contention-receiver.
   --profiles CSV                    Impairment profiles. Default: perfect,near-loss,regional-loss,poor,severe.
@@ -119,6 +123,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --target-host-role)
       target_host_role="$2"
+      shift 2
+      ;;
+    --curve-payload-sizes)
+      curve_payload_sizes="$2"
+      shift 2
+      ;;
+    --curve-rates-mbps)
+      curve_rates_mbps="$2"
       shift 2
       ;;
     --case-prefix|--case)
@@ -219,7 +231,7 @@ for value_name in port contention_payload_size iterations raised_packet_limit ra
     exit 2
   fi
 done
-for value in "$profiles" "$contention_cases"; do
+for value in "$profiles" "$curve_payload_sizes" "$curve_rates_mbps" "$contention_cases"; do
   if ! non_empty_csv "$value"; then
     echo "CSV options must be non-empty and cannot start or end with a comma: $value" >&2
     exit 2
@@ -265,11 +277,18 @@ json_array_from_csv() {
     | jq -R -s 'split("\n") | map(select(length > 0))'
 }
 
+json_number_array_from_csv() {
+  printf '%s' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+    | jq -R -s 'split("\n") | map(select(length > 0) | tonumber)'
+}
+
 common_baseline_args=(
   --server-host "$server_host"
   --bind-host "$bind_host"
   --port "$port"
   --interface "$interface"
+  --curve-payload-sizes "$curve_payload_sizes"
+  --curve-rates-mbps "$curve_rates_mbps"
   --contention-cases "$contention_cases"
   --contention-payload-size "$contention_payload_size"
   --per-client-mbps "$per_client_mbps"
@@ -319,6 +338,8 @@ git_revision="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo u
 curve_receivers_json="$(json_array_from_args "${curve_receivers[@]}")"
 contention_receivers_json="$(json_array_from_args "${contention_receivers[@]}")"
 profiles_json="$(json_array_from_csv "$profiles")"
+curve_payload_sizes_json="$(json_number_array_from_csv "$curve_payload_sizes")"
+curve_rates_mbps_json="$(json_array_from_csv "$curve_rates_mbps")"
 contention_cases_json="$(json_array_from_csv "$contention_cases")"
 
 jq -n \
@@ -353,6 +374,8 @@ jq -n \
   --argjson curveReceivers "$curve_receivers_json" \
   --argjson contentionReceivers "$contention_receivers_json" \
   --argjson profiles "$profiles_json" \
+  --argjson curvePayloadSizesList "$curve_payload_sizes_json" \
+  --argjson curveRatesMbpsList "$curve_rates_mbps_json" \
   --argjson contentionCases "$contention_cases_json" \
   --argjson sudoNetem "$sudo_netem" \
   '{
@@ -374,6 +397,8 @@ jq -n \
     profiles: $profiles,
     targetHostRole: $targetHostRole,
     curveReceivers: $curveReceivers,
+    curvePayloadSizes: $curvePayloadSizesList,
+    curveRatesMbps: $curveRatesMbpsList,
     contentionReceivers: $contentionReceivers,
     contentionCases: $contentionCases,
     casePrefix: $casePrefix,
@@ -406,6 +431,8 @@ cat >"$readme" <<EOF
 - Profiles: \`$profiles\`
 - Impairment target host role: \`$target_host_role\`
 - Curve receivers: \`$(IFS=,; echo "${curve_receivers[*]}")\`
+- Curve payload sizes: \`$curve_payload_sizes\`
+- Curve rates Mbps: \`$curve_rates_mbps\`
 - Contention receivers: \`$(IFS=,; echo "${contention_receivers[*]}")\`
 - Contention cases: \`$contention_cases\`
 - Per-client Mbps: \`$per_client_mbps\`
