@@ -398,6 +398,27 @@ perfect_artifacts="$artifact_root/perfect"
 impairment_artifacts="$artifact_root/impairment"
 readme="$output_root/README.md"
 handoff_manifest="$output_root/handoff-manifest.json"
+production_evidence_doc_rel="benchmark/docs/production-usage-evidence.md"
+production_evidence_doc="$repo_root/$production_evidence_doc_rel"
+production_evidence_exists=false
+production_evidence_sha256=""
+
+if [[ -s "$production_evidence_doc" ]]; then
+  production_evidence_exists=true
+  if command -v sha256sum >/dev/null 2>&1; then
+    production_evidence_sha256="$(sha256sum "$production_evidence_doc" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    production_evidence_sha256="$(shasum -a 256 "$production_evidence_doc" | awk '{print $1}')"
+  fi
+fi
+if [[ "$production_evidence_exists" != "true" ]]; then
+  echo "production evidence document is required for lab handoffs: $production_evidence_doc" >&2
+  exit 2
+fi
+if [[ ! "$production_evidence_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "unable to compute SHA-256 for production evidence document: $production_evidence_doc" >&2
+  exit 2
+fi
 
 json_array_from_args() {
   if [[ "$#" -eq 0 ]]; then
@@ -504,6 +525,8 @@ jq -n \
   --arg impairmentPlan "$impairment_plan" \
   --arg perfectArtifacts "$perfect_artifacts" \
   --arg impairmentArtifacts "$impairment_artifacts" \
+  --arg productionEvidenceDoc "$production_evidence_doc_rel" \
+  --arg productionEvidenceSha256 "$production_evidence_sha256" \
   --arg readme "$readme" \
   --arg serverHost "$server_host" \
   --arg bindHost "$bind_host" \
@@ -537,6 +560,7 @@ jq -n \
   --argjson batchIntervals "$batch_intervals_json" \
   --argjson batchPayloadSizes "$batch_payload_sizes_json" \
   --argjson resourcePackChunkSizes "$resource_pack_chunk_sizes_json" \
+  --argjson productionEvidenceExists "$production_evidence_exists" \
   --argjson sudoNetem "$sudo_netem" \
   --argjson requireCpuPerformance "$require_cpu_performance" \
   '{
@@ -551,6 +575,11 @@ jq -n \
     impairmentPlan: $impairmentPlan,
     perfectArtifacts: $perfectArtifacts,
     impairmentArtifacts: $impairmentArtifacts,
+    productionEvidence: {
+      document: $productionEvidenceDoc,
+      exists: $productionEvidenceExists,
+      sha256: $productionEvidenceSha256
+    },
     serverHost: $serverHost,
     bindHost: $bindHost,
     port: ($port | tonumber),
@@ -599,6 +628,8 @@ cat >"$readme" <<EOF
 - Perfect-network plan: \`$perfect_plan\`
 - Impairment campaign plan: \`$impairment_plan\`
 - Handoff manifest: \`$handoff_manifest\`
+- Production evidence document: \`$production_evidence_doc_rel\`
+- Production evidence SHA-256: \`$production_evidence_sha256\`
 - Profiles: \`$profiles\`
 - Impairment target host role: \`$target_host_role\`
 - Curve receivers: \`$(IFS=,; echo "${curve_receivers[*]}")\`

@@ -198,6 +198,9 @@ computed_contention_clients="$(jq -r '
   ((.contentionReceivers // []) | map(receiver_clients(.))) | add // 0
 ' "$manifest")"
 expected_per_client_mbps="$(jq -r '.perClientMbps // 0' "$manifest")"
+production_evidence_json="$(jq -c '.productionEvidence // null' "$manifest")"
+production_evidence_doc="$(jq -r '.productionEvidence.document // ""' "$manifest")"
+production_evidence_sha256="$(jq -r '.productionEvidence.sha256 // ""' "$manifest")"
 expected_contention_scenarios_json="$(jq -c '
   def scenario($value):
     ($value | ascii_downcase) as $case
@@ -232,6 +235,10 @@ if ! jq -n -e --argjson actual "$expected_per_client_mbps" --argjson required "$
   append_issue "handoff-contention-target-client-mbps-below-threshold" "handoff" "handoff per-client Mbps target is below the required baseline threshold" \
     "$(jq -n --argjson required "$required_min_contention_target_client_mbps" --argjson actual "$expected_per_client_mbps" '{requiredMinContentionTargetClientMbps:$required,actualPerClientMbps:$actual}')"
 fi
+if ! jq -e '(.productionEvidence.document // "") != "" and (.productionEvidence.exists == true) and ((.productionEvidence.sha256 // "") | test("^[0-9a-f]{64}$"))' "$manifest" >/dev/null; then
+  append_issue "handoff-missing-production-evidence" "handoff" "handoff manifest does not include a concrete production evidence document fingerprint" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
+fi
 
 check_path "$handoff_root/README.md" "handoff"
 check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
@@ -246,6 +253,12 @@ check_readme_contains "--require-clock-sync" "handoff README host prerequisite c
 check_readme_contains "--require-no-netem" "handoff README host prerequisite command does not require clean qdisc/no-netem evidence"
 if [[ "$require_cpu_performance" == "true" ]]; then
   check_readme_contains "--require-cpu-performance" "handoff README host prerequisite command does not require CPU performance-governor evidence"
+fi
+if [[ -n "$production_evidence_doc" ]]; then
+  check_readme_contains "Production evidence document: \`$production_evidence_doc\`" "handoff README does not record the production evidence document"
+fi
+if [[ -n "$production_evidence_sha256" ]]; then
+  check_readme_contains "Production evidence SHA-256: \`$production_evidence_sha256\`" "handoff README does not record the production evidence fingerprint"
 fi
 check_readme_contains "benchmark/scripts/promote-lab-baseline.sh" "handoff README does not show the perfect-network promotion command"
 check_readme_contains "--min-contention-clients \"$expected_contention_clients\"" "handoff README promotion command does not enforce the handoff contention client count"
@@ -446,6 +459,7 @@ jq -n \
   --argjson requireCpuPerformance "$require_cpu_performance" \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
+  --argjson productionEvidence "$production_evidence_json" \
   --argjson expectedCurveRows "$expected_curve_rows" \
   --argjson actualPerfectCurveRows "$actual_perfect_curve_rows" \
   --argjson actualPerfectRaisedCurveRows "$actual_perfect_raised_curve_rows" \
@@ -473,6 +487,7 @@ jq -n \
     expectedMtu: $expectedMtu,
     expectedMinCpus: $expectedMinCpus,
     requireCpuPerformance: $requireCpuPerformance,
+    productionEvidence: $productionEvidence,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     issues: $issues

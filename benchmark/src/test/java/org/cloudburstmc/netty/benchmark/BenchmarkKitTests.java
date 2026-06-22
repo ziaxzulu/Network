@@ -460,6 +460,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
         Assertions.assertTrue(readme.contains("--required-min-contention-clients \"2\""));
         Assertions.assertTrue(readme.contains("--required-min-contention-target-client-mbps \"1\""));
+        Assertions.assertTrue(readme.contains("Production evidence document: `benchmark/docs/production-usage-evidence.md`"));
+        Assertions.assertTrue(readme.contains("Production evidence SHA-256: `"));
 
         JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
                 StandardCharsets.UTF_8));
@@ -474,6 +476,11 @@ public class BenchmarkKitTests {
                 handoffManifest.path("perfectArtifacts").asText());
         Assertions.assertEquals(artifacts.resolve("impairment").toString(),
                 handoffManifest.path("impairmentArtifacts").asText());
+        Assertions.assertEquals("benchmark/docs/production-usage-evidence.md",
+                handoffManifest.path("productionEvidence").path("document").asText());
+        Assertions.assertTrue(handoffManifest.path("productionEvidence").path("exists").asBoolean());
+        Assertions.assertTrue(handoffManifest.path("productionEvidence").path("sha256").asText()
+                .matches("[0-9a-f]{64}"));
         Assertions.assertEquals("127.0.0.1", handoffManifest.path("serverHost").asText());
         Assertions.assertEquals("0.0.0.0", handoffManifest.path("bindHost").asText());
         Assertions.assertEquals(19132, handoffManifest.path("port").asInt());
@@ -579,6 +586,10 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(1.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(1500, handoffCheckJson.path("expectedMtu").asInt());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedMinCpus").asInt());
+        Assertions.assertEquals("benchmark/docs/production-usage-evidence.md",
+                handoffCheckJson.path("productionEvidence").path("document").asText());
+        Assertions.assertTrue(handoffCheckJson.path("productionEvidence").path("sha256").asText()
+                .matches("[0-9a-f]{64}"));
         Assertions.assertEquals(2, handoffCheckJson.path("actualImpairmentProfileRows").size());
         for (JsonNode profileRows : handoffCheckJson.path("actualImpairmentProfileRows")) {
             Assertions.assertEquals(56, profileRows.path("curveRows").asInt());
@@ -611,6 +622,27 @@ public class BenchmarkKitTests {
                         .replace("--required-min-contention-clients \"1\"",
                                 "--required-min-contention-clients \"2\""),
                 StandardCharsets.UTF_8);
+
+        Path handoffManifestPath = handoff.resolve("handoff-manifest.json");
+        String originalHandoffManifest = Files.readString(handoffManifestPath, StandardCharsets.UTF_8);
+        JsonNode manifestWithoutEvidence = JSON.readTree(originalHandoffManifest);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) manifestWithoutEvidence).remove("productionEvidence");
+        Files.writeString(handoffManifestPath, JSON.writeValueAsString(manifestWithoutEvidence), StandardCharsets.UTF_8);
+        ProcessResult missingEvidenceCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-evidence-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
+        );
+        Assertions.assertEquals(1, missingEvidenceCheck.exitCode, missingEvidenceCheck.output);
+        JsonNode missingEvidenceCheckJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-evidence-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(missingEvidenceCheckJson.findValuesAsText("code")
+                .contains("handoff-missing-production-evidence"));
+        Files.writeString(handoffManifestPath, originalHandoffManifest, StandardCharsets.UTF_8);
 
         Path contentionManifest = handoff.resolve("perfect-plan/contention-plan/manifest.jsonl");
         Files.writeString(contentionManifest,

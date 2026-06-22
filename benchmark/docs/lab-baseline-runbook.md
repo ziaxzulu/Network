@@ -99,6 +99,7 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
 ```
 
 Use the generated handoff README as the operator run order. The lower-level commands below are still useful when diagnosing or building a custom campaign.
+The handoff manifest records the `benchmark/docs/production-usage-evidence.md` SHA-256 fingerprint so promoted lab artifacts can be traced back to the production-shape audit used to choose the matrix.
 
 Before distributing the generated command scripts to lab hosts, run the handoff preflight on the merge/control host:
 
