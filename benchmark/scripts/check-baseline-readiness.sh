@@ -237,6 +237,7 @@ csv_json_duration_millis_array() {
 }
 
 lab_manifest="$lab_baseline/baseline-manifest.json"
+lab_handoff_manifest="$lab_baseline/handoff-manifest.json"
 lab_validation="$lab_baseline/validation.json"
 lab_aggregate="$lab_baseline/suite-aggregate.jsonl"
 lab_capacity="$lab_baseline/bandwidth-capacity.jsonl"
@@ -270,6 +271,16 @@ if [[ -s "$lab_manifest" ]]; then
   fi
   if ! jq -e '(.productionEvidence.document // "") != "" and (.productionEvidence.exists == true) and ((.productionEvidence.sha256 // "") | test("^[0-9a-f]{64}$"))' "$lab_manifest" >/dev/null; then
     append_issue "lab-missing-production-evidence" "lab-baseline" "promoted lab baseline does not include a concrete production evidence fingerprint" "{\"path\":\"$lab_manifest\"}"
+  fi
+  if [[ ! -s "$lab_handoff_manifest" ]]; then
+    append_issue "lab-missing-handoff-manifest" "lab-baseline" "promoted lab baseline is missing its copied handoff manifest" "{\"path\":\"$lab_handoff_manifest\"}"
+  elif ! jq -e '.kind == "raknet-lab-handoff"' "$lab_handoff_manifest" >/dev/null; then
+    append_issue "lab-invalid-handoff-manifest-kind" "lab-baseline" "promoted lab baseline handoff manifest has an unexpected kind" "{\"path\":\"$lab_handoff_manifest\"}"
+  elif ! jq -e '(.productionEvidence.document // "") != "" and (.productionEvidence.exists == true) and ((.productionEvidence.sha256 // "") | test("^[0-9a-f]{64}$"))' "$lab_handoff_manifest" >/dev/null; then
+    append_issue "lab-handoff-missing-production-evidence" "lab-baseline" "promoted lab baseline handoff manifest does not include a concrete production evidence fingerprint" "{\"path\":\"$lab_handoff_manifest\"}"
+  elif ! jq -e --slurpfile handoff "$lab_handoff_manifest" '.productionEvidence == $handoff[0].productionEvidence' "$lab_manifest" >/dev/null; then
+    extra="$(jq -n --slurpfile baseline "$lab_manifest" --slurpfile handoff "$lab_handoff_manifest" --arg baselinePath "$lab_manifest" --arg handoffPath "$lab_handoff_manifest" '{baselinePath:$baselinePath,handoffPath:$handoffPath,baselineProductionEvidence:$baseline[0].productionEvidence,handoffProductionEvidence:$handoff[0].productionEvidence}')"
+    append_issue "lab-production-evidence-handoff-mismatch" "lab-baseline" "promoted lab baseline production evidence does not match its copied handoff manifest" "$extra"
   fi
 fi
 

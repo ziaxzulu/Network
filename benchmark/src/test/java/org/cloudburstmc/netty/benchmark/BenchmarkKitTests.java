@@ -2151,6 +2151,55 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresMatchingHandoffProductionEvidence() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-readiness-handoff-evidence-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        Files.writeString(labBaseline.resolve("handoff-manifest.json"),
+                Files.readString(labBaseline.resolve("handoff-manifest.json"), StandardCharsets.UTF_8)
+                        .replace("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+                StandardCharsets.UTF_8);
+
+        ProcessResult mismatched = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, mismatched.exitCode, mismatched.output);
+        JsonNode mismatchedReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(mismatchedReadiness.path("ready").asBoolean());
+        Assertions.assertTrue(mismatchedReadiness.findValuesAsText("code")
+                .contains("lab-production-evidence-handoff-mismatch"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        Files.delete(labBaseline.resolve("handoff-manifest.json"));
+
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode missingReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingReadiness.path("ready").asBoolean());
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("lab-missing-handoff-manifest"));
+    }
+
+    @Test
     public void testBaselineReadinessRequiresPrereqReports() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -2396,6 +2445,10 @@ public class BenchmarkKitTests {
         Files.createDirectories(labBaseline);
         Files.writeString(labBaseline.resolve("baseline-manifest.json"),
                 "{\"baselineKind\":\"raknet-lab-baseline\",\"productionEvidence\":"
+                        + productionEvidenceJson() + "}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(labBaseline.resolve("handoff-manifest.json"),
+                "{\"kind\":\"raknet-lab-handoff\",\"productionEvidence\":"
                         + productionEvidenceJson() + "}\n",
                 StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("validation.json"),
