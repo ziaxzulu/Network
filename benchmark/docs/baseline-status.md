@@ -99,6 +99,27 @@ With payload `1340`, three measured iterations, and default stability policy, th
 
 The best observed current local point was `curve-500_0mbps` at `0.498546Gbps`, but it was rejected because unstable rows are not allowed. Zero-delivery curve rows are rejected by the stability policy, capacity selector, and lab validator. This makes the local loopback evidence useful for regression shape only; it is not a stable capacity baseline.
 
+Latest raised-limiter local best-case curve artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-raised-bestcase-mtu1340-20260622T094358Z/20260622-104359/
+```
+
+This run used payload `1340`, three measured iterations, raised packet limits (`--packet-limit 100000 --global-packet-limit 1000000`), `64MiB` max queued bytes, and git revision `98eac0e16eb7`. It selected a stable local capacity row at the `500Mbps` target. The `750Mbps` row showed the overload knee: one iteration delivered close to target, but the row as a whole was rejected for throughput spread, p99 spread, and disconnects. Higher targets mostly failed after queue growth or no active delivery.
+
+| Candidate | Target Mbps | Delivered Gbps | p99 RTT ms | Max queue bytes | Send/deliver | Rejection |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `curve-100_0mbps` | `100` | `0.09996668` | `29.139101` | `151420` | `1.0107511922972734` | `p99-spread` |
+| `curve-250_0mbps` | `250` | `0.24964468` | `31.96974` | `416740` | `1.0234830920490674` | `p99-spread` |
+| `curve-500_0mbps` | `500` | `0.49818118` | `45.85103` | `876360` | `1.1109891841468333` | none |
+| `curve-750_0mbps` | `750` | `0.0938067` | `761.225065` | `65044957` | `4.175580507575685` | `throughput-spread`, `p99-spread`, `disconnects` |
+| `curve-1000_0mbps` | `1000` | `0` | `0` | `66785600` | `1375.0159903186768` | `throughput-spread`, `zero-delivery`, `disconnects` |
+| `curve-1500_0mbps` | `1500` | `0` | `0` | `0` | `0` | `zero-delivery` |
+| `curve-2000_0mbps` | `2000` | `0` | `0` | `0` | `0` | `zero-delivery` |
+| `curve-unlimited` | `0` | `0` | `0` | `0` | `0` | `zero-delivery` |
+
+This is the best current local capacity selector result, but it is still loopback-only. Treat it as a regression baseline and overload-knee clue, not as line-rate evidence.
+
 Latest focused current-branch 100-client fanout artifact in this worktree:
 
 ```text
