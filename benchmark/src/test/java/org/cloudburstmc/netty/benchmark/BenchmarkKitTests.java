@@ -316,6 +316,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("--min-contention-target-client-mbps \"1\""));
         Assertions.assertTrue(readme.contains("check-lab-host-prereqs.sh"));
         Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
+        Assertions.assertTrue(readme.contains("--required-min-contention-clients \"2\""));
+        Assertions.assertTrue(readme.contains("--required-min-contention-target-client-mbps \"1\""));
 
         JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
                 StandardCharsets.UTF_8));

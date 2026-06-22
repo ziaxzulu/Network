@@ -370,10 +370,12 @@ After both the perfect-network baseline and adverse-network impairment campaign 
 benchmark/scripts/check-baseline-readiness.sh \
   --lab-baseline benchmark/build/benchmark-baselines/lab-<date>-<topology> \
   --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
+  --required-min-contention-clients 500 \
+  --required-min-contention-target-client-mbps 5 \
   --out benchmark/build/benchmark-results/baseline-readiness
 ```
 
 The readiness report is the final artifact-level gate for accepting the baseline package set. It requires passing lab validation, separate-host evidence, required scenario families, selected capacity groups, passing impairment profile validation, required netem status evidence, and the expected impairment profiles.
-By default it also requires the promoted perfect-network validation to have enforced at least `100` contention clients and `5Mbps` per client; pass explicit readiness overrides only when a smaller campaign is intentionally not the production comparison baseline.
+The recommended baseline handoff uses `500` contention clients at `5Mbps` per client, so keep those explicit readiness gates when checking the production comparison baseline. Use lower readiness overrides only for smoke campaigns that will not become the baseline of record.
 
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.

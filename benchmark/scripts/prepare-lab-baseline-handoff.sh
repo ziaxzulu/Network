@@ -514,6 +514,8 @@ benchmark/scripts/promote-lab-impairment.sh \\
 benchmark/scripts/check-baseline-readiness.sh \\
   --lab-baseline benchmark/build/benchmark-baselines/lab-<date>-<topology> \\
   --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \\
+  --required-min-contention-clients "$contention_client_total" \\
+  --required-min-contention-target-client-mbps "$per_client_mbps" \\
   --out benchmark/build/benchmark-results/baseline-readiness
 \`\`\`
 

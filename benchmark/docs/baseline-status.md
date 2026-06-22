@@ -154,11 +154,13 @@ After the perfect-network baseline and adverse-network campaign are both promote
 benchmark/scripts/check-baseline-readiness.sh \
   --lab-baseline benchmark/build/benchmark-baselines/lab-<date>-<topology> \
   --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
+  --required-min-contention-clients 500 \
+  --required-min-contention-target-client-mbps 5 \
   --out benchmark/build/benchmark-results/baseline-readiness
 ```
 
 The baseline is not accepted as the comparison baseline until this readiness check passes.
-Readiness also checks that the promoted perfect-network validation enforced at least `100` contention clients and at least `5Mbps` per client by default. The recommended handoff uses `500` clients split across two receiver hosts, so a promoted baseline created without the validation arguments above will be rejected.
+Readiness also checks that the promoted perfect-network validation enforced the requested contention scale and per-client Mbps target. The recommended handoff uses `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
 
 ## Adverse-Network Lab Plan
 
