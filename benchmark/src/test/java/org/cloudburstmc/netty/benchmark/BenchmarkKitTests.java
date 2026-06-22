@@ -379,12 +379,33 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(raisedCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":64")));
         Assertions.assertTrue(raisedCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")));
 
+        Path defaultHandoffPreflight = output.resolve("handoff-preflight-default");
+        ProcessResult defaultHandoffCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", defaultHandoffPreflight.toString()
+        );
+        Assertions.assertEquals(1, defaultHandoffCheck.exitCode, defaultHandoffCheck.output);
+        JsonNode defaultHandoffCheckJson = JSON.readTree(Files.readString(
+                defaultHandoffPreflight.resolve("handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(defaultHandoffCheckJson.path("ready").asBoolean());
+        Assertions.assertEquals(100, defaultHandoffCheckJson.path("requiredMinContentionClients").asInt());
+        Assertions.assertEquals(5.0D, defaultHandoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+        Assertions.assertTrue(defaultHandoffCheckJson.findValuesAsText("code")
+                .contains("handoff-contention-clients-below-threshold"));
+        Assertions.assertTrue(defaultHandoffCheckJson.findValuesAsText("code")
+                .contains("handoff-contention-target-client-mbps-below-threshold"));
+
         Path handoffPreflight = output.resolve("handoff-preflight");
         ProcessResult handoffCheck = runProcess(root, Duration.ofSeconds(20),
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
-                "--out", handoffPreflight.toString()
+                "--out", handoffPreflight.toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
         );
         Assertions.assertEquals(0, handoffCheck.exitCode, handoffCheck.output);
         JsonNode handoffCheckJson = JSON.readTree(Files.readString(handoffPreflight.resolve("handoff-check.json"),
@@ -405,7 +426,9 @@ public class BenchmarkKitTests {
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
-                "--out", output.resolve("handoff-preflight-tampered").toString()
+                "--out", output.resolve("handoff-preflight-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
         );
         Assertions.assertEquals(1, tamperedHandoffCheck.exitCode, tamperedHandoffCheck.output);
         JsonNode tamperedHandoffCheckJson = JSON.readTree(Files.readString(

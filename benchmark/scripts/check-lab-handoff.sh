@@ -3,6 +3,8 @@ set -euo pipefail
 
 handoff_root=""
 out_dir=""
+required_min_contention_clients="100"
+required_min_contention_target_client_mbps="5"
 
 usage() {
   cat <<'USAGE'
@@ -17,6 +19,8 @@ lab validation, promotion, or final baseline readiness checks.
 Options:
   --handoff DIR                    Handoff directory containing handoff-manifest.json. Required.
   --out DIR                        Output directory. Default: <handoff>/preflight.
+  --required-min-contention-clients N Required handoff contention client count. Default: 100.
+  --required-min-contention-target-client-mbps N Required handoff per-client Mbps target. Default: 5.
   --help                           Show this help.
 
 Outputs:
@@ -33,6 +37,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out)
       out_dir="$2"
+      shift 2
+      ;;
+    --required-min-contention-clients)
+      required_min_contention_clients="$2"
+      shift 2
+      ;;
+    --required-min-contention-target-client-mbps)
+      required_min_contention_target_client_mbps="$2"
       shift 2
       ;;
     --help|-h)
@@ -53,6 +65,14 @@ if [[ -z "$handoff_root" ]]; then
 fi
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required to check lab handoff artifacts" >&2
+  exit 2
+fi
+if ! [[ "$required_min_contention_clients" =~ ^[0-9]+$ ]]; then
+  echo "--required-min-contention-clients must be a non-negative integer" >&2
+  exit 2
+fi
+if ! [[ "$required_min_contention_target_client_mbps" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--required-min-contention-target-client-mbps must be a non-negative number" >&2
   exit 2
 fi
 
@@ -165,6 +185,14 @@ expected_contention_scenarios_json="$(jq -c '
 if [[ "$expected_contention_clients" != "$computed_contention_clients" ]]; then
   append_issue "handoff-contention-client-total-mismatch" "handoff" "handoff contentionClientTotal does not match contention receiver distribution" \
     "$(jq -n --argjson expected "$computed_contention_clients" --argjson actual "$expected_contention_clients" '{expectedFromReceivers:$expected,actualContentionClientTotal:$actual}')"
+fi
+if (( expected_contention_clients < required_min_contention_clients )); then
+  append_issue "handoff-contention-clients-below-threshold" "handoff" "handoff contention client count is below the required baseline threshold" \
+    "$(jq -n --argjson required "$required_min_contention_clients" --argjson actual "$expected_contention_clients" '{requiredMinContentionClients:$required,actualContentionClients:$actual}')"
+fi
+if ! jq -n -e --argjson actual "$expected_per_client_mbps" --argjson required "$required_min_contention_target_client_mbps" '$actual >= $required' >/dev/null; then
+  append_issue "handoff-contention-target-client-mbps-below-threshold" "handoff" "handoff per-client Mbps target is below the required baseline threshold" \
+    "$(jq -n --argjson required "$required_min_contention_target_client_mbps" --argjson actual "$expected_per_client_mbps" '{requiredMinContentionTargetClientMbps:$required,actualPerClientMbps:$actual}')"
 fi
 
 check_path "$handoff_root/README.md" "handoff"
@@ -307,6 +335,8 @@ jq -n \
   --argjson expectedContentionScenarios "$expected_contention_scenarios_json" \
   --argjson expectedContentionClients "$expected_contention_clients" \
   --argjson expectedPerClientMbps "$expected_per_client_mbps" \
+  --argjson requiredMinContentionClients "$required_min_contention_clients" \
+  --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson expectedCurveRows "$expected_curve_rows" \
   --argjson issues "$issues_array" \
   '{
@@ -322,6 +352,8 @@ jq -n \
     expectedContentionScenarios: $expectedContentionScenarios,
     expectedContentionClients: $expectedContentionClients,
     expectedPerClientMbps: $expectedPerClientMbps,
+    requiredMinContentionClients: $requiredMinContentionClients,
+    requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     issues: $issues
   }' >"$check_json"
 
@@ -335,6 +367,8 @@ jq -n \
   echo "- Expected curve rows per curve plan: \`$(jq -r '.expectedCurveRowsPerCurvePlan' "$check_json")\`"
   echo "- Expected contention clients: \`$(jq -r '.expectedContentionClients' "$check_json")\`"
   echo "- Expected per-client Mbps: \`$(jq -r '.expectedPerClientMbps' "$check_json")\`"
+  echo "- Required minimum contention clients: \`$(jq -r '.requiredMinContentionClients' "$check_json")\`"
+  echo "- Required minimum per-client Mbps: \`$(jq -r '.requiredMinContentionTargetClientMbps' "$check_json")\`"
   echo
   echo "## Issues"
   echo

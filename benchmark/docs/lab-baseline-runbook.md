@@ -99,7 +99,7 @@ benchmark/scripts/check-lab-handoff.sh \
   --handoff benchmark/build/benchmark-results/lab-handoff-<date>-<topology>
 ```
 
-The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, and contention row client-count/per-client-rate consistency. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
+The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, and contention row client-count/per-client-rate consistency. By default it also requires at least `100` planned contention clients and at least `5Mbps` per client; use explicit `--required-min-contention-*` overrides only for smoke handoffs that will not become the baseline of record. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
 
 For a baseline-of-record campaign, start with the lab planner. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
 
