@@ -224,6 +224,43 @@ benchmark/scripts/check-baseline-readiness.sh \
 
 The readiness gate fails when promoted artifacts are missing, validation did not pass, separate host evidence is absent, required scenario families are missing, capacity groups are unselected, required impairment profiles are missing, or netem status evidence was not captured.
 
+## Single-Host Namespace Smoke
+
+Use `run-netns-worker-smoke.sh` when separate lab hosts are not available but you still need impairment outside the JVM. It creates a server namespace and one or two receiver namespaces connected with veth pairs, runs the normal `server-worker` and `receiver-worker` benchmark roles, applies `tc netem` inside the selected namespace path, and merges results with `merge-worker-results.sh`.
+
+Dry-run first to inspect the namespace topology and exact worker commands:
+
+```bash
+benchmark/scripts/run-netns-worker-smoke.sh \
+  --case fairness \
+  --clients 100 \
+  --affected-clients 10 \
+  --latency 50ms \
+  --jitter 5ms \
+  --loss 2% \
+  --direction both \
+  --payload-size 512 \
+  --per-client-mbps 5
+```
+
+Run it with root or equivalent `CAP_NET_ADMIN` privileges to create namespaces and qdiscs:
+
+```bash
+sudo benchmark/scripts/run-netns-worker-smoke.sh \
+  --execute \
+  --case blackhole \
+  --clients 100 \
+  --affected-clients 10 \
+  --blackhole-after 30s \
+  --payload-size 512 \
+  --per-client-mbps 5 \
+  --warmup 10s \
+  --duration 60s \
+  --iterations 3
+```
+
+This is stronger than loopback because server-to-client, client-to-server, or symmetric impairment can be applied as real qdisc egress on veth devices. It is still a single-host smoke path: it does not prove NIC line-rate, interrupt behavior, switch path behavior, or separate-host clock/topology evidence. Use it to catch regression shape, retry pressure, and external blackhole behavior before spending lab time; use promoted separate-host lab baselines for performance-engineering comparisons.
+
 ## Remote Worker Runs
 
 For lab validation, run the server and receiver workers on separate machines. Start the server first:
