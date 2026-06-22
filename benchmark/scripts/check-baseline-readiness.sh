@@ -203,6 +203,9 @@ if [[ -s "$lab_manifest" ]]; then
   if ! jq -e '.baselineKind == "raknet-lab-baseline"' "$lab_manifest" >/dev/null; then
     append_issue "invalid-lab-baseline-kind" "lab-baseline" "promoted lab baseline has an unexpected baselineKind" "{\"path\":\"$lab_manifest\"}"
   fi
+  if jq -e '.allowValidationBypasses == true' "$lab_manifest" >/dev/null; then
+    append_issue "lab-validation-bypasses-allowed" "lab-baseline" "promoted lab baseline allowed validation bypasses" "{\"path\":\"$lab_manifest\"}"
+  fi
 fi
 
 if [[ -s "$lab_validation" ]]; then
@@ -233,6 +236,23 @@ if [[ -s "$lab_validation" ]]; then
   fi
   if jq -e '.allowLoosePrereqGates == true' "$lab_validation" >/dev/null; then
     append_issue "lab-prereq-strict-gates-bypassed" "lab-baseline" "lab validation allowed loose prerequisite gates" "{\"path\":\"$lab_validation\"}"
+  fi
+  validation_bypass_flags="$(jq -r '
+    [
+      ["allowUnstable", (.allowUnstable // false)],
+      ["allowDisconnects", (.allowDisconnects // false)],
+      ["allowMissingCapacity", (.allowMissingCapacity // false)],
+      ["allowUnselectedCapacity", (.allowUnselectedCapacity // false)],
+      ["allowMissingHostContext", (.allowMissingHostContext // false)],
+      ["allowMissingPrereqContext", (.allowMissingPrereqContext // false)],
+      ["allowLoosePrereqGates", (.allowLoosePrereqGates // false)]
+    ]
+    | map(select(.[1] == true) | .[0])
+    | join(",")
+  ' "$lab_validation")"
+  if [[ -n "$validation_bypass_flags" ]]; then
+    extra="$(jq -n --arg path "$lab_validation" --arg flags "$validation_bypass_flags" '{path:$path,bypassFlags:($flags | split(","))}')"
+    append_issue "lab-validation-bypass-flags" "lab-baseline" "lab validation used baseline bypass flags" "$extra"
   fi
   if ! jq -e --argjson required "$required_min_ready_prereq_reports" '(.strictPrereqReportCount // 0) >= $required' "$lab_validation" >/dev/null; then
     extra="$(jq -n --argjson required "$required_min_ready_prereq_reports" --argjson actual "$(jq -r '.strictPrereqReportCount // 0' "$lab_validation")" '{requiredMinStrictPrereqReports:$required,actualStrictPrereqReportCount:$actual}')"
@@ -310,6 +330,9 @@ fi
 if [[ -s "$impairment_manifest" ]]; then
   if ! jq -e '.baselineKind == "raknet-lab-impairment-campaign"' "$impairment_manifest" >/dev/null; then
     append_issue "invalid-impairment-baseline-kind" "impairment-baseline" "promoted impairment baseline has an unexpected baselineKind" "{\"path\":\"$impairment_manifest\"}"
+  fi
+  if jq -e '.allowValidationBypasses == true' "$impairment_manifest" >/dev/null; then
+    append_issue "impairment-validation-bypasses-allowed" "impairment-baseline" "promoted impairment baseline allowed validation bypasses" "{\"path\":\"$impairment_manifest\"}"
   fi
 fi
 
@@ -419,6 +442,8 @@ next_actions_json="$(jq -s '
       "lab-prereq-not-ready",
       "lab-prereq-report-failed",
       "lab-prereq-not-separate-hosts",
+      "lab-validation-bypasses-allowed",
+      "lab-validation-bypass-flags",
       "lab-prereq-strict-gates-bypassed",
       "lab-prereq-strict-gates-missing",
       "lab-prereq-strict-gates-not-separate-hosts"

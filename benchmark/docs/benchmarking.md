@@ -249,7 +249,7 @@ benchmark/scripts/check-baseline-readiness.sh \
   --out benchmark/build/benchmark-results/baseline-readiness
 ```
 
-The readiness gate fails when promoted artifacts are missing, validation did not pass, separate host evidence is absent, required scenario families are missing, required curve payload sizes are absent from either aggregate or capacity-selector rows, capacity groups are unselected, required impairment profiles are missing, impairment profiles lack required curve payload or contention-scenario coverage, netem status evidence was not captured, or the promoted perfect-network validation did not enforce the requested client-count and per-client contention gates. The recommended baseline handoff uses `500` clients at `5Mbps` per client; smaller campaigns should remain smoke evidence, not the baseline of record.
+The readiness gate fails when promoted artifacts are missing, validation bypass markers are present, validation did not pass, separate host evidence is absent, required scenario families are missing, required curve payload sizes are absent from either aggregate or capacity-selector rows, capacity groups are unselected, required impairment profiles are missing, impairment profiles lack required curve payload or contention-scenario coverage, netem status evidence was not captured, or the promoted perfect-network validation did not enforce the requested client-count and per-client contention gates. The recommended baseline handoff uses `500` clients at `5Mbps` per client; smaller or bypassed campaigns should remain smoke evidence, not the baseline of record.
 
 ## Single-Host Namespace Smoke
 

@@ -163,7 +163,7 @@ benchmark/scripts/check-baseline-readiness.sh \
 ```
 
 The baseline is not accepted as the comparison baseline until this readiness check passes.
-Readiness also checks that the promoted perfect-network validation enforced the requested contention scale and per-client Mbps target. The recommended handoff uses `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
+Readiness also checks that the promoted artifacts have no validation bypass markers and that the perfect-network validation enforced the requested contention scale and per-client Mbps target. The recommended handoff uses `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
 
 ## Adverse-Network Lab Plan
 
