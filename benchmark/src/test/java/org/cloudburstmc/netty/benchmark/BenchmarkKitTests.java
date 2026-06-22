@@ -340,6 +340,10 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("--min-contention-clients \"2\""));
         Assertions.assertTrue(readme.contains("--min-contention-target-client-mbps \"1\""));
         Assertions.assertTrue(readme.contains("check-lab-host-prereqs.sh"));
+        Assertions.assertTrue(readme.contains("--expect-mtu <mtu>"));
+        Assertions.assertTrue(readme.contains("--expect-min-cpus <min-cpus>"));
+        Assertions.assertTrue(readme.contains("--require-clock-sync"));
+        Assertions.assertTrue(readme.contains("--require-no-netem"));
         Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
         Assertions.assertTrue(readme.contains("--required-min-contention-clients \"2\""));
         Assertions.assertTrue(readme.contains("--required-min-contention-target-client-mbps \"1\""));
