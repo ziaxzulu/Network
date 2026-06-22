@@ -10,6 +10,7 @@ latency_regression_pct="10"
 queue_regression_pct="50"
 allow_failed_validation=false
 require_validation=false
+allow_validation_bypasses=false
 
 usage() {
   cat <<'USAGE'
@@ -26,6 +27,7 @@ Options:
   --queue-regression-pct N        Fail when max queued bytes rises by more than N percent. Default: 50.
   --require-validation            Fail when either input does not have validation.json.
   --allow-failed-validation       Do not fail when baseline or candidate validation.json exists and is failed.
+  --allow-validation-bypasses     Allow validation files that used baseline bypass flags. Smoke only.
   --help                          Show this help.
 
 Suite directories prefer suite-aggregate.jsonl when present, falling back to
@@ -70,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-failed-validation)
       allow_failed_validation=true
+      shift
+      ;;
+    --allow-validation-bypasses)
+      allow_validation_bypasses=true
       shift
       ;;
     --require-validation)
@@ -152,6 +158,7 @@ candidate_validation="$(resolve_validation "$candidate_path" "$candidate_summary
 
 validation_failures=()
 validation_missing=()
+validation_bypasses=()
 for label_and_path in "baseline:$baseline_validation" "candidate:$candidate_validation"; do
   label="${label_and_path%%:*}"
   validation_path="${label_and_path#*:}"
@@ -167,6 +174,22 @@ for label_and_path in "baseline:$baseline_validation" "candidate:$candidate_vali
   fi
   if ! jq -e '.passed == true' "$validation_path" >/dev/null; then
     validation_failures+=("$label:$validation_path")
+  fi
+  validation_bypass_flags="$(jq -r '
+    [
+      ["allowUnstable", (.allowUnstable // false)],
+      ["allowDisconnects", (.allowDisconnects // false)],
+      ["allowMissingCapacity", (.allowMissingCapacity // false)],
+      ["allowUnselectedCapacity", (.allowUnselectedCapacity // false)],
+      ["allowMissingHostContext", (.allowMissingHostContext // false)],
+      ["allowMissingPrereqContext", (.allowMissingPrereqContext // false)],
+      ["allowLoosePrereqGates", (.allowLoosePrereqGates // false)]
+    ]
+    | map(select(.[1] == true) | .[0])
+    | join(",")
+  ' "$validation_path")"
+  if [[ -n "$validation_bypass_flags" ]]; then
+    validation_bypasses+=("$label:$validation_path:$validation_bypass_flags")
   fi
 done
 
@@ -386,6 +409,10 @@ if [[ "$allow_failed_validation" == "true" ]]; then
   validation_failure_rows=0
 fi
 validation_missing_rows="${#validation_missing[@]}"
+validation_bypass_rows="${#validation_bypasses[@]}"
+if [[ "$allow_validation_bypasses" == "true" ]]; then
+  validation_bypass_rows=0
+fi
 
 write_report() {
   {
@@ -411,6 +438,7 @@ write_report() {
     echo "- Queue regression threshold: \`$queue_regression_pct%\`"
     echo "- Require validation: \`$require_validation\`"
     echo "- Allow failed validation: \`$allow_failed_validation\`"
+    echo "- Allow validation bypasses: \`$allow_validation_bypasses\`"
     echo
     echo "| Result | Count |"
     echo "| --- | ---: |"
@@ -421,6 +449,7 @@ write_report() {
     echo "| Extra candidate rows | $extra_rows |"
     echo "| Failed validation inputs | ${#validation_failures[@]} |"
     echo "| Missing validation inputs | ${#validation_missing[@]} |"
+    echo "| Validation bypass inputs | ${#validation_bypasses[@]} |"
     echo
     if [[ "${#validation_missing[@]}" -gt 0 ]]; then
       echo "## Missing Validation"
@@ -441,6 +470,20 @@ write_report() {
         failure_label="${failure%%:*}"
         failure_path="${failure#*:}"
         echo "| $failure_label | \`$failure_path\` | $(jq -r '.issues | length' "$failure_path") |"
+      done
+      echo
+    fi
+    if [[ "${#validation_bypasses[@]}" -gt 0 ]]; then
+      echo "## Validation Bypasses"
+      echo
+      echo "| Input | Validation | Bypass flags |"
+      echo "| --- | --- | --- |"
+      for bypass in "${validation_bypasses[@]}"; do
+        bypass_label="${bypass%%:*}"
+        bypass_rest="${bypass#*:}"
+        bypass_path="${bypass_rest%:*}"
+        bypass_flags="${bypass_rest##*:}"
+        echo "| $bypass_label | \`$bypass_path\` | \`$bypass_flags\` |"
       done
       echo
     fi
@@ -504,8 +547,8 @@ write_report() {
       echo "| $status | $case_name | $scenario | $impairment | $iteration | $iterations | $delivered | $delivered_delta | $healthy_delta | $affected_delta | $client_p50 | $client_p50_delta | $client_p99 | $client_p99_delta | $send_ratio | $send_ratio_delta | $affected_send_ratio_delta | $datagram_out_s | $datagram_out_s_delta | $stale_s_delta | $nack_out_s_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $healthy_fairness_delta | $affected_fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
     done
     echo
-    if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 || "$validation_missing_rows" -gt 0 ]]; then
-      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $validation_failure_rows failed validation input(s), $validation_missing_rows missing validation input(s)."
+    if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 || "$validation_missing_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then
+      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $validation_failure_rows failed validation input(s), $validation_missing_rows missing validation input(s), $validation_bypass_rows validation bypass input(s)."
     else
       echo "Comparison passed."
     fi
@@ -521,6 +564,6 @@ else
   write_report
 fi
 
-if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 || "$validation_missing_rows" -gt 0 ]]; then
+if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 || "$validation_missing_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then
   exit 1
 fi

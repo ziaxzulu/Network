@@ -867,6 +867,45 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testComparisonRejectsValidationBypassesByDefault() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-compare-bypass-test");
+        Path baseline = output.resolve("baseline");
+        Path candidate = output.resolve("candidate");
+        writeComparableSuite(baseline, false);
+        writeComparableSuite(candidate, true);
+
+        ProcessResult rejectedComparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-baseline-suite.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("comparison.md").toString(),
+                "--require-validation"
+        );
+        Assertions.assertEquals(1, rejectedComparison.exitCode, rejectedComparison.output);
+        String rejectedReport = Files.readString(output.resolve("comparison.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(rejectedReport.contains("| Validation bypass inputs | 1 |"));
+        Assertions.assertTrue(rejectedReport.contains("allowUnstable"));
+        Assertions.assertTrue(rejectedReport.contains("1 validation bypass input(s)"));
+
+        ProcessResult smokeComparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-baseline-suite.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("comparison-smoke.md").toString(),
+                "--require-validation",
+                "--allow-validation-bypasses"
+        );
+        Assertions.assertEquals(0, smokeComparison.exitCode, smokeComparison.output);
+        String smokeReport = Files.readString(output.resolve("comparison-smoke.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(smokeReport.contains("- Allow validation bypasses: `true`"));
+        Assertions.assertTrue(smokeReport.contains("Comparison passed."));
+    }
+
+    @Test
     public void testImpairmentSummaryAndPromotionRejectValidationBypasses() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1544,6 +1583,58 @@ public class BenchmarkKitTests {
         Files.writeString(labRoot.resolve("bandwidth-capacity.jsonl"),
                 "{\"summaryKind\":\"bandwidth-capacity\",\"case\":\"curve-100_0mbps\",\"payloadSize\":512,"
                         + "\"selected\":true}\n",
+                StandardCharsets.UTF_8);
+    }
+
+    private static void writeComparableSuite(Path suiteRoot, boolean validationBypass) throws Exception {
+        Files.createDirectories(suiteRoot);
+        Files.writeString(suiteRoot.resolve("suite-aggregate.jsonl"),
+                "{\"summaryKind\":\"aggregate\","
+                        + "\"case\":\"fanout\","
+                        + "\"benchmarkName\":\"multi-client-fanout\","
+                        + "\"iteration\":\"aggregate\","
+                        + "\"measuredIterations\":3,"
+                        + "\"clients\":100,"
+                        + "\"payloadSize\":512,"
+                        + "\"reliability\":\"RELIABLE_ORDERED\","
+                        + "\"batched\":false,"
+                        + "\"targetMbps\":500,"
+                        + "\"targetClientMbps\":5,"
+                        + "\"impairmentProfile\":\"0ms/0ms/0%\","
+                        + "\"deliveredGbps\":1,"
+                        + "\"healthyDeliveredGbps\":1,"
+                        + "\"affectedDeliveredGbps\":0,"
+                        + "\"serverDatagramsOutPerSecond\":1,"
+                        + "\"sentToDeliveredBytesRatio\":1,"
+                        + "\"healthySentToDeliveredBytesRatio\":1,"
+                        + "\"affectedSentToDeliveredBytesRatio\":0,"
+                        + "\"clientMbpsP50\":5,"
+                        + "\"clientMbpsP99\":5,"
+                        + "\"healthyClientMbpsP50\":5,"
+                        + "\"healthyClientMbpsP99\":5,"
+                        + "\"affectedClientMbpsP50\":0,"
+                        + "\"affectedClientMbpsP99\":0,"
+                        + "\"deliveredGbpsSpreadPct\":0,"
+                        + "\"probeRttP99Millis\":1,"
+                        + "\"probeRttP99MillisSpreadPct\":0,"
+                        + "\"fairnessIndex\":1,"
+                        + "\"healthyFairnessIndex\":1,"
+                        + "\"affectedFairnessIndex\":1,"
+                        + "\"disconnects\":0,"
+                        + "\"staleDatagrams\":0,"
+                        + "\"staleDatagramsPerSecond\":0,"
+                        + "\"nackIn\":0,"
+                        + "\"nackOut\":0,"
+                        + "\"nackOutPerSecond\":0,"
+                        + "\"maxQueuedBytes\":0,"
+                        + "\"unstable\":false,"
+                        + "\"unstableReasons\":[],"
+                        + "\"artifact\":\"" + suiteRoot.resolve("fanout") + "\"}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(suiteRoot.resolve("validation.json"),
+                validationBypass
+                        ? "{\"passed\":true,\"allowUnstable\":true,\"issues\":[]}\n"
+                        : "{\"passed\":true,\"issues\":[]}\n",
                 StandardCharsets.UTF_8);
     }
 
