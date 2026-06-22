@@ -443,6 +443,48 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresCurvePayloadCoverage() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode missingReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingReadiness.path("ready").asBoolean());
+        Assertions.assertTrue(missingReadiness.path("requiredCurvePayloadSizes").isArray());
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code").contains("lab-missing-curve-payload"));
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code").contains("lab-missing-capacity-payload"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+        JsonNode readyReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(readyReadiness.path("ready").asBoolean());
+        Assertions.assertEquals(7, readyReadiness.path("requiredCurvePayloadSizes").size());
+    }
+
+    @Test
     public void testResultWriterProducesArtifacts() throws Exception {
         Path output = Files.createTempDirectory("raknet-benchmark-test");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
@@ -565,6 +607,53 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_in"));
         Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_out"));
         Assertions.assertTrue(rows.get(0).containsKey("max_queued_bytes"));
+    }
+
+    private static void writeReadinessLabBaseline(Path labBaseline, int... payloadSizes) throws Exception {
+        Files.createDirectories(labBaseline);
+        Files.writeString(labBaseline.resolve("baseline-manifest.json"),
+                "{\"baselineKind\":\"raknet-lab-baseline\"}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(labBaseline.resolve("validation.json"),
+                "{\"passed\":true,\"distinctHostnameCount\":2,\"hostReportCount\":2,\"rowCount\":"
+                        + (payloadSizes.length + 3)
+                        + ",\"capacityRowCount\":" + payloadSizes.length
+                        + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length
+                        + ",\"multi-client-fanout\":1,\"fairness\":1,\"disappearing-clients\":1}}\n",
+                StandardCharsets.UTF_8);
+
+        StringBuilder aggregate = new StringBuilder();
+        StringBuilder capacity = new StringBuilder();
+        for (int payloadSize : payloadSizes) {
+            aggregate.append("{\"case\":\"lab-curve-p")
+                    .append(payloadSize)
+                    .append("\",\"benchmarkName\":\"curve-100_0mbps\",\"scenario\":\"curve\",\"payloadSize\":")
+                    .append(payloadSize)
+                    .append("}\n");
+            capacity.append("{\"summaryKind\":\"bandwidth-capacity\",\"case\":\"lab-curve-p")
+                    .append(payloadSize)
+                    .append("\",\"payloadSize\":")
+                    .append(payloadSize)
+                    .append(",\"selected\":true}\n");
+        }
+        aggregate.append("{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\",\"payloadSize\":512}\n");
+        aggregate.append("{\"case\":\"fairness\",\"benchmarkName\":\"fairness\",\"payloadSize\":512}\n");
+        aggregate.append("{\"case\":\"disappear\",\"benchmarkName\":\"disappearing-clients\",\"payloadSize\":512}\n");
+        Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
+        Files.writeString(labBaseline.resolve("bandwidth-capacity.jsonl"), capacity.toString(), StandardCharsets.UTF_8);
+    }
+
+    private static void writeReadinessImpairmentBaseline(Path impairmentBaseline) throws Exception {
+        Files.createDirectories(impairmentBaseline);
+        Files.writeString(impairmentBaseline.resolve("impairment-baseline-manifest.json"),
+                "{\"baselineKind\":\"raknet-lab-impairment-campaign\"}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(impairmentBaseline.resolve("impairment-summary.json"),
+                "{\"passed\":true,\"requireNetemEvidence\":true,\"validationPassedCount\":5,\"profileCount\":5,"
+                        + "\"netemStatusEvidenceCount\":5,\"aggregateRowCount\":1,\"capacityRowCount\":1,"
+                        + "\"profiles\":[{\"profile\":\"perfect\"},{\"profile\":\"near-loss\"},"
+                        + "{\"profile\":\"regional-loss\"},{\"profile\":\"poor\"},{\"profile\":\"severe\"}]}\n",
+                StandardCharsets.UTF_8);
     }
 
     private static BenchmarkIterationResult iteration(String name, int iteration, int receivedBytes, double p99Millis) {

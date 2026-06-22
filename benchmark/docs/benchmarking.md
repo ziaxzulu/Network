@@ -236,7 +236,7 @@ benchmark/scripts/check-baseline-readiness.sh \
   --out benchmark/build/benchmark-results/baseline-readiness
 ```
 
-The readiness gate fails when promoted artifacts are missing, validation did not pass, separate host evidence is absent, required scenario families are missing, capacity groups are unselected, required impairment profiles are missing, or netem status evidence was not captured.
+The readiness gate fails when promoted artifacts are missing, validation did not pass, separate host evidence is absent, required scenario families are missing, required curve payload sizes are absent from either aggregate or capacity-selector rows, capacity groups are unselected, required impairment profiles are missing, or netem status evidence was not captured.
 
 ## Single-Host Namespace Smoke
 
