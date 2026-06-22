@@ -455,6 +455,55 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testDefaultLabHandoffPassesProductionScalePreflight() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-default-handoff-test");
+        Path handoff = output.resolve("handoff");
+        Path artifacts = output.resolve("artifacts");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(45),
+                "bash",
+                root.resolve("benchmark/scripts/prepare-lab-baseline-handoff.sh").toString(),
+                "--out", handoff.toString(),
+                "--artifact-root", artifacts.toString(),
+                "--server-host", "127.0.0.1",
+                "--interface", "lo",
+                "--profiles", "perfect",
+                "--warmup", "1s",
+                "--duration", "1s",
+                "--iterations", "1",
+                "--start-delay", "1s",
+                "--start-offset", "180s"
+        );
+        Assertions.assertEquals(0, result.exitCode, result.output);
+
+        JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertEquals(500, handoffManifest.path("contentionClientTotal").asInt());
+        Assertions.assertEquals(5.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals("receiver-a=250", handoffManifest.path("contentionReceivers").get(0).asText());
+        Assertions.assertEquals("receiver-b=250", handoffManifest.path("contentionReceivers").get(1).asText());
+
+        ProcessResult handoffCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight").toString()
+        );
+        Assertions.assertEquals(0, handoffCheck.exitCode, handoffCheck.output);
+        JsonNode handoffCheckJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(handoffCheckJson.path("ready").asBoolean());
+        Assertions.assertEquals(0, handoffCheckJson.path("issueCount").asInt());
+        Assertions.assertEquals(500, handoffCheckJson.path("expectedContentionClients").asInt());
+        Assertions.assertEquals(5.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(100, handoffCheckJson.path("requiredMinContentionClients").asInt());
+        Assertions.assertEquals(5.0D, handoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+    }
+
+    @Test
     public void testNetnsWorkerSmokeDryRunProducesManifest() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
