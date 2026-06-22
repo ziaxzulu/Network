@@ -251,6 +251,14 @@ Current-revision structural handoffs are generated artifacts, not durable commit
 
 Before lab operators distribute commands, regenerate a fresh handoff from the exact checkout that will be used for lab execution. A valid handoff should report `ready=true`, `issueCount=0`, `sourceAuditIssueCount=0`, `handoffIssueCount=0`, no dirty tracked Network files, and the expected `56` default curve, `56` raised-limiter curve, and `9` contention rows for the perfect-network plan. The impairment campaign should contain `perfect`, `near-loss`, `regional-loss`, `poor`, and `severe` profiles, each with the same `56/56/9` row shape. The refreshed source audit should also be `ready=true` with `0` issues and confirm the required Geyser, Cloudburst Protocol, Cloudburst Nukkit, and private CubeCraft checkouts are available. TeamZiax eBPF availability is captured in the same summary as optional companion evidence unless the operator explicitly includes `teamziax-ebpf` in `--require-sources`.
 
+Latest structural handoff generated during this status pass:
+
+```text
+benchmark/build/benchmark-results/current-fresh-handoff-20260622T110854Z/
+```
+
+It was generated from Network revision `30aeb80673d2` and reported `ready=true`, `issueCount=0`, source-audit ready, preflight ready, `56` default curve rows, `56` raised-limiter curve rows, and `9` contention rows. The expected, manifest, and generated helper prereq roles matched: `receiver-a`, `receiver-b`, and `server`. Because any subsequent commit changes the source-audit revision fingerprint, regenerate the handoff again from the exact checkout used for lab execution.
+
 The readiness report's `proofChecklist` JSON and Markdown sections show the required evidence chain: fresh handoff, perfect-network execution, impairment execution, and promotion. It remains intentionally `ready=false` until separate-host lab execution produces promoted perfect-network and impairment baselines.
 
 Older generated handoffs are intentionally not reusable after source or plan commits. Rerunning `check-lab-handoff.sh --require-source-audit --require-current-revision` against an older generated handoff can report `not-ready` with `handoff-source-audit-revision-mismatch` or `handoff-source-audit-sha-mismatch`, because the handoff embeds the source-audit revision and fingerprint from the checkout that created it. This is expected and useful. Before lab operators distribute commands, rerun `prepare-fresh-lab-handoff.sh` from the current checkout so source evidence, handoff generation, required preflight, freshness checks, and `fresh-handoff-summary.json` are produced together.
@@ -312,7 +320,7 @@ Current readiness audit in this worktree:
 
 ```bash
 benchmark/scripts/check-baseline-readiness.sh \
-  --out benchmark/build/benchmark-results/current-readiness-20260622T074430Z
+  --out benchmark/build/benchmark-results/readiness-current-fresh-handoff-20260622T110911Z
 ```
 
 The audit correctly reports `not-ready` with `6` issues because no promoted perfect-network baseline or promoted impairment baseline exists yet. Its blocking issues are the missing promoted lab baseline manifest, `validation.json`, `suite-aggregate.jsonl`, `bandwidth-capacity.jsonl`, impairment baseline manifest, and impairment campaign summary. This is the expected state before the separate-host lab campaign has been run, validated, and promoted.
