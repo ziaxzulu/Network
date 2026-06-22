@@ -1153,6 +1153,50 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testNetnsWorkerSmokeDryRunPlansExternalBlackhole() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-netns-blackhole-test").resolve("netns");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/run-netns-worker-smoke.sh").toString(),
+                "--out", output.toString(),
+                "--namespace-prefix", "rb-bh",
+                "--case", "blackhole",
+                "--clients", "10",
+                "--affected-clients", "2",
+                "--direction", "server-to-client",
+                "--payload-size", "64",
+                "--per-client-mbps", "1",
+                "--warmup", "1s",
+                "--duration", "2s",
+                "--iterations", "1",
+                "--start-offset", "30s",
+                "--blackhole-after", "1s"
+        );
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        Assertions.assertTrue(result.output.contains("External blackhole scheduled"));
+        Assertions.assertTrue(result.output.contains("apply 100% loss to server-to-client affected path"));
+        Assertions.assertFalse(result.output.contains("initial-netem"));
+
+        JsonNode manifest = JSON.readTree(Files.readString(output.resolve("manifest.json"), StandardCharsets.UTF_8));
+        Assertions.assertEquals("blackhole", manifest.path("case").asText());
+        Assertions.assertEquals("disappearing-clients", manifest.path("benchmarkName").asText());
+        Assertions.assertEquals(10, manifest.path("clients").asInt());
+        Assertions.assertEquals(8, manifest.path("healthyClients").asInt());
+        Assertions.assertEquals(2, manifest.path("affectedClients").asInt());
+        Assertions.assertEquals("server-to-client", manifest.path("direction").asText());
+        Assertions.assertTrue(manifest.path("blackholeAtEpochMillis").asLong()
+                > manifest.path("startAtEpochMillis").asLong());
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--impaired-clients 2"));
+        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--impaired-clients 2"));
+        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--clients 2"));
+        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
+    }
+
+    @Test
     public void testBaselineReadinessRequiresCurvePayloadCoverage() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
