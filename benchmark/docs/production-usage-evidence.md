@@ -32,6 +32,26 @@ The benchmark is a good transport-level synthetic for established RakNet behavio
 
 It is not a full Bedrock production emulator yet. Compression thresholds and algorithms are not modeled, logical packet size distributions are synthetic, and true host/NIC-level validation still needs `tc`, lab routing rules, or remote workers.
 
+## Synthetic Fitness Verdict
+
+The current benchmark is fit for the first optimization baseline if the baseline claim is scoped correctly:
+
+- Good synthetic for Network transport behavior after Bedrock or proxy code has produced outbound `ByteBuf` payloads.
+- Good synthetic for comparing code changes that affect RakNet send loops, queueing, ACK/NACK handling, split packets, datagram packing, retry pressure, and peer servicing fairness.
+- Good synthetic for detecting regressions where aggregate throughput looks healthy but poor links consume extra send work or healthy clients stop receiving their intended share.
+- Not sufficient for claims about Bedrock application behavior, compression CPU cost, exact gameplay packet distributions, proxy pass-through versus re-encode behavior, or real NIC line rate until lab workers and host-level impairment are used.
+
+Use the local `smoke` and `pilot` profiles as development regression fixtures. Use the generated remote lab handoff as the baseline of record. Local loopback can reveal overload knees and artifact-shape regressions, but it must not be used as proof that the library can sustain a given Gbps rate on commodity network hardware.
+
+The base synthetic therefore needs two lanes:
+
+| Lane | What it proves | Why it matches production | What remains outside the claim |
+| --- | --- | --- | --- |
+| Best-case bandwidth curve | Maximum stable established-channel payload throughput and the overload knee for one client/server pair. | Production sends eventually become `RakMessage(ByteBuf)` traffic on one ordered Rak channel, with MTU and split-packet behavior owned by Network. | Real NIC line rate, compression cost, and exact application packet mix. |
+| Multi-client contention | Whether many established clients keep receiving fair service while server send work, queues, stale datagrams, ACK/NACK, and disconnects stay bounded. | Production has hundreds of connected clients, batch/fanout/resource-pack traffic, and slow-client backlog protection. | Exact role topology, proxy upstream/downstream pairing, and host-level packet loss unless remote workers plus `tc` are used. |
+| Mixed-network fairness | Whether impaired clients degrade healthy clients or burn disproportionate server send work. | Real deployments include clients on poor Wi-Fi, distant routes, jitter, and packet loss. | Congestion-control correctness is observed but not changed by this phase. |
+| Disappearing clients | Whether closed, stalled, or blackholed clients create retry storms or queue growth that harms healthy clients. | Production clients vanish or become unreachable while the server still has data queued. | Kernel/NIC blackhole fidelity unless the lab applies packet drops outside the JVM. |
+
 ## Evidence And Benchmark Implications
 
 | Evidence | Source | Benchmark implication |

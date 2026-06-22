@@ -9,6 +9,21 @@ The benchmark suite is meant to answer two different questions:
 - What is the best-case capacity of the transport stack when the network is not the bottleneck?
 - Under production-like contention, do healthy clients remain fairly served when other clients are slow, lossy, or disappear?
 
+## Recommended Baseline Of Record
+
+The baseline of record should be a promoted remote-lab package, not a loopback run. It should include the matrix below before transport optimization work starts, so later code changes can be compared against a stable known-good artifact.
+
+| Group | Required rows | Primary reason | Primary pass/fail signals |
+| --- | --- | --- | --- |
+| Perfect-network capacity | One-client `bandwidth-latency-curve` for payloads `64`, `256`, `512`, `1200`, `1340`, `1400`, and `262144`, with default packet limits and raised production-like packet limits. | Establish the best-case Gbps ceiling, messages/sec, split-packet behavior, and overload knee before changing send policy. | Highest stable delivered Gbps, p95/p99 probe RTT, max queued bytes, send/deliver ratio, disconnects, stale datagrams, ACK/NACK pressure. |
+| Immediate fanout | `multi-client-fanout` at `100` and `500` clients, including the `100x1Mbps` small-packet `256B` lane and `5Mbps` per-client `512B` lane. | Covers latency-sensitive sends outside batch/resource-pack pacing and production-style hundreds-of-clients fanout. | Per-client Mbps p50/p99, healthy fairness, p99 probe RTT, max queued bytes, datagrams out/s, disconnects. |
+| Batched game traffic | `batched-game-traffic` at `10ms`, `20ms`, and `50ms` cadences with mixed `128`, `512`, and `1200` encoded payload sizes. | Matches Rak flush timing, public Nukkit `20ms` network ticks, Protocol/Geyser `50ms` batch flushing, and private CubeCraft `10ms` transport flush evidence. | Delivered logical packets/sec, delivered Gbps, p99 probe RTT, queue growth, datagram packing/send-work ratio. |
+| Resource-pack transfer | `resource-pack-transfer` with `8KiB` and `256KiB` chunk profiles around `200ms` pacing. | Covers public Nukkit smaller resource-pack responses and Geyser large resource-pack chunk behavior. | Delivered Gbps, split-heavy stability, p99 probe RTT, queue growth, disconnects. |
+| Mixed-network fairness | `fairness` with `100` clients and `10` impaired clients at `50ms/5ms/2%`, `100ms/10ms/5%`, and `200ms/20ms/10%`; repeat the representative row in the impairment campaign. | Proves poor links do not starve healthy clients or consume disproportionate server work. | Healthy delivered Gbps, healthy client Mbps p50/p99, healthy fairness, affected undelivered Gbps, affected datagrams out/s, stale datagrams/s, NACK out/s. |
+| Disappearing clients | `disappearing-clients` with close, stop-reading, and blackhole modes at `100` clients with `10` affected clients; include host/NIC-level blackhole in the lab campaign. | Reproduces clients vanishing while server traffic is queued and catches retry-storm behavior. | Healthy delivered Gbps, affected undelivered Gbps, affected datagrams out/s, stale datagrams/s, max queued bytes, disconnect reason/state counts. |
+
+For a first optimization gate, compare candidates against the promoted perfect-network and impairment baselines with validation required. A candidate should fail when it loses total or healthy-client throughput, raises p99 latency or queue growth materially, lowers healthy-client fairness, or increases send-work/retry-pressure indicators even if aggregate delivered Gbps looks unchanged.
+
 ## Current Synthetic Coverage
 
 The current RakNet runner is a useful starting synthetic for established-channel server-to-client throughput:
