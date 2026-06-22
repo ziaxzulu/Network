@@ -37,23 +37,23 @@ For a stronger single-host smoke path, use `benchmark/scripts/run-netns-worker-s
 Latest local pilot artifact in this worktree:
 
 ```text
-benchmark/build/benchmark-results/local-pilot-20260622T030000Z/
+benchmark/build/benchmark-results/local-pilot-20260622T044216Z/
 ```
 
 This run completed the representative pilot profile and produced parseable suite, aggregate, capacity-selector, and comparison artifacts. All aggregate rows were marked unstable under the default stability policy, mostly because the short loopback run had p99 probe-latency spread. Treat it as a developer regression fixture and artifact-shape proof, not a baseline-of-record result:
 
 | Case | Delivered Gbps | Client p50 Mbps | p99 RTT ms | Max queue bytes | Unstable reason |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `pilot-curve-1c-mtu` / `curve-50_0mbps` | `0.04997184` | `49.97184` | `8.377811` | `80400` | `p99-spread` |
-| `pilot-curve-1c-mtu` / `curve-100_0mbps` | `0.09996864` | `99.96864` | `10.727241` | `156000` | `p99-spread` |
-| `pilot-curve-1c-mtu` / `curve-250_0mbps` | `0.24945024` | `249.45024` | `12.584566` | `402000` | `p99-spread` |
-| `pilot-fanout-100x5` | `0.497778688` | `4.9782784` | `60.472197` | `882210` | `throughput-spread,p99-spread` |
-| `pilot-fairness-100-10poor` | `0.449734656` | `4.996437333333333` | `35.845872` | `4284928` | `throughput-spread,p99-spread` |
-| `pilot-disappear-100-blackhole` | `0.46589952` | `4.991658666666667` | `72.388254` | `2569350` | `p99-spread` |
-| `pilot-batch-100-20ms` | `0.51136` | `5.1008` | `23.624111` | `757627` | `throughput-spread,p99-spread` |
-| `pilot-resource-100-8k-200ms` | `0.032768` | `0.32768` | `10.739542` | `8209` | `p99-spread` |
+| `pilot-curve-1c-mtu` / `curve-50_0mbps` | `0.0499776` | `49.9776` | `8.984421` | `78000` | `p99-spread` |
+| `pilot-curve-1c-mtu` / `curve-100_0mbps` | `0.09997056` | `99.97056` | `10.327039` | `158400` | `p99-spread` |
+| `pilot-curve-1c-mtu` / `curve-250_0mbps` | `0.24944448` | `249.44448` | `21.266786` | `435600` | `p99-spread` |
+| `pilot-fanout-100x5` | `0.4979638272` | `4.9799168` | `62.40744` | `508467` | `p99-spread` |
+| `pilot-fairness-100-10poor` | `0.44977152` | `4.99712` | `25.897949` | `4233216` | `p99-spread` |
+| `pilot-disappear-100-blackhole` | `0.46617531733333334` | `4.99712` | `58.947094` | `2767016` | `p99-spread` |
+| `pilot-batch-100-20ms` | `0.51136` | `5.1008` | `41.909064` | `229587` | `p99-spread` |
+| `pilot-resource-100-8k-200ms` | `0.032768` | `0.32768` | `10.842546` | `8209` | `p99-spread` |
 
-The capacity selector did not choose a stable point for the local pilot. The best observed curve row was `curve-250_0mbps` at `0.24945Gbps`, rejected because unstable rows are not allowed. A self-comparison of the same artifact passed with `8` OK rows and `0` regressions.
+The capacity selector did not choose a stable point for the local pilot. The best observed curve row was `curve-250_0mbps` at `0.249444Gbps`, rejected because unstable rows are not allowed. A self-comparison of the same artifact passed with `8` OK rows and `0` regressions.
 
 Latest local best-case curve artifact in this worktree:
 
