@@ -8,6 +8,7 @@ allow_existing=false
 allow_failed_summary=false
 allow_missing_netem_evidence=false
 allow_validation_bypasses=false
+allow_missing_retry_pressure_fields=false
 update_latest=true
 required_retry_pressure_fields="undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond"
 
@@ -28,6 +29,8 @@ Options:
   --allow-failed-summary          Allow promotion when impairment-summary.json is failed.
   --allow-missing-netem-evidence  Allow promotion when the summary did not require netem evidence.
   --allow-validation-bypasses     Allow promotion when profile validation used bypass flags. Smoke only.
+  --allow-missing-retry-pressure-fields
+                                  Allow promotion when summary used missing retry-pressure-field bypasses. Smoke only.
   --required-retry-pressure-fields CSV
                                   Required contention-row retry-pressure metric fields.
                                   Default: undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond.
@@ -71,6 +74,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-validation-bypasses)
       allow_validation_bypasses=true
+      shift
+      ;;
+    --allow-missing-retry-pressure-fields)
+      allow_missing_retry_pressure_fields=true
       shift
       ;;
     --required-retry-pressure-fields)
@@ -177,6 +184,11 @@ fi
 if jq -e '.allowValidationBypasses == true' "$summary_json" >/dev/null && [[ "$allow_validation_bypasses" != "true" ]]; then
   echo "impairment campaign summary allowed profile validation bypasses; refusing to promote baseline" >&2
   echo "Use --allow-validation-bypasses only for non-baseline smoke packages." >&2
+  exit 1
+fi
+if jq -e '.allowMissingRetryPressureFields == true' "$summary_json" >/dev/null && [[ "$allow_missing_retry_pressure_fields" != "true" ]]; then
+  echo "impairment campaign summary allowed missing retry-pressure fields; refusing to promote baseline" >&2
+  echo "Use --allow-missing-retry-pressure-fields only for non-baseline smoke packages." >&2
   exit 1
 fi
 
@@ -294,6 +306,7 @@ done < <(jq -r '
   echo "- Aggregate rows: \`$(jq -r '.aggregateRowCount' "$summary_json")\`"
   echo "- Capacity rows: \`$(jq -r '.capacityRowCount' "$summary_json")\`"
   echo "- Netem status evidence files: \`$(jq -r '.netemStatusEvidenceCount' "$summary_json")\`"
+  echo "- Allow missing retry-pressure fields: \`$allow_missing_retry_pressure_fields\`"
   echo "- Profile files copied: \`$copied_profile_files\`"
   echo
   echo "## Profiles"
@@ -357,6 +370,7 @@ jq -n \
   --argjson profileCount "$profile_count" \
   --argjson copiedProfileFiles "$copied_profile_files" \
   --argjson allowValidationBypasses "$allow_validation_bypasses" \
+  --argjson allowMissingRetryPressureFields "$allow_missing_retry_pressure_fields" \
   '{
     baselineKind: "raknet-lab-impairment-campaign",
     name: $name,
@@ -373,6 +387,7 @@ jq -n \
     profileCount: $profileCount,
     copiedProfileFiles: $copiedProfileFiles,
     allowValidationBypasses: $allowValidationBypasses,
+    allowMissingRetryPressureFields: $allowMissingRetryPressureFields,
     summary: $summary[0],
     promotedFiles: $promotedFiles[0]
   }' >"$destination/impairment-baseline-manifest.json"

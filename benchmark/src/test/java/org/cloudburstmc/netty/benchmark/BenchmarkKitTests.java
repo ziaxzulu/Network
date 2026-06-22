@@ -1362,7 +1362,8 @@ public class BenchmarkKitTests {
                 "--out", output.resolve("baselines").toString(),
                 "--name", "impairment-missing-summary-retry",
                 "--no-latest",
-                "--allow-validation-bypasses"
+                "--allow-validation-bypasses",
+                "--allow-missing-retry-pressure-fields"
         );
         Assertions.assertEquals(1, missingRetryPromotion.exitCode, missingRetryPromotion.output);
         Assertions.assertTrue(missingRetryPromotion.output.contains("undeliveredServerGbps"));
@@ -1393,6 +1394,49 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(rejectedPromotion.output.contains("affectedServerDatagramsOutPerSecond"));
         Assertions.assertFalse(Files.exists(output.resolve(
                 "baselines/impairment-missing-retry-fields/impairment-baseline-manifest.json")));
+    }
+
+    @Test
+    public void testImpairmentPromotionRejectsMissingRetryPressureBypassMarker() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-impairment-promotion-retry-bypass-test");
+        Path summary = output.resolve("summary");
+        writeComparableImpairmentSummary(summary, false);
+        Files.writeString(summary.resolve("impairment-summary.json"),
+                Files.readString(summary.resolve("impairment-summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"allowValidationBypasses\":false,",
+                                "\"allowValidationBypasses\":false,\"allowMissingRetryPressureFields\":true,"),
+                StandardCharsets.UTF_8);
+
+        ProcessResult rejectedPromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-impairment.sh").toString(),
+                "--input", summary.toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "impairment-retry-bypass",
+                "--no-latest"
+        );
+        Assertions.assertEquals(1, rejectedPromotion.exitCode, rejectedPromotion.output);
+        Assertions.assertTrue(rejectedPromotion.output.contains("allowed missing retry-pressure fields"));
+        Assertions.assertFalse(Files.exists(output.resolve(
+                "baselines/impairment-retry-bypass/impairment-baseline-manifest.json")));
+
+        ProcessResult smokePromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-impairment.sh").toString(),
+                "--input", summary.toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "impairment-retry-bypass-smoke",
+                "--no-latest",
+                "--allow-missing-retry-pressure-fields"
+        );
+        Assertions.assertEquals(0, smokePromotion.exitCode, smokePromotion.output);
+        JsonNode promotionManifest = JSON.readTree(Files.readString(
+                output.resolve("baselines/impairment-retry-bypass-smoke/impairment-baseline-manifest.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(promotionManifest.path("allowMissingRetryPressureFields").asBoolean());
+        Assertions.assertTrue(promotionManifest.path("summary").path("allowMissingRetryPressureFields").asBoolean());
     }
 
     @Test
