@@ -147,6 +147,7 @@ else
 fi
 
 source_audit_json="$source_audit_out/source-audit.json"
+handoff_manifest_json="$handoff_out/handoff-manifest.json"
 preflight_out="$handoff_out/preflight"
 summary_json="$handoff_out/fresh-handoff-summary.json"
 
@@ -208,12 +209,15 @@ jq -n \
   --arg handoff "$handoff_out" \
   --arg artifactRoot "$artifact_root" \
   --arg sourceAuditPath "$source_audit_json" \
+  --arg handoffManifestPath "$handoff_manifest_json" \
   --arg preflightPath "$preflight_out/handoff-check.json" \
   --arg summary "$summary_json" \
   --slurpfile sourceAuditData "$source_audit_json" \
+  --slurpfile handoffManifestData "$handoff_manifest_json" \
   --slurpfile preflightData "$preflight_out/handoff-check.json" \
   '
     ($sourceAuditData[0] // {}) as $sourceAudit |
+    ($handoffManifestData[0] // {}) as $manifest |
     ($preflightData[0] // {}) as $preflight |
     {
       kind: $kind,
@@ -277,6 +281,18 @@ jq -n \
       },
       handoff: $handoff,
       artifactRoot: $artifactRoot,
+      execution: {
+        handoffManifest: $handoffManifestPath,
+        readme: ($manifest.readme // ""),
+        artifactCollectionJson: ($manifest.artifactCollectionJson // ""),
+        artifactCollectionMd: ($manifest.artifactCollectionMd // ""),
+        prereqScript: ($manifest.prereqScript // ""),
+        promoteScript: ($manifest.promoteScript // ""),
+        perfectPlan: ($manifest.perfectPlan // ""),
+        impairmentPlan: ($manifest.impairmentPlan // ""),
+        perfectArtifacts: ($manifest.perfectArtifacts // ""),
+        impairmentArtifacts: ($manifest.impairmentArtifacts // "")
+      },
       sourceAudit: {
         path: $sourceAuditPath,
         sha256: (

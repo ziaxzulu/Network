@@ -1328,6 +1328,20 @@ public class BenchmarkKitTests {
                 summaryJson.path("productionEvidence").path("sha256").asText());
         Assertions.assertEquals(preflightJson.path("sourceAuditActualSha256").asText(),
                 summaryJson.path("sourceAudit").path("sha256").asText());
+        Assertions.assertEquals(handoff.resolve("handoff-manifest.json").toString(),
+                summaryJson.path("execution").path("handoffManifest").asText());
+        Assertions.assertEquals(handoffManifest.path("readme").asText(),
+                summaryJson.path("execution").path("readme").asText());
+        Assertions.assertEquals(handoffManifest.path("artifactCollectionJson").asText(),
+                summaryJson.path("execution").path("artifactCollectionJson").asText());
+        Assertions.assertEquals(handoffManifest.path("prereqScript").asText(),
+                summaryJson.path("execution").path("prereqScript").asText());
+        Assertions.assertEquals(handoffManifest.path("promoteScript").asText(),
+                summaryJson.path("execution").path("promoteScript").asText());
+        Assertions.assertEquals(handoffManifest.path("perfectPlan").asText(),
+                summaryJson.path("execution").path("perfectPlan").asText());
+        Assertions.assertEquals(handoffManifest.path("impairmentPlan").asText(),
+                summaryJson.path("execution").path("impairmentPlan").asText());
         Assertions.assertEquals(56, summaryJson.path("plannedRows").path("perfectCurve").asInt());
         Assertions.assertEquals(56, summaryJson.path("plannedRows").path("perfectRaisedCurve").asInt());
         Assertions.assertEquals(9, summaryJson.path("plannedRows").path("perfectContention").asInt());
