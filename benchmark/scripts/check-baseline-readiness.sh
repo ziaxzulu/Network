@@ -10,6 +10,7 @@ required_impairment_contention_scenarios="multi-client-fanout,fairness,disappear
 required_batch_intervals_ms="10,20,50"
 required_resource_pack_chunk_sizes="8192,262144"
 required_resource_pack_intervals_ms="200"
+required_disappearance_modes="blackhole"
 required_min_contention_clients="500"
 required_min_contention_target_client_mbps="5"
 required_min_prereq_reports="2"
@@ -33,6 +34,7 @@ Options:
   --required-batch-intervals-ms CSV Required batched-game-traffic intervals in milliseconds. Default: 10,20,50.
   --required-resource-pack-chunk-sizes CSV Required resource-pack chunk payload sizes. Default: 8192,262144.
   --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
+  --required-disappearance-modes CSV Required disappearing-client modes. Default: blackhole.
   --required-min-contention-clients N Required lab validation contention-client gate. Default: 500.
   --required-min-contention-target-client-mbps N Required lab validation per-client Mbps gate. Default: 5.
   --required-min-prereq-reports N Required lab prereq reports. Default: 2.
@@ -79,6 +81,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --required-resource-pack-intervals-ms)
       required_resource_pack_intervals_ms="$2"
+      shift 2
+      ;;
+    --required-disappearance-modes)
+      required_disappearance_modes="$2"
       shift 2
       ;;
     --required-min-contention-clients)
@@ -233,6 +239,7 @@ required_impairment_contention_json="$(csv_json_array "$required_impairment_cont
 required_batch_intervals_json="$(csv_json_duration_millis_array "$required_batch_intervals_ms")"
 required_resource_pack_chunks_json="$(csv_json_number_array "$required_resource_pack_chunk_sizes")"
 required_resource_pack_intervals_json="$(csv_json_duration_millis_array "$required_resource_pack_intervals_ms")"
+required_disappearance_modes_json="$(csv_json_array "$required_disappearance_modes")"
 
 if [[ ! -s "$lab_manifest" ]]; then
   append_issue "missing-lab-baseline-manifest" "lab-baseline" "promoted lab baseline manifest is missing" "{\"path\":\"$lab_manifest\"}"
@@ -381,12 +388,32 @@ if [[ -s "$lab_aggregate" ]]; then
     | select((any($actual[]; .payloadSize == $chunk and .batchIntervalMillis == $interval)) | not)
     | [$chunk, $interval] | @tsv
   ' "$lab_aggregate")"
-  while IFS=$'\t' read -r missing_chunk missing_interval; do
-    [[ -z "$missing_chunk" || -z "$missing_interval" ]] && continue
-    extra="$(jq -n --argjson payloadSize "$missing_chunk" --argjson batchIntervalMillis "$missing_interval" '{payloadSize:$payloadSize,batchIntervalMillis:$batchIntervalMillis}')"
-    append_issue "lab-missing-resource-pack-shape" "lab-baseline" "lab baseline is missing a required resource-pack chunk and interval shape" "$extra"
-  done <<<"$missing_resource_shapes"
-fi
+	  while IFS=$'\t' read -r missing_chunk missing_interval; do
+	    [[ -z "$missing_chunk" || -z "$missing_interval" ]] && continue
+	    extra="$(jq -n --argjson payloadSize "$missing_chunk" --argjson batchIntervalMillis "$missing_interval" '{payloadSize:$payloadSize,batchIntervalMillis:$batchIntervalMillis}')"
+	    append_issue "lab-missing-resource-pack-shape" "lab-baseline" "lab baseline is missing a required resource-pack chunk and interval shape" "$extra"
+	  done <<<"$missing_resource_shapes"
+
+	  missing_disappearance_modes="$(jq -r -s --argjson expected "$required_disappearance_modes_json" '
+	    def is_disappearance:
+	      ((.scenario // "") == "disappearing-clients")
+	      or ((.benchmarkName // "") == "disappearing-clients");
+	    def mode($row):
+	      if (($row.disappearanceMode // "") != "") then $row.disappearanceMode
+	      elif ((($row.case // "") | ascii_downcase) | contains("blackhole")) then "blackhole"
+	      elif ((($row.case // "") | ascii_downcase) | contains("stopread")) or ((($row.case // "") | ascii_downcase) | contains("stop-reading")) then "stop-reading"
+	      elif ((($row.case // "") | ascii_downcase) | contains("close")) then "close"
+	      else null end;
+	    ([.[] | select(is_disappearance) | mode(.) | select(. != null)] | unique) as $actual
+	    | $expected[] as $mode
+	    | select(($actual | index($mode)) == null)
+	    | $mode
+	  ' "$lab_aggregate")"
+	  while IFS= read -r missing_mode; do
+	    [[ -z "$missing_mode" ]] && continue
+	    append_issue "lab-missing-disappearance-mode" "lab-baseline" "lab baseline is missing a required disappearing-client mode" "{\"disappearanceMode\":\"$missing_mode\"}"
+	  done <<<"$missing_disappearance_modes"
+	fi
 
 if [[ -s "$lab_capacity" ]]; then
   missing_capacity_payloads="$(jq -r -s --argjson expected "$required_curve_payloads_json" '
@@ -559,12 +586,35 @@ if [[ -s "$impairment_summary" ]]; then
     | select((any($actual[]; .payloadSize == $chunk and .batchIntervalMillis == $interval)) | not)
     | [$profile, $chunk, $interval] | @tsv
   ' "$impairment_summary")"
-  while IFS=$'\t' read -r profile missing_chunk missing_interval; do
-    [[ -z "$profile" || -z "$missing_chunk" || -z "$missing_interval" ]] && continue
-    extra="$(jq -n --arg profile "$profile" --argjson payloadSize "$missing_chunk" --argjson batchIntervalMillis "$missing_interval" '{profile:$profile,payloadSize:$payloadSize,batchIntervalMillis:$batchIntervalMillis}')"
-    append_issue "impairment-missing-resource-pack-shape" "impairment-baseline" "impairment profile is missing a required resource-pack chunk and interval shape" "$extra"
-  done <<<"$missing_impairment_resource_shapes"
-fi
+	  while IFS=$'\t' read -r profile missing_chunk missing_interval; do
+	    [[ -z "$profile" || -z "$missing_chunk" || -z "$missing_interval" ]] && continue
+	    extra="$(jq -n --arg profile "$profile" --argjson payloadSize "$missing_chunk" --argjson batchIntervalMillis "$missing_interval" '{profile:$profile,payloadSize:$payloadSize,batchIntervalMillis:$batchIntervalMillis}')"
+	    append_issue "impairment-missing-resource-pack-shape" "impairment-baseline" "impairment profile is missing a required resource-pack chunk and interval shape" "$extra"
+	  done <<<"$missing_impairment_resource_shapes"
+
+	  missing_impairment_disappearance_modes="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedModes "$required_disappearance_modes_json" '
+	    def mode($row):
+	      if (($row.disappearanceMode // "") != "") then $row.disappearanceMode
+	      elif ((($row.case // "") | ascii_downcase) | contains("blackhole")) then "blackhole"
+	      elif ((($row.case // "") | ascii_downcase) | contains("stopread")) or ((($row.case // "") | ascii_downcase) | contains("stop-reading")) then "stop-reading"
+	      elif ((($row.case // "") | ascii_downcase) | contains("close")) then "close"
+	      else null end;
+	    (.profiles // [])[]
+	    | .profile as $profile
+	    | select(($expectedProfiles | index($profile)) != null)
+	    | ([.aggregate.contentionRows[]?
+	        | select((.benchmarkName // "") == "disappearing-clients")
+	        | mode(.) | select(. != null)] | unique) as $actual
+	    | $expectedModes[] as $mode
+	    | select(($actual | index($mode)) == null)
+	    | [$profile, $mode] | @tsv
+	  ' "$impairment_summary")"
+	  while IFS=$'\t' read -r profile missing_mode; do
+	    [[ -z "$profile" || -z "$missing_mode" ]] && continue
+	    extra="$(jq -n --arg profile "$profile" --arg disappearanceMode "$missing_mode" '{profile:$profile,disappearanceMode:$disappearanceMode}')"
+	    append_issue "impairment-missing-disappearance-mode" "impairment-baseline" "impairment profile is missing a required disappearing-client mode" "$extra"
+	  done <<<"$missing_impairment_disappearance_modes"
+	fi
 
 issues_array="$(jq -s '.' "$issues_jsonl")"
 next_actions_json="$(jq -s '
@@ -642,6 +692,7 @@ jq -n \
   --argjson requiredBatchIntervalsMillis "$required_batch_intervals_json" \
   --argjson requiredResourcePackChunkSizes "$required_resource_pack_chunks_json" \
   --argjson requiredResourcePackIntervalsMillis "$required_resource_pack_intervals_json" \
+  --argjson requiredDisappearanceModes "$required_disappearance_modes_json" \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson requiredMinPrereqReports "$required_min_prereq_reports" \
@@ -669,6 +720,7 @@ jq -n \
     requiredBatchIntervalsMillis: $requiredBatchIntervalsMillis,
     requiredResourcePackChunkSizes: $requiredResourcePackChunkSizes,
     requiredResourcePackIntervalsMillis: $requiredResourcePackIntervalsMillis,
+    requiredDisappearanceModes: $requiredDisappearanceModes,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     requiredMinPrereqReports: $requiredMinPrereqReports,
@@ -691,6 +743,7 @@ jq -n \
   echo "- Required batch intervals ms: \`$required_batch_intervals_ms\`"
   echo "- Required resource-pack chunk sizes: \`$required_resource_pack_chunk_sizes\`"
   echo "- Required resource-pack intervals ms: \`$required_resource_pack_intervals_ms\`"
+  echo "- Required disappearance modes: \`$required_disappearance_modes\`"
   echo "- Required minimum contention clients: \`$required_min_contention_clients\`"
   echo "- Required minimum contention target/client Mbps: \`$required_min_contention_target_client_mbps\`"
   echo "- Required prereq reports: \`$required_min_prereq_reports\`"

@@ -8,6 +8,7 @@ required_min_contention_target_client_mbps="5"
 required_batch_intervals_ms="10,20,50"
 required_resource_pack_chunk_sizes="8192,262144"
 required_resource_pack_intervals_ms="200"
+required_disappearance_modes="blackhole"
 
 usage() {
   cat <<'USAGE'
@@ -27,6 +28,7 @@ Options:
   --required-batch-intervals-ms CSV Required batched-game-traffic intervals in milliseconds. Default: 10,20,50.
   --required-resource-pack-chunk-sizes CSV Required resource-pack chunk payload sizes. Default: 8192,262144.
   --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
+  --required-disappearance-modes CSV Required disappearing-client modes. Default: blackhole.
   --help                           Show this help.
 
 Outputs:
@@ -63,6 +65,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --required-resource-pack-intervals-ms)
       required_resource_pack_intervals_ms="$2"
+      shift 2
+      ;;
+    --required-disappearance-modes)
+      required_disappearance_modes="$2"
       shift 2
       ;;
     --help|-h)
@@ -148,6 +154,7 @@ json_duration_millis_array_from_values() {
 required_batch_intervals_millis_json="$(csv_json_duration_millis_array "$required_batch_intervals_ms")"
 required_resource_pack_payloads_json="$(csv_json_number_array "$required_resource_pack_chunk_sizes")"
 required_resource_pack_intervals_millis_json="$(csv_json_duration_millis_array "$required_resource_pack_intervals_ms")"
+required_disappearance_modes_json="$(printf '%s\n' "$required_disappearance_modes" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R -s 'split("\n") | map(select(length > 0))')"
 
 handoff_root="$(resolve_path "$handoff_root")"
 if [[ -z "$out_dir" ]]; then
@@ -228,6 +235,7 @@ curve_payloads_json="$(jq -c '.curvePayloadSizes // []' "$manifest")"
 curve_rates_json="$(jq -c '.curveRatesMbps // []' "$manifest")"
 profiles_json="$(jq -c '.profiles // []' "$manifest")"
 batch_intervals="$(jq -r '(.batchIntervals // []) | join(",")' "$manifest")"
+contention_cases="$(jq -r '(.contentionCases // []) | join(",")' "$manifest")"
 resource_pack_chunk_sizes="$(jq -r '(.resourcePackChunkSizes // []) | join(",")' "$manifest")"
 resource_pack_interval="$(jq -r '.resourcePackInterval // ""' "$manifest")"
 expected_curve_rows="$(jq -r '((.curvePayloadSizes // []) | length) * ((.curveRatesMbps // []) | length)' "$manifest")"
@@ -340,6 +348,25 @@ if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenario
       "$(jq -n --argjson batchIntervalMillis "$interval" '{batchIntervalMillis:$batchIntervalMillis}')"
   done <<<"$missing_required_resource_intervals"
 fi
+if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("disappearing-clients") != null' >/dev/null; then
+  missing_required_disappearance_modes="$(jq -r -n --argjson required "$required_disappearance_modes_json" --arg cases "$contention_cases" '
+    def mode($value):
+      ($value | ascii_downcase) as $case
+      | if ($case | contains("blackhole")) then "blackhole"
+        elif ($case | contains("stopread")) or ($case | contains("stop-reading")) then "stop-reading"
+        elif ($case | contains("close")) then "close"
+        else empty end;
+    ($cases | split(",") | map(gsub("^\\s+|\\s+$"; "") | select(length > 0) | mode(.)) | unique) as $actual
+    | $required[] as $mode
+    | select(($actual | index($mode)) == null)
+    | $mode
+  ')"
+  while IFS= read -r mode; do
+    [[ -z "$mode" ]] && continue
+    append_issue "handoff-missing-required-disappearance-mode" "handoff" "handoff contention cases do not include a required disappearing-client mode" \
+      "$(jq -n --arg disappearanceMode "$mode" '{disappearanceMode:$disappearanceMode}')"
+  done <<<"$missing_required_disappearance_modes"
+fi
 
 check_path "$handoff_root/README.md" "handoff"
 check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
@@ -372,6 +399,7 @@ check_readme_contains "--required-min-contention-target-client-mbps \"$expected_
 check_readme_contains "--required-batch-intervals-ms \"$batch_intervals\"" "handoff README readiness command does not enforce the handoff batch intervals"
 check_readme_contains "--required-resource-pack-chunk-sizes \"$resource_pack_chunk_sizes\"" "handoff README readiness command does not enforce the handoff resource-pack chunk sizes"
 check_readme_contains "--required-resource-pack-intervals-ms \"$resource_pack_interval\"" "handoff README readiness command does not enforce the handoff resource-pack interval"
+check_readme_contains "--required-disappearance-modes \"$required_disappearance_modes\"" "handoff README readiness command does not enforce required disappearance modes"
 check_path "$perfect_plan/check-plan-freshness.sh" "perfect-plan" true
 check_path "$perfect_plan/host-capture-commands.sh" "perfect-plan" true
 check_path "$perfect_plan/merge-all.sh" "perfect-plan" true
@@ -444,8 +472,8 @@ check_contention_manifest() {
       "$(jq -n --arg path "$path" --arg scenario "$scenario" '{path:$path,scenario:$scenario}')"
   done <<<"$missing_scenarios"
 
-  if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("batched-game-traffic") != null' >/dev/null; then
-    local missing_batch_intervals
+	  if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("batched-game-traffic") != null' >/dev/null; then
+	    local missing_batch_intervals
     missing_batch_intervals="$(jq -r -s --argjson expected "$required_batch_intervals_millis_json" '
       ([.[] | select((.benchmarkName // "") == "batched-game-traffic") | (.batchIntervalMillis // empty | tonumber)] | unique) as $actual
       | $expected[] as $interval
@@ -456,10 +484,32 @@ check_contention_manifest() {
       [[ -z "$interval" ]] && continue
       append_issue "contention-missing-batch-interval" "$label" "contention manifest is missing a required batched-game-traffic interval" \
         "$(jq -n --arg path "$path" --argjson batchIntervalMillis "$interval" '{path:$path,batchIntervalMillis:$batchIntervalMillis}')"
-    done <<<"$missing_batch_intervals"
-  fi
+	    done <<<"$missing_batch_intervals"
+	  fi
 
-  local client_mismatches
+	  if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("disappearing-clients") != null' >/dev/null; then
+	    local missing_disappearance_modes
+	    missing_disappearance_modes="$(jq -r -s --argjson expected "$required_disappearance_modes_json" '
+	      def mode($row):
+	        if (($row.disappearanceMode // "") != "") then $row.disappearanceMode
+	        elif (($row.affectedKind // "") | startswith("disappearing-")) then (($row.affectedKind // "") | sub("^disappearing-"; ""))
+	        elif ((($row.case // "") | ascii_downcase) | contains("blackhole")) then "blackhole"
+	        elif ((($row.case // "") | ascii_downcase) | contains("stopread")) or ((($row.case // "") | ascii_downcase) | contains("stop-reading")) then "stop-reading"
+	        elif ((($row.case // "") | ascii_downcase) | contains("close")) then "close"
+	        else null end;
+	      ([.[] | select((.benchmarkName // "") == "disappearing-clients") | mode(.) | select(. != null)] | unique) as $actual
+	      | $expected[] as $mode
+	      | select(($actual | index($mode)) == null)
+	      | $mode
+	    ' "$path")"
+	    while IFS= read -r mode; do
+	      [[ -z "$mode" ]] && continue
+	      append_issue "contention-missing-disappearance-mode" "$label" "contention manifest is missing a required disappearing-client mode" \
+	        "$(jq -n --arg path "$path" --arg disappearanceMode "$mode" '{path:$path,disappearanceMode:$disappearanceMode}')"
+	    done <<<"$missing_disappearance_modes"
+	  fi
+
+	  local client_mismatches
   client_mismatches="$(jq -r -s --argjson expected "$expected_contention_clients" '
     .[]
     | select(((.clients // -1) | tonumber) != $expected)
@@ -594,6 +644,7 @@ jq -n \
   --argjson requiredBatchIntervalsMillis "$required_batch_intervals_millis_json" \
   --argjson requiredResourcePackPayloadSizes "$required_resource_pack_payloads_json" \
   --argjson requiredResourcePackIntervalsMillis "$required_resource_pack_intervals_millis_json" \
+  --argjson requiredDisappearanceModes "$required_disappearance_modes_json" \
   --argjson expectedContentionClients "$expected_contention_clients" \
   --argjson expectedPerClientMbps "$expected_per_client_mbps" \
   --argjson expectedMtu "$expected_mtu_json" \
@@ -629,6 +680,7 @@ jq -n \
     requiredBatchIntervalsMillis: $requiredBatchIntervalsMillis,
     requiredResourcePackPayloadSizes: $requiredResourcePackPayloadSizes,
     requiredResourcePackIntervalsMillis: $requiredResourcePackIntervalsMillis,
+    requiredDisappearanceModes: $requiredDisappearanceModes,
     expectedContentionClients: $expectedContentionClients,
     expectedPerClientMbps: $expectedPerClientMbps,
     expectedMtu: $expectedMtu,
@@ -656,6 +708,7 @@ jq -n \
   echo "- Required batch intervals ms: \`$required_batch_intervals_ms\`"
   echo "- Required resource-pack chunk sizes: \`$required_resource_pack_chunk_sizes\`"
   echo "- Required resource-pack intervals ms: \`$required_resource_pack_intervals_ms\`"
+  echo "- Required disappearance modes: \`$required_disappearance_modes\`"
   echo "- Expected MTU: \`$(jq -r '.expectedMtu' "$check_json")\`"
   echo "- Expected minimum CPUs: \`$(jq -r '.expectedMinCpus' "$check_json")\`"
   echo "- Require CPU performance governor: \`$(jq -r '.requireCpuPerformance' "$check_json")\`"

@@ -227,10 +227,11 @@ jq -c -n \
       ($row.payloadSize // "null" | tostring),
       ($row.reliability // "null" | tostring),
       ($row.targetClientMbps // "null" | tostring),
-      ($row.batchIntervalMillis // "0" | tostring),
-      ($row.logicalPacketsPerBatch // "1" | tostring),
-      ($row.batchGroups // "1" | tostring),
-      ($row.packetLimit // "null" | tostring),
+	      ($row.batchIntervalMillis // "0" | tostring),
+	      ($row.logicalPacketsPerBatch // "1" | tostring),
+	      ($row.batchGroups // "1" | tostring),
+	      ($row.disappearanceMode // "null" | tostring),
+	      ($row.packetLimit // "null" | tostring),
       ($row.globalPacketLimit // "null" | tostring),
       ($row.configuredMaxQueuedBytes // "null" | tostring)
     ] | join("|");
@@ -279,10 +280,11 @@ jq -c -n \
       packetLimit: ($row.packetLimit // null),
       globalPacketLimit: ($row.globalPacketLimit // null),
       configuredMaxQueuedBytes: ($row.configuredMaxQueuedBytes // null),
-      batchIntervalMillis: ($row.batchIntervalMillis // 0),
-      logicalPacketsPerBatch: ($row.logicalPacketsPerBatch // 1),
-      batchGroups: ($row.batchGroups // 1),
-      targetClientMbps: ($row.targetClientMbps // null),
+	      batchIntervalMillis: ($row.batchIntervalMillis // 0),
+	      logicalPacketsPerBatch: ($row.logicalPacketsPerBatch // 1),
+	      batchGroups: ($row.batchGroups // 1),
+	      disappearanceMode: ($row.disappearanceMode // null),
+	      targetClientMbps: ($row.targetClientMbps // null),
       deliveredGbps: ($row.deliveredGbps // null),
       probeRttP99Millis: ($row.probeRttP99Millis // null),
       maxQueuedBytes: ($row.maxQueuedBytes // null),
@@ -457,8 +459,8 @@ write_report() {
     fi
     echo "## Rows"
     echo
-    echo "| Status | Kind | Profile | Network | Case | Benchmark | Batch shape | Delivered Gbps | Delta | p99 RTT ms | Delta | Max queue | Delta | Healthy fairness delta | Reasons |"
-    echo "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+	    echo "| Status | Kind | Profile | Network | Case | Benchmark | Batch shape | Disappear mode | Delivered Gbps | Delta | p99 RTT ms | Delta | Max queue | Delta | Healthy fairness delta | Reasons |"
+	    echo "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -478,9 +480,10 @@ write_report() {
         "`" + .profile + "`",
         "`" + (.network // "-") + "`",
         "`" + (.case // "-") + "`",
-        "`" + (.benchmarkName // "-") + "`",
-        (batch_shape(.candidate) + " / " + batch_shape(.baseline)),
-        (side(.candidate; "deliveredGbps") + " / " + side(.baseline; "deliveredGbps")),
+	        "`" + (.benchmarkName // "-") + "`",
+	        (batch_shape(.candidate) + " / " + batch_shape(.baseline)),
+	        (side(.candidate; "disappearanceMode") + " / " + side(.baseline; "disappearanceMode")),
+	        (side(.candidate; "deliveredGbps") + " / " + side(.baseline; "deliveredGbps")),
         pct(.deltas.deliveredGbpsPct),
         (side(.candidate; "probeRttP99Millis") + " / " + side(.baseline; "probeRttP99Millis")),
         pct(.deltas.probeRttP99MillisPct),
@@ -489,9 +492,9 @@ write_report() {
         fmt(.deltas.healthyFairnessIndex),
         "`" + ((.statusReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_path" | while IFS=$'\t' read -r status kind profile network case_name benchmark batch_shape delivered delivered_delta p99 p99_delta queue queue_delta fairness_delta reasons; do
-      echo "| $status | $kind | $profile | $network | $case_name | $benchmark | $batch_shape | $delivered | $delivered_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $reasons |"
-    done
+	    ' "$jsonl_path" | while IFS=$'\t' read -r status kind profile network case_name benchmark batch_shape disappearance_mode delivered delivered_delta p99 p99_delta queue queue_delta fairness_delta reasons; do
+	      echo "| $status | $kind | $profile | $network | $case_name | $benchmark | $batch_shape | $disappearance_mode | $delivered | $delivered_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $reasons |"
+	    done
     echo
     if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then
       echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $summary_failure_rows failed campaign summary input(s), $netem_failure_rows netem evidence policy issue(s), $validation_bypass_rows validation bypass summary input(s)."

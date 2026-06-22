@@ -254,11 +254,12 @@ jq -c -n \
         clients: $row.clients,
         payloadSize: $row.payloadSize,
         reliability: $row.reliability,
-        batched: $row.batched,
-        batchIntervalMillis: ($row.batchIntervalMillis // 0),
-        logicalPacketsPerBatch: ($row.logicalPacketsPerBatch // 1),
-        batchGroups: ($row.batchGroups // 1),
-        targetMbps: $row.targetMbps,
+	        batched: $row.batched,
+	        batchIntervalMillis: ($row.batchIntervalMillis // 0),
+	        logicalPacketsPerBatch: ($row.logicalPacketsPerBatch // 1),
+	        batchGroups: ($row.batchGroups // 1),
+	        disappearanceMode: ($row.disappearanceMode // null),
+	        targetMbps: $row.targetMbps,
         targetClientMbps: $row.targetClientMbps,
         packetLimit: ($row.packetLimit // null),
         globalPacketLimit: ($row.globalPacketLimit // null),
@@ -312,10 +313,11 @@ jq -c -n \
     (($base.payloadSize // null) != ($cand.payloadSize // null)) as $payloadSizeMismatch |
     (($base.reliability // null) != ($cand.reliability // null)) as $reliabilityMismatch |
     (($base.batched // null) != ($cand.batched // null)) as $batchedMismatch |
-    (numeric_mismatch(($base.batchIntervalMillis // 0); ($cand.batchIntervalMillis // 0))) as $batchIntervalMismatch |
-    (numeric_mismatch(($base.logicalPacketsPerBatch // 1); ($cand.logicalPacketsPerBatch // 1))) as $logicalPacketsPerBatchMismatch |
-    (numeric_mismatch(($base.batchGroups // 1); ($cand.batchGroups // 1))) as $batchGroupsMismatch |
-    (numeric_mismatch($base.targetMbps; $cand.targetMbps)) as $targetMbpsMismatch |
+	    (numeric_mismatch(($base.batchIntervalMillis // 0); ($cand.batchIntervalMillis // 0))) as $batchIntervalMismatch |
+	    (numeric_mismatch(($base.logicalPacketsPerBatch // 1); ($cand.logicalPacketsPerBatch // 1))) as $logicalPacketsPerBatchMismatch |
+	    (numeric_mismatch(($base.batchGroups // 1); ($cand.batchGroups // 1))) as $batchGroupsMismatch |
+	    (($base.disappearanceMode // null) != ($cand.disappearanceMode // null)) as $disappearanceModeMismatch |
+	    (numeric_mismatch($base.targetMbps; $cand.targetMbps)) as $targetMbpsMismatch |
     (numeric_mismatch($base.targetClientMbps; $cand.targetClientMbps)) as $targetClientMbpsMismatch |
     (($base.impairmentProfile // "0ms/0ms/0%") != ($cand.impairmentProfile // "0ms/0ms/0%")) as $impairmentMismatch |
     (($base.packetLimit // null) != ($cand.packetLimit // null)) as $packetLimitMismatch |
@@ -327,10 +329,11 @@ jq -c -n \
       + (if $payloadSizeMismatch then ["payload-size-mismatch"] else [] end)
       + (if $reliabilityMismatch then ["reliability-mismatch"] else [] end)
       + (if $batchedMismatch then ["batched-mode-mismatch"] else [] end)
-      + (if $batchIntervalMismatch then ["batch-interval-mismatch"] else [] end)
-      + (if $logicalPacketsPerBatchMismatch then ["logical-packets-per-batch-mismatch"] else [] end)
-      + (if $batchGroupsMismatch then ["batch-groups-mismatch"] else [] end)
-      + (if $targetMbpsMismatch then ["target-mbps-mismatch"] else [] end)
+	      + (if $batchIntervalMismatch then ["batch-interval-mismatch"] else [] end)
+	      + (if $logicalPacketsPerBatchMismatch then ["logical-packets-per-batch-mismatch"] else [] end)
+	      + (if $batchGroupsMismatch then ["batch-groups-mismatch"] else [] end)
+	      + (if $disappearanceModeMismatch then ["disappearance-mode-mismatch"] else [] end)
+	      + (if $targetMbpsMismatch then ["target-mbps-mismatch"] else [] end)
       + (if $targetClientMbpsMismatch then ["target-client-mbps-mismatch"] else [] end)
       + (if $impairmentMismatch then ["impairment-profile-mismatch"] else [] end)
       + (if $packetLimitMismatch then ["packet-limit-mismatch"] else [] end)

@@ -222,7 +222,7 @@ benchmark/scripts/compare-baseline-suite.sh \
   --require-validation
 ```
 
-The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when matrix shape differs (clients, payload, reliability, batching, target rate, impairment, packet limits, or queue cap), when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds, when a present `validation.json` on either input is failed, or when validation passed only because a baseline bypass flag was used. For lab/promoted-baseline comparisons, pass `--require-validation` so both sides must include validation metadata. Use `--allow-validation-bypasses` only for non-baseline smoke comparisons. Reports also include per-client delivered Mbps percentiles, send/deliver ratio deltas, datagram/NACK/stale rate deltas, and healthy-vs-affected throughput/fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
+The comparison matches aggregate rows by case and benchmark scenario, or raw summary rows by case, benchmark scenario, and iteration. It exits non-zero when a candidate row is missing, when matrix shape differs (clients, payload, reliability, batching, target rate, impairment, packet limits, queue cap, or disappearance mode), when delivered throughput, p99 probe RTT, or max queued bytes breach the configured regression thresholds, when a present `validation.json` on either input is failed, or when validation passed only because a baseline bypass flag was used. For lab/promoted-baseline comparisons, pass `--require-validation` so both sides must include validation metadata. Use `--allow-validation-bypasses` only for non-baseline smoke comparisons. Reports also include per-client delivered Mbps percentiles, send/deliver ratio deltas, datagram/NACK/stale rate deltas, and healthy-vs-affected throughput/fairness deltas for contention cases. Defaults are `10%` throughput regression, `10%` p99 latency regression, and `50%` queue growth regression.
 
 When comparing suite directories, `compare-baseline-suite.sh` uses `suite-aggregate.jsonl` if present, so baseline-of-record comparisons operate on per-case medians and include throughput/p99 stability spread. Pass explicit `suite-summary.jsonl` paths only when you want raw per-iteration comparison.
 
@@ -250,10 +250,11 @@ benchmark/scripts/check-baseline-readiness.sh \
   --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
   --required-min-contention-clients 500 \
   --required-min-contention-target-client-mbps 5 \
+  --required-disappearance-modes blackhole \
   --out benchmark/build/benchmark-results/baseline-readiness
 ```
 
-The readiness gate fails when promoted artifacts are missing, validation bypass markers are present, validation did not pass, separate host evidence is absent, required scenario families are missing, required curve payload sizes are absent from either aggregate or capacity-selector rows, capacity groups are unselected or lack concrete positive-throughput selected candidates, required impairment profiles are missing, impairment profiles lack required curve payload or contention-scenario coverage, netem status evidence was not captured, or the promoted perfect-network validation did not enforce the requested client-count and per-client contention gates. The recommended baseline handoff uses `500` clients at `5Mbps` per client; smaller or bypassed campaigns should remain smoke evidence, not the baseline of record.
+The readiness gate fails when promoted artifacts are missing, validation bypass markers are present, validation did not pass, separate host evidence is absent, required scenario families are missing, required curve payload sizes are absent from either aggregate or capacity-selector rows, capacity groups are unselected or lack concrete positive-throughput selected candidates, required blackhole disappearance coverage is missing, required impairment profiles are missing, impairment profiles lack required curve payload or contention-scenario coverage, netem status evidence was not captured, or the promoted perfect-network validation did not enforce the requested client-count and per-client contention gates. The recommended baseline handoff uses `500` clients at `5Mbps` per client and includes `blackhole` disappearing-client rows; smaller or bypassed campaigns should remain smoke evidence, not the baseline of record.
 
 ## Single-Host Namespace Smoke
 
@@ -408,7 +409,7 @@ Important fields:
 - `impairmentLatencyMillis`, `impairmentJitterMillis`, and `impairmentLossPercent`: benchmark-managed client impairment applied to marked impaired clients
 - `stability`: per-case delivered-throughput and p99 probe RTT spread, plus unstable reasons
 - `deliveredLogicalPacketsPerSecond`: synthetic logical game packets delivered per second for batch runs
-- `disappearanceMode`: clean close or stop-reading behavior for disappearance runs
+- `disappearanceMode`: clean close, stop-reading, or benchmark-managed blackhole behavior for disappearance runs
 - `probeRttP95Millis` and `probeRttP99Millis`: latency under bulk load
 - `fairnessIndex`: Jain fairness index across clients, where `1.0` is perfectly even delivery
 - `healthyFairnessIndex`: Jain fairness for clients not marked impaired/disappearing

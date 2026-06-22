@@ -274,10 +274,11 @@ jq -s \
       batchGroups: ($server_iterations[0].batchGroups // $server.batchGroups // 1),
       packetLimit: ($server.packetLimit // null),
       globalPacketLimit: ($server.globalPacketLimit // null),
-      configuredMaxQueuedBytes: ($server.configuredMaxQueuedBytes // null),
-      targetMbps: ($server_iterations[0].targetMbps // 0),
-      targetClientMbps: ($server_iterations[0].targetClientMbps // 0),
-      startAtEpochMillis: ($server.startAtEpochMillis // 0),
+	      configuredMaxQueuedBytes: ($server.configuredMaxQueuedBytes // null),
+	      targetMbps: ($server_iterations[0].targetMbps // 0),
+	      targetClientMbps: ($server_iterations[0].targetClientMbps // 0),
+	      disappearanceMode: ($server_iterations[0].disappearanceMode // $server.disappearanceMode // null),
+	      startAtEpochMillis: ($server.startAtEpochMillis // 0),
       impairmentProfile: ((($server.impairmentLatencyMillis // 0) | tostring) + "ms/" + (($server.impairmentJitterMillis // 0) | tostring) + "ms/" + (($server.impairmentLossPercent // 0) | tostring) + "%"),
       impairmentLatencyMillis: ($server.impairmentLatencyMillis // 0),
       impairmentJitterMillis: ($server.impairmentJitterMillis // 0),
@@ -376,7 +377,7 @@ jq -s \
 jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
 
 {
-  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
+	  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
   jq -r '
     .aggregate as $a |
     [
@@ -391,10 +392,11 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.batched,
       $a.batchIntervalMillis,
       $a.logicalPacketsPerBatch,
-      $a.batchGroups,
-      $a.targetMbps,
-      $a.targetClientMbps,
-      $a.startAtEpochMillis,
+	      $a.batchGroups,
+	      $a.targetMbps,
+	      $a.targetClientMbps,
+	      $a.disappearanceMode,
+	      $a.startAtEpochMillis,
       $a.deliveredGbps,
       $a.healthyDeliveredGbps,
       $a.affectedDeliveredGbps,

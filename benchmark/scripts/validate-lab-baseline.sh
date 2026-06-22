@@ -643,10 +643,20 @@ jq -n \
           + (if (($planned | has("logicalPacketsPerBatch")) and n($matched.logicalPacketsPerBatch) != n($planned.logicalPacketsPerBatch)) then
               [issue("planned-logical-packets-per-batch-mismatch"; "aggregate row logical packets per batch differs from planned manifest"; $matched; {plannedLogicalPacketsPerBatch: n($planned.logicalPacketsPerBatch), actualLogicalPacketsPerBatch: n($matched.logicalPacketsPerBatch)})]
             else [] end)
-          + (if (($planned | has("batchGroups")) and n($matched.batchGroups) != n($planned.batchGroups)) then
-              [issue("planned-batch-groups-mismatch"; "aggregate row batch groups differ from planned manifest"; $matched; {plannedBatchGroups: n($planned.batchGroups), actualBatchGroups: n($matched.batchGroups)})]
-            else [] end)
-        end
+	          + (if (($planned | has("batchGroups")) and n($matched.batchGroups) != n($planned.batchGroups)) then
+	              [issue("planned-batch-groups-mismatch"; "aggregate row batch groups differ from planned manifest"; $matched; {plannedBatchGroups: n($planned.batchGroups), actualBatchGroups: n($matched.batchGroups)})]
+	            else [] end)
+	          + (
+	            (($planned.disappearanceMode // "") as $mode |
+	             ($planned.affectedKind // "") as $kind |
+	             (if $mode != "" then $mode
+	              elif ($kind | startswith("disappearing-")) then ($kind | sub("^disappearing-"; ""))
+	              else "" end)) as $plannedMode |
+	            if ($plannedMode != "" and (($matched.disappearanceMode // "") != $plannedMode)) then
+	              [issue("planned-disappearance-mode-mismatch"; "aggregate row disappearance mode differs from planned manifest"; $matched; {plannedDisappearanceMode: $plannedMode, actualDisappearanceMode: ($matched.disappearanceMode // null)})]
+	            else [] end
+	          )
+	        end
       ) | add // []
     )
     + (

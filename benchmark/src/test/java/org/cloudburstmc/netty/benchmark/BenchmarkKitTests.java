@@ -1569,6 +1569,52 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresBlackholeDisappearanceMode() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-disappearance-mode-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        String labAggregate = Files.readString(labBaseline.resolve("suite-aggregate.jsonl"), StandardCharsets.UTF_8)
+                .replace("\"case\":\"disappear-blackhole\",\"benchmarkName\":\"disappearing-clients\","
+                                + "\"payloadSize\":512,\"disappearanceMode\":\"blackhole\"",
+                        "\"case\":\"disappear-close\",\"benchmarkName\":\"disappearing-clients\","
+                                + "\"payloadSize\":512,\"disappearanceMode\":\"close\"");
+        Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"), labAggregate, StandardCharsets.UTF_8);
+
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        String impairmentSummary = Files.readString(impairmentBaseline.resolve("impairment-summary.json"),
+                        StandardCharsets.UTF_8)
+                .replace("\"benchmarkName\":\"disappearing-clients\",\"case\":\"disappear-blackhole\","
+                                + "\"disappearanceMode\":\"blackhole\"",
+                        "\"benchmarkName\":\"disappearing-clients\",\"case\":\"disappear-close\","
+                                + "\"disappearanceMode\":\"close\"");
+        Files.writeString(impairmentBaseline.resolve("impairment-summary.json"), impairmentSummary,
+                StandardCharsets.UTF_8);
+
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode missingReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingReadiness.path("ready").asBoolean());
+        Assertions.assertEquals("blackhole",
+                missingReadiness.path("requiredDisappearanceModes").get(0).asText());
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("lab-missing-disappearance-mode"));
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("impairment-missing-disappearance-mode"));
+    }
+
+    @Test
     public void testBaselineReadinessRequiresConcreteSelectedCapacityCandidates() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -2006,7 +2052,8 @@ public class BenchmarkKitTests {
         }
         aggregate.append("{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"fairness\",\"benchmarkName\":\"fairness\",\"payloadSize\":512}\n");
-        aggregate.append("{\"case\":\"disappear\",\"benchmarkName\":\"disappearing-clients\",\"payloadSize\":512}\n");
+        aggregate.append("{\"case\":\"disappear-blackhole\",\"benchmarkName\":\"disappearing-clients\",")
+                .append("\"payloadSize\":512,\"disappearanceMode\":\"blackhole\"}\n");
         for (int batchIntervalMillis : new int[]{10, 20, 50}) {
             aggregate.append("{\"case\":\"batch-")
                     .append(batchIntervalMillis)
@@ -2361,7 +2408,9 @@ public class BenchmarkKitTests {
                     .append("{\"benchmarkName\":\"multi-client-fanout\"},")
                     .append("{\"benchmarkName\":\"fairness\"}");
             if (includeDisappearingContention) {
-                profiles.append(",{\"benchmarkName\":\"disappearing-clients\"}");
+                profiles.append(",{\"benchmarkName\":\"disappearing-clients\",")
+                        .append("\"case\":\"disappear-blackhole\",")
+                        .append("\"disappearanceMode\":\"blackhole\"}");
             }
             for (int batchIntervalMillis : new int[]{10, 20, 50}) {
                 profiles.append(",{\"benchmarkName\":\"batched-game-traffic\",")
@@ -2468,8 +2517,9 @@ public class BenchmarkKitTests {
                 run_id="$(arg_value --run-id "")"
                 clients="$(arg_value --clients 1)"
                 payload_size="$(arg_value --payload-size "$(arg_value --chunk-size 512)")"
-                target_client_mbps="$(arg_value --per-client-mbps "$(arg_value --rate-mbps 1)")"
-                impairment_latency="$(arg_value --impairment-latency 0ms)"
+	                target_client_mbps="$(arg_value --per-client-mbps "$(arg_value --rate-mbps 1)")"
+	                disappearance_mode="$(arg_value --disappear-mode close)"
+	                impairment_latency="$(arg_value --impairment-latency 0ms)"
                 impairment_jitter="$(arg_value --impairment-jitter 0ms)"
                 impairment_loss="$(arg_value --impairment-loss 0)"
                 if [[ -z "$output_root" || -z "$run_id" ]]; then
@@ -2501,7 +2551,7 @@ public class BenchmarkKitTests {
                   local stale="${5:-0}"
                   local nack_out="${6:-0}"
                   cat <<JSON
-                {"name":"$name","iteration":1,"clients":$clients,"payloadSize":$payload_size,"reliability":"RELIABLE_ORDERED","targetMbps":1.0,"targetClientMbps":$target_client_mbps,"disappearanceMode":"close","batched":$batched,"batchIntervalMillis":$batch_interval,"logicalPacketsPerBatch":$logical_packets,"batchGroups":$batch_groups,"elapsedMillis":1000,"offeredGbps":$delivered_gbps,"deliveredGbps":$delivered_gbps,"healthyDeliveredGbps":$delivered_gbps,"affectedDeliveredGbps":0.0,"serverBytesOut":1024,"serverDatagramsOut":10,"serverDatagramsOutPerSecond":10.0,"sentToDeliveredBytesRatio":1.0,"healthySentToDeliveredBytesRatio":1.0,"affectedSentToDeliveredBytesRatio":1.0,"perClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"healthyClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"affectedClientThroughput":{"minMbps":0.5,"p50Mbps":0.5,"p95Mbps":0.5,"p99Mbps":0.5,"maxMbps":0.5},"deliveredMessagesPerSecond":1000.0,"deliveredLogicalPacketsPerSecond":1000.0,"probeRttP95Millis":$p99,"probeRttP99Millis":$p99,"fairnessIndex":1.0,"healthyFairnessIndex":1.0,"affectedFairnessIndex":1.0,"affectedClients":$affected_clients,"disconnects":0,"blackholedDatagramsIn":0,"blackholedDatagramsOut":0,"staleDatagrams":$stale,"staleDatagramsPerSecond":$stale,"nackIn":0,"nackInPerSecond":0.0,"nackOut":$nack_out,"nackOutPerSecond":$nack_out,"maxQueuedBytes":1024}
+	                {"name":"$name","iteration":1,"clients":$clients,"payloadSize":$payload_size,"reliability":"RELIABLE_ORDERED","targetMbps":1.0,"targetClientMbps":$target_client_mbps,"disappearanceMode":"$disappearance_mode","batched":$batched,"batchIntervalMillis":$batch_interval,"logicalPacketsPerBatch":$logical_packets,"batchGroups":$batch_groups,"elapsedMillis":1000,"offeredGbps":$delivered_gbps,"deliveredGbps":$delivered_gbps,"healthyDeliveredGbps":$delivered_gbps,"affectedDeliveredGbps":0.0,"serverBytesOut":1024,"serverDatagramsOut":10,"serverDatagramsOutPerSecond":10.0,"sentToDeliveredBytesRatio":1.0,"healthySentToDeliveredBytesRatio":1.0,"affectedSentToDeliveredBytesRatio":1.0,"perClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"healthyClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"affectedClientThroughput":{"minMbps":0.5,"p50Mbps":0.5,"p95Mbps":0.5,"p99Mbps":0.5,"maxMbps":0.5},"deliveredMessagesPerSecond":1000.0,"deliveredLogicalPacketsPerSecond":1000.0,"probeRttP95Millis":$p99,"probeRttP99Millis":$p99,"fairnessIndex":1.0,"healthyFairnessIndex":1.0,"affectedFairnessIndex":1.0,"affectedClients":$affected_clients,"disconnects":0,"blackholedDatagramsIn":0,"blackholedDatagramsOut":0,"staleDatagrams":$stale,"staleDatagramsPerSecond":$stale,"nackIn":0,"nackInPerSecond":0.0,"nackOut":$nack_out,"nackOutPerSecond":$nack_out,"maxQueuedBytes":1024}
                 JSON
                 }
 

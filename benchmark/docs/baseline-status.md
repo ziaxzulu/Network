@@ -111,8 +111,8 @@ The handoff writes the perfect-network plan, impairment campaign plan, top-level
 benchmark/scripts/check-lab-handoff.sh --handoff benchmark/build/benchmark-results/lab-handoff-current
 ```
 
-That preflight checks handoff structure, generated scripts, profile plans, curve matrix coverage, contention scenario coverage, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. By default it also rejects handoffs below `500` contention clients or below `5Mbps` per client, matching the baseline readiness gate. The underlying perfect-network baseline plan is equivalent to:
-The same preflight now checks that generated contention plans include the production-shape batch/resource rows before operators spend lab time on them.
+That preflight checks handoff structure, generated scripts, profile plans, curve matrix coverage, contention scenario coverage, required `blackhole` disappearance mode, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. By default it also rejects handoffs below `500` contention clients or below `5Mbps` per client, matching the baseline readiness gate. The underlying perfect-network baseline plan is equivalent to:
+The same preflight now checks that generated contention plans include the production-shape batch/resource rows and blackhole disappearance row before operators spend lab time on them.
 
 ```bash
 benchmark/scripts/plan-lab-baseline.sh \
@@ -183,11 +183,12 @@ benchmark/scripts/check-baseline-readiness.sh \
   --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
   --required-min-contention-clients 500 \
   --required-min-contention-target-client-mbps 5 \
+  --required-disappearance-modes blackhole \
   --out benchmark/build/benchmark-results/baseline-readiness
 ```
 
 The baseline is not accepted as the comparison baseline until this readiness check passes.
-Readiness also checks that the promoted artifacts have no validation bypass markers and that the perfect-network validation enforced the requested contention scale and per-client Mbps target. The recommended handoff uses `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
+Readiness also checks that the promoted artifacts have no validation bypass markers, that the perfect-network validation enforced the requested contention scale and per-client Mbps target, and that both perfect-network and impairment packages include `blackhole` disappearing-client coverage. The recommended handoff uses `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
 It also requires the production-shape contention rows from the source audit: `10ms`, `20ms`, and `50ms` batched-game-traffic rows, plus `8192` and `262144` byte resource-pack rows at `200ms`.
 
 Current readiness audit in this worktree:
