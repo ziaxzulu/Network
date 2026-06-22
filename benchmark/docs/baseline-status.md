@@ -99,6 +99,18 @@ With payload `1340`, three measured iterations, and default stability policy, th
 
 The best observed current local point was `curve-500_0mbps` at `0.498546Gbps`, but it was rejected because unstable rows are not allowed. Zero-delivery curve rows are rejected by the stability policy, capacity selector, and lab validator. This makes the local loopback evidence useful for regression shape only; it is not a stable capacity baseline.
 
+Latest focused current-branch 100-client fairness artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-local-fairness-100-20260622T071941Z/
+```
+
+This run used `100` established clients, `10` impaired clients, payload `512`, `5Mbps` per client, `100ms` latency, `10ms` jitter, `5%` packet loss, `2s` warmup, `15s` measurement, and `3` measured iterations. Healthy clients held the intended local throughput, while impaired clients received almost no useful traffic. It passed execution and emitted current send-work fields, but it is still local loopback evidence and was unstable on p99 probe RTT spread:
+
+| Case | Delivered Gbps | Healthy Gbps | Affected Gbps | Healthy client p50 Mbps | Affected client p50 Mbps | Healthy fairness | Affected fairness | p99 RTT ms | Max queue bytes | Affected undelivered Gbps | Affected datagram out/s | Retry signal | Unstable reason |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `fairness-100-10poor` | `0.449581056` | `0.4495805098666667` | `0.0000016384` | `4.995208533333333` | `0` | `0.9999999480568666` | `0.2790943396226415` | `161.770849` | `10082816` | `0.0035025002666666666` | `539.3333333333334` | `19.266666666666666` stale datagrams/s, `6.6` NACK out/s | `p99-spread` |
+
 Latest focused current-branch 100-client blackhole artifact in this worktree:
 
 ```text
