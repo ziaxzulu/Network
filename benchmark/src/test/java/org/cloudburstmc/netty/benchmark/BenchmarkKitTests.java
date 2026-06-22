@@ -2957,6 +2957,62 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresPackagedImpairmentProfileEvidence() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-packaged-impairment-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        clearDirectory(impairmentBaseline.resolve("profiles"));
+
+        ProcessResult missingPackagedProfiles = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missingPackagedProfiles.exitCode, missingPackagedProfiles.output);
+        JsonNode readinessJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(readinessJson.path("ready").asBoolean());
+        Assertions.assertEquals(5, readinessJson.path("impairmentBaseline").path("packagedProfiles").size());
+        Assertions.assertTrue(readinessJson.findValuesAsText("code")
+                .contains("impairment-missing-packaged-profile"));
+        Assertions.assertTrue(readinessJson.path("nextActions").findValuesAsText("code")
+                .contains("rerun-impairment-campaign"));
+
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        Files.delete(impairmentBaseline.resolve("profiles/poor/netem/poor-status-before.txt"));
+        ProcessResult missingNetem = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missingNetem.exitCode, missingNetem.output);
+        JsonNode missingNetemJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(missingNetemJson.findValuesAsText("code")
+                .contains("impairment-missing-packaged-netem-status"));
+
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+    }
+
+    @Test
     public void testResultWriterProducesArtifacts() throws Exception {
         Path output = Files.createTempDirectory("raknet-benchmark-test");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
@@ -3680,6 +3736,9 @@ public class BenchmarkKitTests {
                 : new int[]{64, 256, 512, 1200, 1340, 1400};
         StringBuilder profiles = new StringBuilder();
         String[] profileNames = {"perfect", "near-loss", "regional-loss", "poor", "severe"};
+        Path profileRoot = impairmentBaseline.resolve("profiles");
+        clearDirectory(profileRoot);
+        Files.createDirectories(profileRoot);
         for (int profileIndex = 0; profileIndex < profileNames.length; profileIndex++) {
             if (profileIndex > 0) {
                 profiles.append(',');
@@ -3730,6 +3789,26 @@ public class BenchmarkKitTests {
                         .append("\"selectedDeliveredGbps\":1,\"selectedProbeRttP99Millis\":1}");
             }
             profiles.append("]}}");
+
+            Path profileDir = profileRoot.resolve(profileNames[profileIndex]);
+            Files.createDirectories(profileDir.resolve("netem"));
+            Files.writeString(profileDir.resolve("validation.json"),
+                    "{\"passed\":true,\"issues\":[]}\n",
+                    StandardCharsets.UTF_8);
+            Files.writeString(profileDir.resolve("suite-aggregate.jsonl"),
+                    "{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\""
+                            + readinessRetryFieldsJson() + "}\n",
+                    StandardCharsets.UTF_8);
+            Files.writeString(profileDir.resolve("bandwidth-capacity.jsonl"),
+                    "{\"summaryKind\":\"bandwidth-capacity\",\"case\":\""
+                            + profileNames[profileIndex]
+                            + "-curve-p512\",\"payloadSize\":512,\"selected\":true,"
+                            + "\"selectedCandidate\":{\"benchmarkName\":\"curve-100_0mbps\","
+                            + "\"deliveredGbps\":1,\"probeRttP99Millis\":1}}\n",
+                    StandardCharsets.UTF_8);
+            Files.writeString(profileDir.resolve("netem/" + profileNames[profileIndex] + "-status-before.txt"),
+                    "qdisc noqueue 0: root refcnt 2\n",
+                    StandardCharsets.UTF_8);
         }
 
         Files.writeString(impairmentBaseline.resolve("impairment-summary.json"),

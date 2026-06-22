@@ -219,8 +219,10 @@ mkdir -p "$out_dir"
 readiness_json="$out_dir/readiness.json"
 readiness_md="$out_dir/readiness.md"
 issues_jsonl="$(mktemp)"
-trap 'rm -f "$issues_jsonl"' EXIT
+impairment_packaged_profiles_jsonl="$(mktemp)"
+trap 'rm -f "$issues_jsonl" "$impairment_packaged_profiles_jsonl"' EXIT
 : >"$issues_jsonl"
+: >"$impairment_packaged_profiles_jsonl"
 
 append_issue() {
   local code="$1"
@@ -260,6 +262,18 @@ duration_millis() {
     echo "Invalid duration: $1" >&2
     exit 2
   fi
+}
+
+safe_name() {
+  local value="${1,,}"
+  value="${value//[^a-z0-9._-]/-}"
+  value="${value//--/-}"
+  value="${value#-}"
+  value="${value%-}"
+  if [[ -z "$value" ]]; then
+    value="profile"
+  fi
+  printf '%s' "$value"
 }
 
 csv_json_duration_millis_array() {
@@ -631,12 +645,53 @@ fi
 
 impairment_manifest="$impairment_baseline/impairment-baseline-manifest.json"
 impairment_summary="$impairment_baseline/impairment-summary.json"
+impairment_packaged_profiles_json="[]"
 
 if [[ ! -s "$impairment_manifest" ]]; then
   append_issue "missing-impairment-baseline-manifest" "impairment-baseline" "promoted impairment baseline manifest is missing" "{\"path\":\"$impairment_manifest\"}"
 fi
 if [[ ! -s "$impairment_summary" ]]; then
   append_issue "missing-impairment-summary" "impairment-baseline" "promoted impairment baseline summary is missing" "{\"path\":\"$impairment_summary\"}"
+fi
+
+if [[ -s "$impairment_summary" ]]; then
+  while IFS= read -r profile; do
+    [[ -z "$profile" ]] && continue
+    safe_profile="$(safe_name "$profile")"
+    profile_dir="$impairment_baseline/profiles/$safe_profile"
+    profile_dir_exists=false
+    validation_exists=false
+    aggregate_exists=false
+    capacity_exists=false
+    netem_status_count=0
+    if [[ -d "$profile_dir" ]]; then
+      profile_dir_exists=true
+      [[ -s "$profile_dir/validation.json" ]] && validation_exists=true
+      [[ -s "$profile_dir/suite-aggregate.jsonl" ]] && aggregate_exists=true
+      [[ -s "$profile_dir/bandwidth-capacity.jsonl" ]] && capacity_exists=true
+      if [[ -d "$profile_dir/netem" ]]; then
+        netem_status_count="$(find "$profile_dir/netem" -maxdepth 1 -type f -name "$profile-status-*.txt" 2>/dev/null | wc -l | tr -d ' ')"
+      fi
+    fi
+    jq -n \
+      --arg profile "$profile" \
+      --arg path "$profile_dir" \
+      --argjson profileDirExists "$profile_dir_exists" \
+      --argjson validationExists "$validation_exists" \
+      --argjson aggregateExists "$aggregate_exists" \
+      --argjson capacityExists "$capacity_exists" \
+      --argjson netemStatusCount "$netem_status_count" \
+      '{
+        profile: $profile,
+        path: $path,
+        profileDirExists: $profileDirExists,
+        validationExists: $validationExists,
+        aggregateExists: $aggregateExists,
+        capacityExists: $capacityExists,
+        netemStatusCount: $netemStatusCount
+      }' >>"$impairment_packaged_profiles_jsonl"
+  done < <(jq -r '.profiles[]?.profile // empty' "$impairment_summary")
+  impairment_packaged_profiles_json="$(jq -s '.' "$impairment_packaged_profiles_jsonl")"
 fi
 
 if [[ -s "$impairment_manifest" ]]; then
@@ -670,6 +725,41 @@ if [[ -s "$impairment_summary" ]]; then
   if ! jq -e '.netemStatusEvidenceCount >= .profileCount and .profileCount > 0' "$impairment_summary" >/dev/null; then
     append_issue "impairment-missing-netem-status" "impairment-baseline" "not every impairment profile has netem status evidence" "{\"path\":\"$impairment_summary\"}"
   fi
+  missing_packaged_profiles="$(jq -r '.[] | select(.profileDirExists != true) | [.profile, .path] | @tsv' <<<"$impairment_packaged_profiles_json")"
+  while IFS=$'\t' read -r profile profile_path; do
+    [[ -z "$profile" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --arg path "$profile_path" '{profile:$profile,path:$path}')"
+    append_issue "impairment-missing-packaged-profile" "impairment-baseline" "promoted impairment baseline package is missing copied profile evidence" "$extra"
+  done <<<"$missing_packaged_profiles"
+
+  missing_packaged_validation="$(jq -r '.[] | select(.profileDirExists == true and .validationExists != true) | [.profile, .path] | @tsv' <<<"$impairment_packaged_profiles_json")"
+  while IFS=$'\t' read -r profile profile_path; do
+    [[ -z "$profile" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --arg path "$profile_path/validation.json" '{profile:$profile,path:$path}')"
+    append_issue "impairment-missing-packaged-validation" "impairment-baseline" "promoted impairment baseline package is missing copied profile validation" "$extra"
+  done <<<"$missing_packaged_validation"
+
+  missing_packaged_aggregate="$(jq -r '.[] | select(.profileDirExists == true and .aggregateExists != true) | [.profile, .path] | @tsv' <<<"$impairment_packaged_profiles_json")"
+  while IFS=$'\t' read -r profile profile_path; do
+    [[ -z "$profile" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --arg path "$profile_path/suite-aggregate.jsonl" '{profile:$profile,path:$path}')"
+    append_issue "impairment-missing-packaged-aggregate" "impairment-baseline" "promoted impairment baseline package is missing copied profile aggregate rows" "$extra"
+  done <<<"$missing_packaged_aggregate"
+
+  missing_packaged_capacity="$(jq -r '.[] | select(.profileDirExists == true and .capacityExists != true) | [.profile, .path] | @tsv' <<<"$impairment_packaged_profiles_json")"
+  while IFS=$'\t' read -r profile profile_path; do
+    [[ -z "$profile" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --arg path "$profile_path/bandwidth-capacity.jsonl" '{profile:$profile,path:$path}')"
+    append_issue "impairment-missing-packaged-capacity" "impairment-baseline" "promoted impairment baseline package is missing copied profile capacity selector rows" "$extra"
+  done <<<"$missing_packaged_capacity"
+
+  missing_packaged_netem="$(jq -r '.[] | select(.profileDirExists == true and (.netemStatusCount // 0) < 1) | [.profile, .path] | @tsv' <<<"$impairment_packaged_profiles_json")"
+  while IFS=$'\t' read -r profile profile_path; do
+    [[ -z "$profile" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --arg path "$profile_path/netem" '{profile:$profile,path:$path}')"
+    append_issue "impairment-missing-packaged-netem-status" "impairment-baseline" "promoted impairment baseline package is missing copied profile netem status evidence" "$extra"
+  done <<<"$missing_packaged_netem"
+
   if ! jq -e '.aggregateRowCount > 0 and .capacityRowCount > 0' "$impairment_summary" >/dev/null; then
     append_issue "impairment-missing-comparable-rows" "impairment-baseline" "impairment campaign has no comparable aggregate or capacity rows" "{\"path\":\"$impairment_summary\"}"
   fi
@@ -948,6 +1038,7 @@ jq -n \
   --argjson packagedPrereq "$lab_packaged_prereq_summary" \
   --argjson labSourceAudit "$lab_source_audit_json" \
   --argjson labHandoffSourceAudit "$lab_handoff_source_audit_json" \
+  --argjson impairmentPackagedProfiles "$impairment_packaged_profiles_json" \
   --argjson issues "$issues_array" \
   --argjson nextActions "$next_actions_json" \
   --slurpfile labValidation "$([[ -s "$lab_validation" ]] && printf '%s' "$lab_validation" || printf '%s' /dev/null)" \
@@ -964,6 +1055,7 @@ jq -n \
     },
     impairmentBaseline: {
       path: $impairmentBaseline,
+      packagedProfiles: $impairmentPackagedProfiles,
       summary: ($impairmentSummary[0] // null)
     },
     expectedImpairmentProfiles: $expectedImpairmentProfiles,
@@ -1049,6 +1141,11 @@ jq -n \
     echo "- Aggregate rows: \`$(jq -r '.aggregateRowCount // 0' "$impairment_summary")\`"
     echo "- Capacity rows: \`$(jq -r '.capacityRowCount // 0' "$impairment_summary")\`"
     echo "- Netem status evidence files: \`$(jq -r '.netemStatusEvidenceCount // 0' "$impairment_summary")\`"
+    echo "- Packaged profiles: \`$(jq -r 'length' <<<"$impairment_packaged_profiles_json")\`"
+    echo "- Packaged profile validations: \`$(jq -r '[.[] | select(.validationExists == true)] | length' <<<"$impairment_packaged_profiles_json")\`"
+    echo "- Packaged profile aggregates: \`$(jq -r '[.[] | select(.aggregateExists == true)] | length' <<<"$impairment_packaged_profiles_json")\`"
+    echo "- Packaged profile capacity files: \`$(jq -r '[.[] | select(.capacityExists == true)] | length' <<<"$impairment_packaged_profiles_json")\`"
+    echo "- Packaged profile netem status files: \`$(jq -r '[.[] | .netemStatusCount] | add // 0' <<<"$impairment_packaged_profiles_json")\`"
     echo "- Allow missing retry-pressure fields: \`$(jq -r '.allowMissingRetryPressureFields // false' "$impairment_summary")\`"
   else
     echo "No impairment summary found."
