@@ -397,7 +397,7 @@ benchmark/scripts/check-baseline-readiness.sh \
   --out benchmark/build/benchmark-results/baseline-readiness
 ```
 
-The readiness report is the final artifact-level gate for accepting the baseline package set. It requires passing lab validation without bypass markers, separate-host evidence, required scenario families, selected capacity groups, retry-pressure send-work fields in comparable aggregate rows, passing impairment profile validation without bypass allowances, required netem status evidence, and the expected impairment profiles.
+The readiness report is the final artifact-level gate for accepting the baseline package set. It requires passing lab validation without bypass markers, no missing retry-pressure-field bypass markers in the impairment package, separate-host evidence, required scenario families, selected capacity groups, retry-pressure send-work fields in comparable aggregate rows, passing impairment profile validation without bypass allowances, required netem status evidence, and the expected impairment profiles.
 The recommended baseline handoff uses `500` contention clients at `5Mbps` per client, so keep those explicit readiness gates when checking the production comparison baseline. Use lower readiness overrides only for smoke campaigns that will not become the baseline of record.
 
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.

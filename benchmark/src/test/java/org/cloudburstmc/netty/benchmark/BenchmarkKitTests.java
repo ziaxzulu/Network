@@ -2054,6 +2054,48 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRejectsMissingRetryPressureBypasses() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-readiness-retry-policy-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        Files.writeString(impairmentBaseline.resolve("impairment-baseline-manifest.json"),
+                Files.readString(impairmentBaseline.resolve("impairment-baseline-manifest.json"), StandardCharsets.UTF_8)
+                        .replace("\"baselineKind\":\"raknet-lab-impairment-campaign\"",
+                                "\"baselineKind\":\"raknet-lab-impairment-campaign\",\"allowMissingRetryPressureFields\":true"),
+                StandardCharsets.UTF_8);
+        Files.writeString(impairmentBaseline.resolve("impairment-summary.json"),
+                Files.readString(impairmentBaseline.resolve("impairment-summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"passed\":true,",
+                                "\"passed\":true,\"allowMissingRetryPressureFields\":true,"),
+                StandardCharsets.UTF_8);
+
+        ProcessResult bypassed = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, bypassed.exitCode, bypassed.output);
+        JsonNode bypassedReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(bypassedReadiness.path("ready").asBoolean());
+        Assertions.assertTrue(bypassedReadiness.findValuesAsText("code")
+                .contains("impairment-missing-retry-pressure-bypass-allowed"));
+        Assertions.assertTrue(bypassedReadiness.findValuesAsText("code")
+                .contains("impairment-summary-missing-retry-pressure-bypass-allowed"));
+
+        String report = Files.readString(readiness.resolve("readiness.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(report.contains("- Allow missing retry-pressure fields: `true`"));
+    }
+
+    @Test
     public void testBaselineReadinessRequiresProductionEvidenceFingerprint() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();

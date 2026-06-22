@@ -477,6 +477,9 @@ if [[ -s "$impairment_manifest" ]]; then
   if jq -e '.allowValidationBypasses == true' "$impairment_manifest" >/dev/null; then
     append_issue "impairment-validation-bypasses-allowed" "impairment-baseline" "promoted impairment baseline allowed validation bypasses" "{\"path\":\"$impairment_manifest\"}"
   fi
+  if jq -e '.allowMissingRetryPressureFields == true' "$impairment_manifest" >/dev/null; then
+    append_issue "impairment-missing-retry-pressure-bypass-allowed" "impairment-baseline" "promoted impairment baseline allowed missing retry-pressure fields" "{\"path\":\"$impairment_manifest\"}"
+  fi
 fi
 
 if [[ -s "$impairment_summary" ]]; then
@@ -488,6 +491,9 @@ if [[ -s "$impairment_summary" ]]; then
   fi
   if jq -e '.allowValidationBypasses == true' "$impairment_summary" >/dev/null; then
     append_issue "impairment-validation-bypasses-allowed" "impairment-baseline" "impairment campaign summary allowed profile validation bypasses" "{\"path\":\"$impairment_summary\"}"
+  fi
+  if jq -e '.allowMissingRetryPressureFields == true' "$impairment_summary" >/dev/null; then
+    append_issue "impairment-summary-missing-retry-pressure-bypass-allowed" "impairment-baseline" "impairment campaign summary allowed missing retry-pressure fields" "{\"path\":\"$impairment_summary\"}"
   fi
   if ! jq -e '.validationPassedCount == .profileCount and .profileCount > 0' "$impairment_summary" >/dev/null; then
     append_issue "impairment-profile-validation-incomplete" "impairment-baseline" "not every impairment profile has passing validation" "{\"path\":\"$impairment_summary\"}"
@@ -815,6 +821,7 @@ jq -n \
     echo "- Aggregate rows: \`$(jq -r '.aggregateRowCount // 0' "$impairment_summary")\`"
     echo "- Capacity rows: \`$(jq -r '.capacityRowCount // 0' "$impairment_summary")\`"
     echo "- Netem status evidence files: \`$(jq -r '.netemStatusEvidenceCount // 0' "$impairment_summary")\`"
+    echo "- Allow missing retry-pressure fields: \`$(jq -r '.allowMissingRetryPressureFields // false' "$impairment_summary")\`"
   else
     echo "No impairment summary found."
   fi
