@@ -1328,6 +1328,15 @@ public class BenchmarkKitTests {
                 summaryJson.path("productionEvidence").path("sha256").asText());
         Assertions.assertEquals(preflightJson.path("sourceAuditActualSha256").asText(),
                 summaryJson.path("sourceAudit").path("sha256").asText());
+        Assertions.assertEquals("127.0.0.1", summaryJson.path("executionEnvironment").path("serverHost").asText());
+        Assertions.assertEquals("lo", summaryJson.path("executionEnvironment").path("interface").asText());
+        Assertions.assertFalse(summaryJson.path("executionEnvironment").path("labExecutable").asBoolean());
+        Assertions.assertTrue(summaryJson.path("executionEnvironment").path("advisory").asText()
+                .contains("local placeholder topology values"));
+        Assertions.assertTrue(textValues(summaryJson.path("executionEnvironment").path("advisoryReasons"))
+                .contains("loopback-server-host"));
+        Assertions.assertTrue(textValues(summaryJson.path("executionEnvironment").path("advisoryReasons"))
+                .contains("loopback-interface"));
         Assertions.assertEquals(handoff.resolve("handoff-manifest.json").toString(),
                 summaryJson.path("execution").path("handoffManifest").asText());
         Assertions.assertEquals(handoffManifest.path("readme").asText(),
@@ -2578,6 +2587,12 @@ public class BenchmarkKitTests {
 
         String report = Files.readString(readiness.resolve("readiness.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(report.contains("Fresh handoff ready: `true`"));
+        Assertions.assertTrue(report.contains("Fresh handoff lab executable: `false`"));
+        Assertions.assertTrue(report.contains("Fresh handoff topology advisory: `Handoff is structurally ready"
+                + " but uses local placeholder topology values; regenerate with the real server host and lab NIC"
+                + " before separate-host execution.`"));
+        Assertions.assertTrue(report.contains("Fresh handoff topology advisory reasons:"
+                + " `loopback-server-host,loopback-interface`"));
         Assertions.assertTrue(report.contains("Fresh handoff README: `" + handoff.resolve("README.md") + "`"));
         Assertions.assertTrue(report.contains("Fresh handoff artifact collection JSON: `"
                 + handoff.resolve("artifact-collection.json") + "`"));
@@ -3874,6 +3889,15 @@ public class BenchmarkKitTests {
                         + "\"networkDirtyTrackedFiles\":false,"
                         + "\"sourceAuditIssueCount\":0,"
                         + "\"handoffIssueCount\":0,"
+                        + "\"executionEnvironment\":{"
+                        + "\"serverHost\":\"127.0.0.1\","
+                        + "\"bindHost\":\"0.0.0.0\","
+                        + "\"port\":19132,"
+                        + "\"interface\":\"lo\","
+                        + "\"labExecutable\":false,"
+                        + "\"advisoryReasons\":[\"loopback-server-host\",\"loopback-interface\"],"
+                        + "\"advisory\":\"Handoff is structurally ready but uses local placeholder topology values; regenerate with the real server host and lab NIC before separate-host execution.\""
+                        + "},"
                         + "\"execution\":{"
                         + "\"handoffManifest\":\"" + jsonEscape(handoffManifest.toString()) + "\","
                         + "\"readme\":\"" + jsonEscape(readme.toString()) + "\","

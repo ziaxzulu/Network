@@ -219,6 +219,14 @@ jq -n \
     ($sourceAuditData[0] // {}) as $sourceAudit |
     ($handoffManifestData[0] // {}) as $manifest |
     ($preflightData[0] // {}) as $preflight |
+    ($manifest.serverHost // "") as $serverHost |
+    ($manifest.interface // "") as $interface |
+    (($serverHost | test("^(localhost|127\\.|::1$)")) or ($serverHost == "")) as $loopbackServerHost |
+    (($interface == "lo") or ($interface == "lo0") or ($interface == "")) as $loopbackInterface |
+    ([]
+      + (if $loopbackServerHost then ["loopback-server-host"] else [] end)
+      + (if $loopbackInterface then ["loopback-interface"] else [] end)
+    ) as $labExecutableIssues |
     {
       kind: $kind,
       generatedAt: $generatedAt,
@@ -281,6 +289,21 @@ jq -n \
       },
       handoff: $handoff,
       artifactRoot: $artifactRoot,
+      executionEnvironment: {
+        serverHost: $serverHost,
+        bindHost: ($manifest.bindHost // ""),
+        port: ($manifest.port // null),
+        interface: $interface,
+        labExecutable: (($labExecutableIssues | length) == 0),
+        advisoryReasons: $labExecutableIssues,
+        advisory: (
+          if ($labExecutableIssues | length) == 0 then
+            "Handoff uses non-loopback server host and interface values; still run host prereq checks before lab execution."
+          else
+            "Handoff is structurally ready but uses local placeholder topology values; regenerate with the real server host and lab NIC before separate-host execution."
+          end
+        )
+      },
       execution: {
         handoffManifest: $handoffManifestPath,
         readme: ($manifest.readme // ""),
