@@ -365,7 +365,7 @@ benchmark/scripts/plan-remote-contention.sh \
   --start-delay 90s
 ```
 
-The contention planner writes the same per-host command scripts and merge script shape as the curve planner, but each generated case uses the actual workload scenario with `--role server` or `--role client`: `multi-client-fanout`, `fairness`, `disappearing-clients`, `batched-game-traffic`, or `resource-pack-transfer`. Affected clients are assigned to receiver scripts in receiver order. Keep affected clients on one receiver host when you need exact healthy/affected splits, or treat server-side affected splits as advisory because the server labels peers by accept order across hosts.
+The contention planner writes the same per-host command scripts and merge script shape as the curve planner, but each generated case uses the actual workload scenario with `--role server` or `--role client`: `multi-client-fanout`, `fairness`, `disappearing-clients`, `batched-game-traffic`, or `resource-pack-transfer`. Affected clients are assigned to receiver scripts in receiver order. Keep affected clients on one receiver host when you need exact healthy/affected splits, or treat server-side affected splits as advisory because the server labels peers by accept order across hosts. For disappearing-client cases, `manifest.jsonl` records `disappearanceMode`, `disappearAfterMillis`, and `blackholeAtEpochMillis`; use those fields when aligning host/NIC-level blackhole helpers with the benchmark-managed disappearance trigger.
 
 ## Matrix Profiles
 

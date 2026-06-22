@@ -667,6 +667,9 @@ for selected_case in "${case_array[@]}"; do
   manifest_batch_groups="1"
   affected_total=0
   affected_kind="none"
+  manifest_disappearance_mode="null"
+  manifest_disappear_after_millis="null"
+  manifest_blackhole_at_millis="null"
 
   case "$selected_case" in
     fanout)
@@ -688,6 +691,8 @@ for selected_case in "${case_array[@]}"; do
       server_case_args="--disappearing-clients $disappearing_count --disappear-after $disappear_after --disappear-mode close"
       affected_total="$disappearing_count"
       affected_kind="disappearing-close"
+      manifest_disappearance_mode='"close"'
+      manifest_disappear_after_millis="$disappear_after_ms"
       ;;
     disappear-stopread)
       benchmark_name="disappearing-clients"
@@ -695,6 +700,8 @@ for selected_case in "${case_array[@]}"; do
       server_case_args="--disappearing-clients $disappearing_count --disappear-after $disappear_after --disappear-mode stop-reading"
       affected_total="$disappearing_count"
       affected_kind="disappearing-stopread"
+      manifest_disappearance_mode='"stop-reading"'
+      manifest_disappear_after_millis="$disappear_after_ms"
       ;;
     disappear-blackhole)
       benchmark_name="disappearing-clients"
@@ -702,6 +709,8 @@ for selected_case in "${case_array[@]}"; do
       server_case_args="--disappearing-clients $disappearing_count --disappear-after $disappear_after --disappear-mode blackhole"
       affected_total="$disappearing_count"
       affected_kind="disappearing-blackhole"
+      manifest_disappearance_mode='"blackhole"'
+      manifest_disappear_after_millis="$disappear_after_ms"
       ;;
     batched:*)
       batch_interval="${selected_case#batched:}"
@@ -730,6 +739,9 @@ for selected_case in "${case_array[@]}"; do
   run_id="$case_prefix-$run_suffix"
   case_name="$run_id"
   start_at=$((base_start_at + (case_index * case_spacing_ms)))
+  if [[ "$selected_case" == "disappear-blackhole" ]]; then
+    manifest_blackhole_at_millis=$((start_at + warmup_ms + disappear_after_ms))
+  fi
 
   server_args="$benchmark_name --role server --bind-host $bind_host --port $port --clients $clients --start-delay $start_delay --start-at-epoch-ms $start_at $common_worker_args $server_case_args --out \$SERVER_OUT --run-id $run_id"
   echo >>"$server_script"
@@ -781,7 +793,7 @@ for selected_case in "${case_array[@]}"; do
   echo "benchmark/scripts/merge-worker-results.sh --server \"\$SERVER_OUT/$run_id\" ${merge_args[*]} --out \"\$MERGED_OUT/$run_id\" --case \"$case_name\" --benchmark-name \"$benchmark_name\"" >>"$merge_script"
   echo "cat \"\$MERGED_OUT/$run_id/suite-aggregate.jsonl\" >>\"\$MERGED_OUT/suite-aggregate.jsonl\"" >>"$merge_script"
 
-  printf '{"case":"%s","benchmarkName":"%s","runId":"%s","clients":%s,"payloadSize":%s,"perClientMbps":%s,"batchIntervalMillis":%s,"logicalPacketsPerBatch":%s,"batchGroups":%s,"configuredMaxQueuedBytes":%s,"affectedKind":"%s","affectedClients":%s,"startAtEpochMillis":%s,"receiverDistribution":[%s],"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
+  printf '{"case":"%s","benchmarkName":"%s","runId":"%s","clients":%s,"payloadSize":%s,"perClientMbps":%s,"batchIntervalMillis":%s,"logicalPacketsPerBatch":%s,"batchGroups":%s,"configuredMaxQueuedBytes":%s,"affectedKind":"%s","affectedClients":%s,"disappearanceMode":%s,"warmupMillis":%s,"durationMillis":%s,"disappearAfterMillis":%s,"startAtEpochMillis":%s,"blackholeAtEpochMillis":%s,"receiverDistribution":[%s],"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
     "$(json_escape "$case_name")" \
     "$(json_escape "$benchmark_name")" \
     "$(json_escape "$run_id")" \
@@ -794,7 +806,12 @@ for selected_case in "${case_array[@]}"; do
     "${max_queued_bytes:-null}" \
     "$(json_escape "$affected_kind")" \
     "$affected_total" \
+    "$manifest_disappearance_mode" \
+    "$warmup_ms" \
+    "$duration_ms" \
+    "$manifest_disappear_after_millis" \
     "$start_at" \
+    "$manifest_blackhole_at_millis" \
     "$affected_json" \
     "$(json_escape "$artifact_root/server/$run_id")" \
     "$(json_escape "$artifact_root/merged/$run_id")" >>"$manifest"
@@ -848,7 +865,7 @@ chmod +x "$server_script" "$merge_script"
   echo
   echo "Affected clients are assigned to receiver scripts in receiver order. For host/NIC-level impairment, place the affected receiver clients on the host or namespace where external impairment is applied."
   echo
-  echo "Disappearance cases repeat one worker process across all configured iterations. For close or blackhole modes, later iterations measure the post-disappearance state rather than reconnecting fresh clients."
+  echo "Disappearance cases repeat one worker process across all configured iterations. For close or blackhole modes, later iterations measure the post-disappearance state rather than reconnecting fresh clients. The manifest records \`disappearanceMode\`, \`disappearAfterMillis\`, and \`blackholeAtEpochMillis\` so external host/NIC blackhole helpers can align with the benchmark-managed disappearance trigger."
 } >"$readme"
 
 echo "Remote worker contention plan: $output_root"

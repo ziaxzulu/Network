@@ -379,15 +379,17 @@ public class BenchmarkKitTests {
                 "--artifact-root", artifacts.toString(),
                 "--server-host", "127.0.0.1",
                 "--clients", "4",
-                "--cases", "resource-pack,batched",
+                "--cases", "resource-pack,batched,disappear-blackhole",
                 "--resource-pack-chunk-sizes", "8192,262144",
                 "--resource-pack-interval", "200ms",
                 "--batch-intervals", "20ms",
                 "--batch-payload-sizes", "128,512,1200",
                 "--logical-packets-per-batch", "8",
                 "--batch-groups", "4",
+                "--disappearing-clients", "1",
+                "--disappear-after", "1s",
                 "--warmup", "1s",
-                "--duration", "1s",
+                "--duration", "2s",
                 "--iterations", "1",
                 "--start-delay", "1s",
                 "--start-offset", "180s"
@@ -395,7 +397,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, result.exitCode, result.output);
 
         List<String> manifest = Files.readAllLines(plan.resolve("manifest.jsonl"), StandardCharsets.UTF_8);
-        Assertions.assertEquals(3, manifest.size());
+        Assertions.assertEquals(4, manifest.size());
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"benchmarkName\":\"batched-game-traffic\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"benchmarkName\":\"batched-game-traffic\"")
                 && row.contains("\"batchIntervalMillis\":20")
@@ -407,6 +409,17 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")
                 && row.contains("\"perClientMbps\":10.485760000")
                 && row.contains("\"batchIntervalMillis\":200")));
+        JsonNode blackhole = readJsonLines(plan.resolve("manifest.jsonl")).stream()
+                .filter(row -> row.path("affectedKind").asText().equals("disappearing-blackhole"))
+                .findFirst()
+                .orElseThrow();
+        Assertions.assertEquals("blackhole", blackhole.path("disappearanceMode").asText());
+        Assertions.assertEquals(1, blackhole.path("affectedClients").asInt());
+        Assertions.assertEquals(1000, blackhole.path("warmupMillis").asLong());
+        Assertions.assertEquals(2000, blackhole.path("durationMillis").asLong());
+        Assertions.assertEquals(1000, blackhole.path("disappearAfterMillis").asLong());
+        Assertions.assertTrue(blackhole.path("blackholeAtEpochMillis").asLong()
+                > blackhole.path("startAtEpochMillis").asLong());
 
         String serverCommands = Files.readString(plan.resolve("server-commands.sh"), StandardCharsets.UTF_8);
         Assertions.assertTrue(serverCommands.contains("batched-game-traffic --role server"));
@@ -414,6 +427,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(serverCommands.contains("resource-pack-transfer --role server"));
         Assertions.assertTrue(serverCommands.contains("--chunk-size 8192 --chunk-interval 200ms"));
         Assertions.assertTrue(serverCommands.contains("--chunk-size 262144 --chunk-interval 200ms"));
+        Assertions.assertTrue(serverCommands.contains("disappearing-clients --role server"));
+        Assertions.assertTrue(serverCommands.contains("--disappear-mode blackhole"));
     }
 
     @Test
