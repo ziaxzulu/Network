@@ -278,8 +278,9 @@ public final class RakNetBenchmarkRunner {
                 runClientWorkerMeasurement(config, benchmarkCase, channels, blackholes);
                 long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
                 List<PeerStats.Snapshot> snapshots = new ArrayList<>();
-                for (PeerStats peer : peers) {
-                    snapshots.add(peer.snapshot());
+                for (int i = 0; i < peers.size(); i++) {
+                    Channel channel = channels.get(i);
+                    snapshots.add(peers.get(i).snapshot(channel.isOpen(), channel.isActive()));
                 }
                 result.add(new BenchmarkIterationResult(
                         benchmarkCase.name(),

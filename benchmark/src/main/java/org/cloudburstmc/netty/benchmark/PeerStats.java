@@ -198,10 +198,16 @@ public final class PeerStats {
     }
 
     public Snapshot snapshot() {
+        return snapshot(false, false);
+    }
+
+    public Snapshot snapshot(boolean channelOpen, boolean channelActive) {
         return new Snapshot(
                 this.id,
                 this.impaired,
                 this.address,
+                channelOpen,
+                channelActive,
                 this.serverBytesIn.sum(),
                 this.serverBytesOut.sum(),
                 this.serverDatagramsIn.sum(),
@@ -233,6 +239,8 @@ public final class PeerStats {
         public final int id;
         public final boolean impaired;
         public final InetSocketAddress address;
+        public final boolean channelOpen;
+        public final boolean channelActive;
         public final long serverBytesIn;
         public final long serverBytesOut;
         public final long serverDatagramsIn;
@@ -258,7 +266,8 @@ public final class PeerStats {
         public final long maxQueuedBytes;
         public final RakState lastState;
 
-        private Snapshot(int id, boolean impaired, InetSocketAddress address, long serverBytesIn, long serverBytesOut,
+        private Snapshot(int id, boolean impaired, InetSocketAddress address, boolean channelOpen, boolean channelActive,
+                         long serverBytesIn, long serverBytesOut,
                          long serverDatagramsIn, long serverDatagramsOut, long encapsulatedIn, long encapsulatedOut,
                          long staleDatagrams, long ackIn, long ackOut, long nackIn, long nackOut,
                          long bulkSentMessages, long bulkSentBytes, long logicalPacketsSent,
@@ -268,6 +277,8 @@ public final class PeerStats {
             this.id = id;
             this.impaired = impaired;
             this.address = address;
+            this.channelOpen = channelOpen;
+            this.channelActive = channelActive;
             this.serverBytesIn = serverBytesIn;
             this.serverBytesOut = serverBytesOut;
             this.serverDatagramsIn = serverDatagramsIn;

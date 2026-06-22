@@ -92,12 +92,15 @@ public final class BenchmarkResultWriter {
             writer.write("- Start at epoch ms: `" + startAt(result.config()) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
-            writer.write("| Name | Iteration | Clients | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | Send/Deliver | Affected Send/Deliver | Datagram Out/s | Stale/s | NACK Out/s | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Max Queue |\n");
-            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+            writer.write("| Name | Iteration | Clients | Active | Open | Disconnected State | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | Send/Deliver | Affected Send/Deliver | Datagram Out/s | Stale/s | NACK Out/s | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Max Queue |\n");
+            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
                 writer.write("| " + iteration.name
                         + " | " + iteration.iteration
                         + " | " + iteration.clients
+                        + " | " + iteration.activePeers
+                        + " | " + iteration.openPeers
+                        + " | " + iteration.disconnectedStatePeers
                         + " | " + iteration.payloadSize
                         + " | " + iteration.batchIntervalMillis
                         + " | " + iteration.logicalPacketsPerBatch
@@ -252,6 +255,12 @@ public final class BenchmarkResultWriter {
             "name",
             "iteration",
             "clients",
+            "open_peers",
+            "active_peers",
+            "state_connected_peers",
+            "state_disconnecting_peers",
+            "state_disconnected_peers",
+            "state_unconnected_peers",
             "payload_size",
             "reliability",
             "batched",
@@ -318,6 +327,12 @@ public final class BenchmarkResultWriter {
             String name,
             int iteration,
             int clients,
+            @JsonProperty("open_peers") int openPeers,
+            @JsonProperty("active_peers") int activePeers,
+            @JsonProperty("state_connected_peers") int connectedStatePeers,
+            @JsonProperty("state_disconnecting_peers") int disconnectingStatePeers,
+            @JsonProperty("state_disconnected_peers") int disconnectedStatePeers,
+            @JsonProperty("state_unconnected_peers") int unconnectedStatePeers,
             @JsonProperty("payload_size") int payloadSize,
             String reliability,
             boolean batched,
@@ -385,6 +400,12 @@ public final class BenchmarkResultWriter {
                     iteration.name,
                     iteration.iteration,
                     iteration.clients,
+                    iteration.openPeers,
+                    iteration.activePeers,
+                    iteration.connectedStatePeers,
+                    iteration.disconnectingStatePeers,
+                    iteration.disconnectedStatePeers,
+                    iteration.unconnectedStatePeers,
                     iteration.payloadSize,
                     iteration.reliability.name(),
                     iteration.batched,
@@ -569,6 +590,12 @@ public final class BenchmarkResultWriter {
             String name,
             int iteration,
             int clients,
+            int openPeers,
+            int activePeers,
+            int connectedStatePeers,
+            int disconnectingStatePeers,
+            int disconnectedStatePeers,
+            int unconnectedStatePeers,
             int payloadSize,
             String reliability,
             boolean batched,
@@ -636,6 +663,12 @@ public final class BenchmarkResultWriter {
                     iteration.name,
                     iteration.iteration,
                     iteration.clients,
+                    iteration.openPeers,
+                    iteration.activePeers,
+                    iteration.connectedStatePeers,
+                    iteration.disconnectingStatePeers,
+                    iteration.disconnectedStatePeers,
+                    iteration.unconnectedStatePeers,
                     iteration.payloadSize,
                     iteration.reliability.name(),
                     iteration.batched,
@@ -701,6 +734,8 @@ public final class BenchmarkResultWriter {
             int id,
             boolean impaired,
             String address,
+            boolean channelOpen,
+            boolean channelActive,
             long serverBytesIn,
             long serverBytesOut,
             long serverDatagramsIn,
@@ -731,6 +766,8 @@ public final class BenchmarkResultWriter {
                     peer.id,
                     peer.impaired,
                     String.valueOf(peer.address),
+                    peer.channelOpen,
+                    peer.channelActive,
                     peer.serverBytesIn,
                     peer.serverBytesOut,
                     peer.serverDatagramsIn,

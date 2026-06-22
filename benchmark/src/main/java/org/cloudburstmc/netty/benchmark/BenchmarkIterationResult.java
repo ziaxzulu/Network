@@ -17,6 +17,7 @@
 package org.cloudburstmc.netty.benchmark;
 
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
+import org.cloudburstmc.netty.channel.raknet.RakState;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -57,6 +58,12 @@ public final class BenchmarkIterationResult {
     public final long disconnects;
     public final long blackholedDatagramsIn;
     public final long blackholedDatagramsOut;
+    public final int openPeers;
+    public final int activePeers;
+    public final int connectedStatePeers;
+    public final int disconnectingStatePeers;
+    public final int disconnectedStatePeers;
+    public final int unconnectedStatePeers;
     public final double deliveredGbps;
     public final double healthyDeliveredGbps;
     public final double affectedDeliveredGbps;
@@ -122,6 +129,12 @@ public final class BenchmarkIterationResult {
         long disconnectCount = 0L;
         long blackholedIn = 0L;
         long blackholedOut = 0L;
+        int openPeerCount = 0;
+        int activePeerCount = 0;
+        int connectedStatePeerCount = 0;
+        int disconnectingStatePeerCount = 0;
+        int disconnectedStatePeerCount = 0;
+        int unconnectedStatePeerCount = 0;
         long healthyReceivedBytes = 0L;
         long affectedReceivedBytes = 0L;
         int affected = 0;
@@ -147,6 +160,21 @@ public final class BenchmarkIterationResult {
             disconnectCount += peer.disconnects;
             blackholedIn += peer.blackholedDatagramsIn;
             blackholedOut += peer.blackholedDatagramsOut;
+            if (peer.channelOpen) {
+                openPeerCount++;
+            }
+            if (peer.channelActive) {
+                activePeerCount++;
+            }
+            if (peer.lastState == RakState.CONNECTED) {
+                connectedStatePeerCount++;
+            } else if (peer.lastState == RakState.DISCONNECTING) {
+                disconnectingStatePeerCount++;
+            } else if (peer.lastState == RakState.DISCONNECTED) {
+                disconnectedStatePeerCount++;
+            } else if (peer.lastState == RakState.UNCONNECTED) {
+                unconnectedStatePeerCount++;
+            }
             perClientReceived.add(peer.bulkReceivedBytes);
             if (peer.impaired) {
                 affected++;
@@ -183,6 +211,12 @@ public final class BenchmarkIterationResult {
         this.disconnects = disconnectCount;
         this.blackholedDatagramsIn = blackholedIn;
         this.blackholedDatagramsOut = blackholedOut;
+        this.openPeers = openPeerCount;
+        this.activePeers = activePeerCount;
+        this.connectedStatePeers = connectedStatePeerCount;
+        this.disconnectingStatePeers = disconnectingStatePeerCount;
+        this.disconnectedStatePeers = disconnectedStatePeerCount;
+        this.unconnectedStatePeers = unconnectedStatePeerCount;
         this.deliveredGbps = BenchmarkMath.gigabitsPerSecond(receivedBytes, elapsedMillis);
         this.healthyDeliveredGbps = BenchmarkMath.gigabitsPerSecond(healthyReceivedBytes, elapsedMillis);
         this.affectedDeliveredGbps = BenchmarkMath.gigabitsPerSecond(affectedReceivedBytes, elapsedMillis);

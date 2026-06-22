@@ -181,6 +181,8 @@ public class BenchmarkKitTests {
         PeerStats.Snapshot snapshot = peer.snapshot();
         Assertions.assertEquals(1, snapshot.blackholedDatagramsIn);
         Assertions.assertEquals(1, snapshot.blackholedDatagramsOut);
+        Assertions.assertFalse(snapshot.channelOpen);
+        Assertions.assertFalse(snapshot.channelActive);
         channel.finishAndReleaseAll();
     }
 
@@ -226,6 +228,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, snapshot.blackholedDatagramsIn);
         Assertions.assertEquals(0, snapshot.blackholedDatagramsOut);
         Assertions.assertEquals(0, snapshot.maxQueuedBytes);
+        Assertions.assertFalse(snapshot.channelOpen);
+        Assertions.assertFalse(snapshot.channelActive);
     }
 
     @Test
@@ -331,6 +335,8 @@ public class BenchmarkKitTests {
         List<JsonNode> summaryRows = readJsonLines(suite.resolve("suite-summary.jsonl"));
         Assertions.assertEquals(9, summaryRows.size());
         Assertions.assertTrue(summaryRows.stream().allMatch(JsonNode::isObject));
+        Assertions.assertTrue(summaryRows.stream().allMatch(row -> row.path("openPeers").asInt() == row.path("clients").asInt()));
+        Assertions.assertTrue(summaryRows.stream().allMatch(row -> row.path("activePeers").asInt() == row.path("clients").asInt()));
         Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("multi-client-fanout")));
         Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("fairness")));
         Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("disappearing-clients")));
@@ -341,6 +347,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(9, aggregateRows.size());
         Assertions.assertTrue(aggregateRows.stream().allMatch(JsonNode::isObject));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("summaryKind").asText().equals("aggregate")));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("activePeers")));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("stateDisconnectedPeers")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("unstableReasons").toString()
                 .contains("insufficient-iterations")));
         Assertions.assertTrue(aggregateRows.stream().anyMatch(row -> row.path("case").asText().equals("curve-1c-mtu")
@@ -1644,7 +1652,7 @@ public class BenchmarkKitTests {
                 2,
                 1000,
                 histogram.snapshot(),
-                Arrays.asList(peer.snapshot())
+                Arrays.asList(peer.snapshot(true, true))
         ));
 
         Path directory = new BenchmarkResultWriter().write(run).toPath();
@@ -1688,9 +1696,13 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summary.path("iterations").get(0).has("healthyClientThroughput"));
         Assertions.assertTrue(summary.path("iterations").get(0).has("affectedClientThroughput"));
         Assertions.assertTrue(summary.path("iterations").get(0).has("disconnects"));
+        Assertions.assertEquals(1, summary.path("iterations").get(0).path("openPeers").asInt());
+        Assertions.assertEquals(1, summary.path("iterations").get(0).path("activePeers").asInt());
         Assertions.assertEquals(1, summary.path("iterations").get(0).path("blackholedDatagramsIn").asLong());
         Assertions.assertEquals(1, summary.path("iterations").get(0).path("blackholedDatagramsOut").asLong());
         Assertions.assertEquals(4, summary.path("iterations").get(0).path("peers").get(0).path("logicalPacketsReceived").asLong());
+        Assertions.assertTrue(summary.path("iterations").get(0).path("peers").get(0).path("channelOpen").asBoolean());
+        Assertions.assertTrue(summary.path("iterations").get(0).path("peers").get(0).path("channelActive").asBoolean());
         Assertions.assertEquals(1, summary.path("iterations").get(0).path("peers").get(0).path("blackholedDatagramsIn").asLong());
         Assertions.assertEquals(1, summary.path("iterations").get(0).path("peers").get(0).path("blackholedDatagramsOut").asLong());
         Assertions.assertTrue(summary.path("iterations").get(0).path("peers").get(0).has("serverBytesOut"));
@@ -1720,6 +1732,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(rows.get(0).containsKey("delivered_logical_packets_s"));
         Assertions.assertTrue(rows.get(0).containsKey("healthy_fairness"));
         Assertions.assertTrue(rows.get(0).containsKey("disconnects"));
+        Assertions.assertEquals("1", rows.get(0).get("open_peers"));
+        Assertions.assertEquals("1", rows.get(0).get("active_peers"));
         Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_in"));
         Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_out"));
         Assertions.assertTrue(rows.get(0).containsKey("max_queued_bytes"));

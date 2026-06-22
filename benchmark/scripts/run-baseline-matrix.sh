@@ -120,10 +120,10 @@ suite_aggregate_csv="$output_root/suite-aggregate.csv"
 : >"$suite_summary_jsonl"
 : >"$suite_aggregate_jsonl"
 cat >"$suite_summary_csv" <<'CSV'
-case,benchmark_name,iteration,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,elapsed_ms,offered_gbps,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,server_bytes_out,server_datagrams_out,server_datagrams_out_s,sent_delivered_bytes_ratio,healthy_sent_delivered_bytes_ratio,affected_sent_delivered_bytes_ratio,client_mbps_min,client_mbps_p50,client_mbps_p95,client_mbps_p99,client_mbps_max,healthy_client_mbps_p50,healthy_client_mbps_p99,affected_client_mbps_p50,affected_client_mbps_p99,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,stale_datagrams_s,nack_in,nack_in_s,nack_out,nack_out_s,max_queued_bytes,artifact,scenario,packet_limit,global_packet_limit,configured_max_queued_bytes
+case,benchmark_name,iteration,clients,open_peers,active_peers,state_connected_peers,state_disconnecting_peers,state_disconnected_peers,state_unconnected_peers,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,elapsed_ms,offered_gbps,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,server_bytes_out,server_datagrams_out,server_datagrams_out_s,sent_delivered_bytes_ratio,healthy_sent_delivered_bytes_ratio,affected_sent_delivered_bytes_ratio,client_mbps_min,client_mbps_p50,client_mbps_p95,client_mbps_p99,client_mbps_max,healthy_client_mbps_p50,healthy_client_mbps_p99,affected_client_mbps_p50,affected_client_mbps_p99,delivered_msg_s,delivered_logical_packets_s,p95_ms,p99_ms,fairness,healthy_fairness,affected_fairness,affected_clients,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,stale_datagrams_s,nack_in,nack_in_s,nack_out,nack_out_s,max_queued_bytes,artifact,scenario,packet_limit,global_packet_limit,configured_max_queued_bytes
 CSV
 cat >"$suite_aggregate_csv" <<'CSV'
-case,benchmark_name,iterations,clients,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,median_delivered_gbps,median_healthy_delivered_gbps,median_affected_delivered_gbps,median_server_datagrams_out_s,median_sent_delivered_bytes_ratio,median_healthy_sent_delivered_bytes_ratio,median_affected_sent_delivered_bytes_ratio,median_client_mbps_p50,median_client_mbps_p99,median_healthy_client_mbps_p50,median_healthy_client_mbps_p99,median_affected_client_mbps_p50,median_affected_client_mbps_p99,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_stale_datagrams_s,median_nack_out_s,median_fairness,median_healthy_fairness,median_affected_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact,scenario,packet_limit,global_packet_limit,configured_max_queued_bytes
+case,benchmark_name,iterations,clients,median_open_peers,median_active_peers,min_active_peers,max_state_disconnected_peers,max_state_unconnected_peers,payload_size,reliability,batched,target_mbps,target_client_mbps,impairment_profile,impairment_latency_ms,impairment_jitter_ms,impairment_loss_pct,median_delivered_gbps,median_healthy_delivered_gbps,median_affected_delivered_gbps,median_server_datagrams_out_s,median_sent_delivered_bytes_ratio,median_healthy_sent_delivered_bytes_ratio,median_affected_sent_delivered_bytes_ratio,median_client_mbps_p50,median_client_mbps_p99,median_healthy_client_mbps_p50,median_healthy_client_mbps_p99,median_affected_client_mbps_p50,median_affected_client_mbps_p99,delivered_gbps_spread_pct,median_p99_ms,p99_spread_pct,max_queued_bytes,median_stale_datagrams_s,median_nack_out_s,median_fairness,median_healthy_fairness,median_affected_fairness,disconnects,blackholed_datagrams_in,blackholed_datagrams_out,stale_datagrams,nack_in,nack_out,unstable,unstable_reasons,artifact,scenario,packet_limit,global_packet_limit,configured_max_queued_bytes
 CSV
 
 json_escape() {
@@ -201,6 +201,12 @@ append_case_metrics() {
       benchmarkName: .name,
       iteration: .iteration,
       clients: .clients,
+      openPeers: (.openPeers // .clients),
+      activePeers: (.activePeers // .clients),
+      stateConnectedPeers: (.connectedStatePeers // 0),
+      stateDisconnectingPeers: (.disconnectingStatePeers // 0),
+      stateDisconnectedPeers: (.disconnectedStatePeers // 0),
+      stateUnconnectedPeers: (.unconnectedStatePeers // 0),
       payloadSize: .payloadSize,
       reliability: .reliability,
       batched: (.batched // false),
@@ -264,6 +270,12 @@ append_case_metrics() {
       .name,
       .iteration,
       .clients,
+      (.openPeers // .clients),
+      (.activePeers // .clients),
+      (.connectedStatePeers // 0),
+      (.disconnectingStatePeers // 0),
+      (.disconnectedStatePeers // 0),
+      (.unconnectedStatePeers // 0),
       .payloadSize,
       .reliability,
       (.batched // false),
@@ -374,6 +386,14 @@ write_suite_aggregates() {
       iteration: "aggregate",
       measuredIterations: ($rows | length),
       clients: $first.clients,
+      openPeers: ($rows | map(.openPeers) | median),
+      activePeers: ($rows | map(.activePeers) | median),
+      activePeersMin: ($rows | map(.activePeers) | min),
+      activePeersMax: ($rows | map(.activePeers) | max),
+      stateConnectedPeers: ($rows | map(.stateConnectedPeers) | median),
+      stateDisconnectingPeers: ($rows | map(.stateDisconnectingPeers) | max),
+      stateDisconnectedPeers: ($rows | map(.stateDisconnectedPeers) | max),
+      stateUnconnectedPeers: ($rows | map(.stateUnconnectedPeers) | max),
       payloadSize: $first.payloadSize,
       reliability: $first.reliability,
       batched: $first.batched,
@@ -439,6 +459,11 @@ write_suite_aggregates() {
       .benchmarkName,
       .measuredIterations,
       .clients,
+      .openPeers,
+      .activePeers,
+      .activePeersMin,
+      .stateDisconnectedPeers,
+      .stateUnconnectedPeers,
       .payloadSize,
       .reliability,
       .batched,
@@ -494,8 +519,8 @@ write_suite_aggregates() {
     echo "- Aggregate JSONL: \`$suite_aggregate_jsonl\`"
     echo "- Aggregate CSV: \`$suite_aggregate_csv\`"
     echo
-    echo "| Case | Scenario | Impairment | Iterations | Median Gbps | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Send/Deliver | Datagram Out/s | Stale/s | NACK Out/s | Throughput Spread | Median p99 ms | p99 Spread | Max Queue | Unstable | Reasons |"
-    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+    echo "| Case | Scenario | Impairment | Iterations | Active Peers | Disconnected State | Median Gbps | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Send/Deliver | Datagram Out/s | Stale/s | NACK Out/s | Throughput Spread | Median p99 ms | p99 Spread | Max Queue | Unstable | Reasons |"
+    echo "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -508,6 +533,8 @@ write_suite_aggregates() {
         "`" + .benchmarkName + "`",
         "`" + (.impairmentProfile // "0ms/0ms/0%") + "`",
         (.measuredIterations | tostring),
+        fmt(.activePeers),
+        fmt(.stateDisconnectedPeers),
         fmt(.deliveredGbps),
         fmt(.healthyDeliveredGbps),
         fmt(.affectedDeliveredGbps),
@@ -524,8 +551,8 @@ write_suite_aggregates() {
         (.unstable | tostring),
         "`" + ((.unstableReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$suite_aggregate_jsonl" | while IFS=$'\t' read -r case_name scenario impairment iterations gbps healthy_gbps affected_gbps client_p50 client_p99 send_ratio datagram_out_s stale_s nack_out_s throughput_spread p99 p99_spread queue unstable reasons; do
-      echo "| $case_name | $scenario | $impairment | $iterations | $gbps | $healthy_gbps | $affected_gbps | $client_p50 | $client_p99 | $send_ratio | $datagram_out_s | $stale_s | $nack_out_s | $throughput_spread | $p99 | $p99_spread | $queue | $unstable | $reasons |"
+    ' "$suite_aggregate_jsonl" | while IFS=$'\t' read -r case_name scenario impairment iterations active_peers disconnected_state gbps healthy_gbps affected_gbps client_p50 client_p99 send_ratio datagram_out_s stale_s nack_out_s throughput_spread p99 p99_spread queue unstable reasons; do
+      echo "| $case_name | $scenario | $impairment | $iterations | $active_peers | $disconnected_state | $gbps | $healthy_gbps | $affected_gbps | $client_p50 | $client_p99 | $send_ratio | $datagram_out_s | $stale_s | $nack_out_s | $throughput_spread | $p99 | $p99_spread | $queue | $unstable | $reasons |"
     done
   } >>"$report"
 }

@@ -24,6 +24,7 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.LongAdder;
@@ -50,8 +51,9 @@ public final class BenchmarkServerMetrics implements RakServerMetrics {
 
     public List<PeerStats.Snapshot> peerSnapshots() {
         List<PeerStats.Snapshot> peers = new ArrayList<>();
-        for (PeerStats peer : this.byChannel.values()) {
-            peers.add(peer.snapshot());
+        for (Map.Entry<RakChildChannel, PeerStats> entry : this.byChannel.entrySet()) {
+            RakChildChannel channel = entry.getKey();
+            peers.add(entry.getValue().snapshot(channel.isOpen(), channel.isActive()));
         }
         Collections.sort(peers, (a, b) -> Integer.compare(a.id, b.id));
         return peers;
