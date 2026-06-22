@@ -966,6 +966,30 @@ next_actions_json="$(jq -s '
       "missing-lab-validation",
       "missing-lab-aggregate",
       "missing-lab-capacity",
+      "missing-impairment-baseline-manifest",
+      "missing-impairment-summary"
+    ]) then {
+      code: "prepare-fresh-lab-handoff",
+      title: "Generate a fresh lab handoff",
+      detail: "Create a current-revision handoff before lab operators run remote workers so source audit, plans, preflight, and freshness checks match the checkout.",
+      command: "benchmark/scripts/prepare-fresh-lab-handoff.sh --out benchmark/build/benchmark-results/lab-handoff-<date>-<topology> --artifact-root benchmark/build/benchmark-results/lab-run-<date>-<topology> --source-audit-out benchmark/build/benchmark-results/production-evidence-current --server-host <server-ip> --interface <nic> --expect-mtu <mtu> --expect-min-cpus <min-cpus> --curve-receiver receiver-a=1 --contention-receiver receiver-a=250 --contention-receiver receiver-b=250 --sudo-netem"
+    } else empty end,
+    if has_any_code([
+      "missing-lab-baseline-manifest",
+      "missing-lab-validation",
+      "missing-lab-aggregate",
+      "missing-lab-capacity"
+    ]) then {
+      code: "run-perfect-lab-plan",
+      title: "Run and merge the perfect-network lab plan",
+      detail: "Run the generated perfect-plan server and receiver scripts on separate hosts, copy receiver artifacts back, and merge/validate the perfect-network baseline artifacts.",
+      command: "<lab-handoff>/perfect-plan/check-plan-freshness.sh && <lab-handoff>/perfect-plan/merge-all.sh"
+    } else empty end,
+    if has_any_code([
+      "missing-lab-baseline-manifest",
+      "missing-lab-validation",
+      "missing-lab-aggregate",
+      "missing-lab-capacity",
       "invalid-lab-baseline-kind"
     ]) then {
       code: "promote-lab-baseline",
@@ -1009,6 +1033,15 @@ next_actions_json="$(jq -s '
       title: "Rerun or repromote the perfect-network baseline",
       detail: "The promoted baseline does not match the required matrix, capacity selection, or contention gate.",
       command: "benchmark/scripts/prepare-lab-baseline-handoff.sh --server-host <server-ip> --interface <nic> --expect-mtu <mtu> --expect-min-cpus <min-cpus>"
+    } else empty end,
+    if has_any_code([
+      "missing-impairment-baseline-manifest",
+      "missing-impairment-summary"
+    ]) then {
+      code: "run-impairment-campaign",
+      title: "Run, validate, and summarize the impairment campaign",
+      detail: "Run every generated impairment profile with netem evidence, merge profile artifacts, validate the campaign, and write the campaign summary before promotion.",
+      command: "<lab-handoff>/impairment-plan/check-plan-freshness.sh && <lab-handoff>/impairment-plan/validate-all.sh && <lab-handoff>/impairment-plan/summarize-campaign.sh"
     } else empty end,
     if has_any_code([
       "missing-impairment-baseline-manifest",

@@ -2163,6 +2163,38 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessReportsMissingBaselineRunOrder() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-readiness-run-order-test");
+        Path labBaseline = output.resolve("missing-lab");
+        Path impairmentBaseline = output.resolve("missing-impairment");
+        Path readiness = output.resolve("readiness");
+
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode readinessJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        List<String> actionCodes = readinessJson.path("nextActions").findValuesAsText("code");
+        Assertions.assertTrue(actionCodes.contains("prepare-fresh-lab-handoff"));
+        Assertions.assertTrue(actionCodes.contains("run-perfect-lab-plan"));
+        Assertions.assertTrue(actionCodes.contains("promote-lab-baseline"));
+        Assertions.assertTrue(actionCodes.contains("run-impairment-campaign"));
+        Assertions.assertTrue(actionCodes.contains("promote-impairment-baseline"));
+
+        String report = Files.readString(readiness.resolve("readiness.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(report.contains("prepare-fresh-lab-handoff.sh"));
+        Assertions.assertTrue(report.contains("perfect-plan/merge-all.sh"));
+        Assertions.assertTrue(report.contains("impairment-plan/summarize-campaign.sh"));
+    }
+
+    @Test
     public void testBaselineReadinessRequiresCurvePayloadCoverage() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
