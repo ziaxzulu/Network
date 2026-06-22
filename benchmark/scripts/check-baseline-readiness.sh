@@ -380,6 +380,65 @@ if [[ -s "$impairment_summary" ]]; then
 fi
 
 issues_array="$(jq -s '.' "$issues_jsonl")"
+next_actions_json="$(jq -s '
+  def has_code($code): any(.[]; .code == $code);
+  def has_any_code($codes): any(.[]; (.code as $code | ($codes | index($code)) != null));
+  def has_prefix($prefix): any(.[]; (.code | startswith($prefix)));
+  [
+    if has_any_code([
+      "missing-lab-baseline-manifest",
+      "missing-lab-validation",
+      "missing-lab-aggregate",
+      "missing-lab-capacity",
+      "invalid-lab-baseline-kind"
+    ]) then {
+      code: "promote-lab-baseline",
+      title: "Promote the perfect-network lab baseline",
+      detail: "Create a promoted lab baseline package after merged perfect-network artifacts exist.",
+      command: "benchmark/scripts/promote-lab-baseline.sh --input <perfect-artifacts>/combined --manifest <curve-manifest.jsonl> --manifest <raised-curve-manifest.jsonl> --manifest <contention-manifest.jsonl>"
+    } else empty end,
+    if has_any_code([
+      "failed-lab-validation",
+      "lab-not-separate-hosts",
+      "lab-missing-host-reports",
+      "lab-missing-prereq-reports",
+      "lab-prereq-not-ready",
+      "lab-prereq-report-failed",
+      "lab-prereq-not-separate-hosts"
+    ]) then {
+      code: "fix-lab-evidence",
+      title: "Fix perfect-network validation evidence",
+      detail: "Capture topology, host reports, and ready prereq reports on the lab hosts, then rerun validation.",
+      command: "benchmark/scripts/validate-lab-baseline.sh --input <perfect-artifacts>/combined --manifest <curve-manifest.jsonl> --manifest <raised-curve-manifest.jsonl> --manifest <contention-manifest.jsonl>"
+    } else empty end,
+    if has_prefix("lab-missing-") or has_any_code([
+      "lab-contention-client-gate-too-low",
+      "lab-contention-target-client-mbps-gate-too-low",
+      "lab-unselected-capacity"
+    ]) then {
+      code: "rerun-perfect-baseline",
+      title: "Rerun or repromote the perfect-network baseline",
+      detail: "The promoted baseline does not match the required matrix, capacity selection, or contention gate.",
+      command: "benchmark/scripts/prepare-lab-baseline-handoff.sh --server-host <server-ip> --interface <nic>"
+    } else empty end,
+    if has_any_code([
+      "missing-impairment-baseline-manifest",
+      "missing-impairment-summary",
+      "invalid-impairment-baseline-kind"
+    ]) then {
+      code: "promote-impairment-baseline",
+      title: "Promote the adverse-network impairment campaign",
+      detail: "Create a promoted impairment package after campaign summary artifacts exist.",
+      command: "benchmark/scripts/promote-lab-impairment.sh --input <impairment-artifacts>/campaign-summary"
+    } else empty end,
+    if has_prefix("impairment-") or has_any_code(["failed-impairment-summary"]) then {
+      code: "rerun-impairment-campaign",
+      title: "Fix or rerun the impairment campaign",
+      detail: "The impairment package is missing required profiles, netem status evidence, validation, capacity, or contention rows.",
+      command: "benchmark/scripts/plan-lab-impairment.sh --interface <nic> --target-host-role <receiver-role> --server-host <server-ip>"
+    } else empty end
+  ] | reduce .[] as $action ([]; if any(.[]; .code == $action.code) then . else . + [$action] end)
+' "$issues_jsonl")"
 
 jq -n \
   --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -394,6 +453,7 @@ jq -n \
   --argjson requiredMinReadyPrereqReports "$required_min_ready_prereq_reports" \
   --argjson requiredMinPrereqDistinctHostnames "$required_min_prereq_distinct_hostnames" \
   --argjson issues "$issues_array" \
+  --argjson nextActions "$next_actions_json" \
   --slurpfile labValidation "$([[ -s "$lab_validation" ]] && printf '%s' "$lab_validation" || printf '%s' /dev/null)" \
   --slurpfile impairmentSummary "$([[ -s "$impairment_summary" ]] && printf '%s' "$impairment_summary" || printf '%s' /dev/null)" \
   '{
@@ -416,6 +476,7 @@ jq -n \
     requiredMinPrereqReports: $requiredMinPrereqReports,
     requiredMinReadyPrereqReports: $requiredMinReadyPrereqReports,
     requiredMinPrereqDistinctHostnames: $requiredMinPrereqDistinctHostnames,
+    nextActions: $nextActions,
     issues: $issues
   }' >"$readiness_json"
 
@@ -463,6 +524,16 @@ jq -n \
     echo "- Netem status evidence files: \`$(jq -r '.netemStatusEvidenceCount // 0' "$impairment_summary")\`"
   else
     echo "No impairment summary found."
+  fi
+  echo
+  echo "## Next Actions"
+  echo
+  if jq -e '.nextActions | length == 0' "$readiness_json" >/dev/null; then
+    echo "No follow-up actions required."
+  else
+    echo "| Code | Action | Command |"
+    echo "| --- | --- | --- |"
+    jq -r '.nextActions[] | "| `\(.code)` | \(.title): \(.detail) | `\(.command)` |"' "$readiness_json"
   fi
   echo
   echo "## Issues"

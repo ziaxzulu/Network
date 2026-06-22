@@ -677,6 +677,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(missingReadiness.path("requiredCurvePayloadSizes").isArray());
         Assertions.assertTrue(missingReadiness.findValuesAsText("code").contains("lab-missing-curve-payload"));
         Assertions.assertTrue(missingReadiness.findValuesAsText("code").contains("lab-missing-capacity-payload"));
+        Assertions.assertTrue(missingReadiness.path("nextActions").findValuesAsText("code")
+                .contains("rerun-perfect-baseline"));
 
         writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
         ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
@@ -691,6 +693,7 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8));
         Assertions.assertTrue(readyReadiness.path("ready").asBoolean());
         Assertions.assertEquals(7, readyReadiness.path("requiredCurvePayloadSizes").size());
+        Assertions.assertEquals(0, readyReadiness.path("nextActions").size());
     }
 
     @Test
