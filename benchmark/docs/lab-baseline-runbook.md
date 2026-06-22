@@ -113,7 +113,7 @@ HOST_ROLE=server benchmark/scripts/check-lab-host-prereqs.sh \
   --require-no-netem
 ```
 
-Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. Add `--require-cpu-performance` when the lab hosts have been pinned to the performance governor; leave it advisory on hosts where the governor is unavailable but document that in `topology.md`. The check is read-only and writes `prereq.json` plus `prereq.md`; it fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, qdisc inspection failures, strict clock/MTU/CPU-count/no-netem mismatches, or strict CPU-governor mismatches. Keep those directories under the lab artifact root. Baseline validation requires at least two ready `prereq.json` files from at least two distinct hostnames unless `--allow-missing-prereq-context` is used for a non-baseline smoke run.
+Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. Add `--require-cpu-performance` when the lab hosts have been pinned to the performance governor; leave it advisory on hosts where the governor is unavailable but document that in `topology.md`. The check is read-only and writes `prereq.json` plus `prereq.md`; it fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, qdisc inspection failures, strict clock/MTU/CPU-count/no-netem mismatches, or strict CPU-governor mismatches. Keep those directories under the lab artifact root. Baseline validation requires at least two ready strict `prereq.json` files from at least two distinct hostnames unless `--allow-missing-prereq-context` or `--allow-loose-prereq-gates` is used for a non-baseline smoke run.
 
 For a baseline-of-record campaign, start with the lab planner. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
 
@@ -345,7 +345,7 @@ benchmark/scripts/validate-lab-baseline.sh \
   --input benchmark/build/benchmark-results/lab-baseline
 ```
 
-The lab planner's generated `merge-all.sh` runs the same validation automatically after it creates the combined aggregate, passing the curve and contention manifests so missing planned cases fail validation. Validation fails by default when `topology.md` is missing, fewer than two host reports were captured under the artifact root, those reports do not contain at least two distinct hostnames, fewer than two prereq reports were captured, any prereq report is not ready, or prereq reports do not contain at least two distinct hostnames.
+The lab planner's generated `merge-all.sh` runs the same validation automatically after it creates the combined aggregate, passing the curve and contention manifests so missing planned cases fail validation. Validation fails by default when `topology.md` is missing, fewer than two host reports were captured under the artifact root, those reports do not contain at least two distinct hostnames, fewer than two prereq reports were captured, any prereq report is not ready, prereq reports do not contain at least two distinct hostnames, or strict prereq evidence for clock sync, expected MTU, minimum CPU count, and no pre-existing netem qdisc is missing.
 
 After validation passes, package the baseline of record:
 

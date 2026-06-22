@@ -672,6 +672,42 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testLabValidationRequiresStrictPrereqGates() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-lab-validation-strict-prereq-test");
+        Path loosePrereqs = output.resolve("loose-prereqs");
+        writeValidationLabArtifacts(loosePrereqs, 2, 2, false);
+
+        ProcessResult strict = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/validate-lab-baseline.sh").toString(),
+                "--input", loosePrereqs.toString(),
+                "--out", loosePrereqs.resolve("validation").toString()
+        );
+        Assertions.assertEquals(1, strict.exitCode, strict.output);
+        JsonNode strictJson = JSON.readTree(Files.readString(
+                loosePrereqs.resolve("validation/validation.json"), StandardCharsets.UTF_8));
+        Assertions.assertEquals(0, strictJson.path("strictPrereqReportCount").asInt());
+        Assertions.assertTrue(strictJson.findValuesAsText("code")
+                .contains("missing-strict-prereq-gates"));
+        Assertions.assertTrue(strictJson.findValuesAsText("code")
+                .contains("missing-strict-prereq-distinct-hosts"));
+
+        ProcessResult smokeBypass = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/validate-lab-baseline.sh").toString(),
+                "--input", loosePrereqs.toString(),
+                "--out", loosePrereqs.resolve("validation-bypass").toString(),
+                "--allow-loose-prereq-gates"
+        );
+        Assertions.assertEquals(0, smokeBypass.exitCode, smokeBypass.output);
+        JsonNode bypassJson = JSON.readTree(Files.readString(
+                loosePrereqs.resolve("validation-bypass/validation.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(bypassJson.path("allowLoosePrereqGates").asBoolean());
+    }
+
+    @Test
     public void testNetnsWorkerSmokeDryRunProducesManifest() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1114,7 +1150,9 @@ public class BenchmarkKitTests {
                         + ",\"prereqReportCount\":" + prereqReportCount
                         + ",\"readyPrereqReportCount\":" + readyPrereqReportCount
                         + ",\"notReadyPrereqReportCount\":" + Math.max(0, prereqReportCount - readyPrereqReportCount)
+                        + ",\"strictPrereqReportCount\":" + readyPrereqReportCount
                         + ",\"prereqDistinctHostnameCount\":" + prereqDistinctHostnameCount
+                        + ",\"strictPrereqDistinctHostnameCount\":" + Math.min(readyPrereqReportCount, prereqDistinctHostnameCount)
                         + ",\"minContentionClients\":" + minContentionClients
                         + ",\"minContentionTargetClientMbps\":" + minContentionTargetClientMbps
                         + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length
@@ -1145,6 +1183,13 @@ public class BenchmarkKitTests {
     private static void writeValidationLabArtifacts(Path labRoot,
                                                     int prereqReportCount,
                                                     int readyPrereqReportCount) throws Exception {
+        writeValidationLabArtifacts(labRoot, prereqReportCount, readyPrereqReportCount, true);
+    }
+
+    private static void writeValidationLabArtifacts(Path labRoot,
+                                                    int prereqReportCount,
+                                                    int readyPrereqReportCount,
+                                                    boolean strictReadyPrereqs) throws Exception {
         Files.createDirectories(labRoot);
         Files.writeString(labRoot.resolve("topology.md"), "# Topology\n", StandardCharsets.UTF_8);
         for (int host = 0; host < 2; host++) {
@@ -1157,9 +1202,15 @@ public class BenchmarkKitTests {
         for (int prereq = 0; prereq < prereqReportCount; prereq++) {
             Path prereqDir = labRoot.resolve("prereq-host-" + prereq);
             Files.createDirectories(prereqDir);
+            boolean ready = prereq < readyPrereqReportCount;
+            String strictFields = ready && strictReadyPrereqs
+                    ? ",\"requireClockSync\":true,\"requireNoNetem\":true,\"expectedMtu\":1500,"
+                    + "\"interfaceMtu\":1500,\"expectedMinCpus\":1,\"cpuCount\":8"
+                    : "";
             Files.writeString(prereqDir.resolve("prereq.json"),
-                    "{\"ready\":" + (prereq < readyPrereqReportCount)
-                            + ",\"hostname\":\"host-" + prereq + "\"}\n",
+                    "{\"ready\":" + ready
+                            + ",\"hostname\":\"host-" + prereq + "\""
+                            + strictFields + "}\n",
                     StandardCharsets.UTF_8);
             Files.writeString(prereqDir.resolve("prereq.md"), "# Prereq\n", StandardCharsets.UTF_8);
         }

@@ -231,6 +231,17 @@ if [[ -s "$lab_validation" ]]; then
     extra="$(jq -n --argjson required "$required_min_prereq_distinct_hostnames" --argjson actual "$(jq -r '.prereqDistinctHostnameCount // 0' "$lab_validation")" '{requiredMinPrereqDistinctHostnames:$required,actualPrereqDistinctHostnameCount:$actual}')"
     append_issue "lab-prereq-not-separate-hosts" "lab-baseline" "lab baseline does not prove prerequisite checks from enough distinct hostnames" "$extra"
   fi
+  if jq -e '.allowLoosePrereqGates == true' "$lab_validation" >/dev/null; then
+    append_issue "lab-prereq-strict-gates-bypassed" "lab-baseline" "lab validation allowed loose prerequisite gates" "{\"path\":\"$lab_validation\"}"
+  fi
+  if ! jq -e --argjson required "$required_min_ready_prereq_reports" '(.strictPrereqReportCount // 0) >= $required' "$lab_validation" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_ready_prereq_reports" --argjson actual "$(jq -r '.strictPrereqReportCount // 0' "$lab_validation")" '{requiredMinStrictPrereqReports:$required,actualStrictPrereqReportCount:$actual}')"
+    append_issue "lab-prereq-strict-gates-missing" "lab-baseline" "lab baseline does not prove enough strict clock, MTU, CPU-count, and no-netem prerequisite gates" "$extra"
+  fi
+  if ! jq -e --argjson required "$required_min_prereq_distinct_hostnames" '(.strictPrereqDistinctHostnameCount // 0) >= $required' "$lab_validation" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_prereq_distinct_hostnames" --argjson actual "$(jq -r '.strictPrereqDistinctHostnameCount // 0' "$lab_validation")" '{requiredMinStrictPrereqDistinctHostnames:$required,actualStrictPrereqDistinctHostnameCount:$actual}')"
+    append_issue "lab-prereq-strict-gates-not-separate-hosts" "lab-baseline" "lab baseline does not prove strict prerequisite gates from enough distinct hostnames" "$extra"
+  fi
   for scenario in curve multi-client-fanout fairness disappearing-clients; do
     if ! jq -e --arg scenario "$scenario" '(.scenarioCounts[$scenario] // 0) > 0' "$lab_validation" >/dev/null; then
       append_issue "lab-missing-scenario" "lab-baseline" "lab baseline is missing a required scenario family" "{\"scenario\":\"$scenario\"}"
@@ -404,11 +415,14 @@ next_actions_json="$(jq -s '
       "lab-missing-prereq-reports",
       "lab-prereq-not-ready",
       "lab-prereq-report-failed",
-      "lab-prereq-not-separate-hosts"
+      "lab-prereq-not-separate-hosts",
+      "lab-prereq-strict-gates-bypassed",
+      "lab-prereq-strict-gates-missing",
+      "lab-prereq-strict-gates-not-separate-hosts"
     ]) then {
       code: "fix-lab-evidence",
       title: "Fix perfect-network validation evidence",
-      detail: "Capture topology, host reports, and ready prereq reports on the lab hosts, then rerun validation.",
+      detail: "Capture topology, host reports, and strict ready prereq reports on the lab hosts, then rerun validation.",
       command: "benchmark/scripts/validate-lab-baseline.sh --input <perfect-artifacts>/combined --manifest <curve-manifest.jsonl> --manifest <raised-curve-manifest.jsonl> --manifest <contention-manifest.jsonl>"
     } else empty end,
     if has_prefix("lab-missing-") or has_any_code([
@@ -506,7 +520,9 @@ jq -n \
     echo "- Distinct hostnames: \`$(jq -r '.distinctHostnameCount // 0' "$lab_validation")\`"
     echo "- Prereq reports: \`$(jq -r '.prereqReportCount // 0' "$lab_validation")\`"
     echo "- Ready prereq reports: \`$(jq -r '.readyPrereqReportCount // 0' "$lab_validation")\`"
+    echo "- Strict prereq reports: \`$(jq -r '.strictPrereqReportCount // 0' "$lab_validation")\`"
     echo "- Distinct prereq hostnames: \`$(jq -r '.prereqDistinctHostnameCount // 0' "$lab_validation")\`"
+    echo "- Strict prereq hostnames: \`$(jq -r '.strictPrereqDistinctHostnameCount // 0' "$lab_validation")\`"
     echo "- Validated minimum contention clients: \`$(jq -r '.minContentionClients // "missing"' "$lab_validation")\`"
     echo "- Validated minimum contention target/client Mbps: \`$(jq -r '.minContentionTargetClientMbps // "missing"' "$lab_validation")\`"
   else
