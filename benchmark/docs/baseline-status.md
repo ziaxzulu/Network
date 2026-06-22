@@ -209,15 +209,17 @@ The generated plan schedules:
 - `56` raised-limiter curve rows across the same payloads
 - `9` contention/workload rows at `500` clients split across two receiver hosts: fanout, immediate small-packet fanout, fairness, blackhole disappearance, three batched cadences, and two resource-pack transfers
 
-Current structural handoff audit in this worktree:
+Latest structural handoff audit in this worktree:
 
 ```text
 benchmark/build/benchmark-results/lab-handoff-current-audit-20260622T070505Z/
 ```
 
-This generated handoff passed `check-lab-handoff.sh` with `ready=true` and `0` issues. It contains `56` default-limiter curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, and five impairment profiles (`perfect`, `near-loss`, `regional-loss`, `poor`, `severe`) each with the same `56/56/9` row shape. The perfect contention plan includes `lab-perfect-contention-immediate-500x1-p256` at payload `256` and `1Mbps` per client, plus the main `5Mbps` fanout, fairness, blackhole disappearance, batched, and resource-pack rows. The handoff source audit is ready, has `0` issues, and records Network revision `cb399603b15d`. The generated perfect and impairment freshness checks reported `result=fresh` when run at `2026-06-22T07:05:41Z`.
+This generated handoff passed `check-lab-handoff.sh` with `ready=true` and `0` issues when it was created. It contains `56` default-limiter curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, and five impairment profiles (`perfect`, `near-loss`, `regional-loss`, `poor`, `severe`) each with the same `56/56/9` row shape. The perfect contention plan includes `lab-perfect-contention-immediate-500x1-p256` at payload `256` and `1Mbps` per client, plus the main `5Mbps` fanout, fairness, blackhole disappearance, batched, and resource-pack rows. The generated perfect and impairment freshness checks reported `result=fresh` when run at `2026-06-22T07:05:41Z`.
 
-This audit used local placeholder host values (`127.0.0.1`, `lo`) and proves planner/preflight structure only. It is not separate-host line-rate evidence and does not replace the lab baseline run.
+After later local evidence commits, rerunning `check-lab-handoff.sh --require-source-audit` against this older generated handoff correctly reports `not-ready` with `handoff-source-audit-sha-mismatch`, because the handoff embeds the source-audit fingerprint from the checkout that created it. This is expected and useful. Before lab operators distribute commands, refresh `production-evidence-current/source-audit.json`, regenerate the handoff from the current checkout, rerun `check-lab-handoff.sh --require-source-audit`, and run the generated freshness checks close to the actual start time.
+
+This audit used local placeholder host values (`127.0.0.1`, `lo`) and proves planner/preflight structure only. It is not a reusable lab execution handoff, not separate-host line-rate evidence, and does not replace the lab baseline run.
 
 Before promotion, the lab output must include:
 
