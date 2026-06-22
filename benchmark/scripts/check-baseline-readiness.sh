@@ -8,6 +8,8 @@ expected_impairment_profiles="perfect,near-loss,regional-loss,poor,severe"
 required_curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 required_impairment_contention_scenarios="multi-client-fanout,fairness,disappearing-clients,batched-game-traffic,resource-pack-transfer"
 required_batch_intervals_ms="10,20,50"
+required_immediate_payload_sizes="256"
+required_immediate_target_client_mbps="1"
 required_resource_pack_chunk_sizes="8192,262144"
 required_resource_pack_intervals_ms="200"
 required_disappearance_modes="blackhole"
@@ -33,6 +35,8 @@ Options:
   --required-curve-payload-sizes CSV Required perfect-network curve payload sizes. Default: 64,256,512,1200,1340,1400,262144.
   --required-impairment-contention-scenarios CSV Required contention scenarios per impairment profile. Default: multi-client-fanout,fairness,disappearing-clients,batched-game-traffic,resource-pack-transfer.
   --required-batch-intervals-ms CSV Required batched-game-traffic intervals in milliseconds. Default: 10,20,50.
+  --required-immediate-payload-sizes CSV Required immediate small-packet fanout payload sizes. Default: 256.
+  --required-immediate-target-client-mbps N Required immediate small-packet fanout target/client Mbps. Default: 1.
   --required-resource-pack-chunk-sizes CSV Required resource-pack chunk payload sizes. Default: 8192,262144.
   --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
   --required-disappearance-modes CSV Required disappearing-client modes. Default: blackhole.
@@ -75,6 +79,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --required-batch-intervals-ms)
       required_batch_intervals_ms="$2"
+      shift 2
+      ;;
+    --required-immediate-payload-sizes)
+      required_immediate_payload_sizes="$2"
+      shift 2
+      ;;
+    --required-immediate-target-client-mbps)
+      required_immediate_target_client_mbps="$2"
       shift 2
       ;;
     --required-resource-pack-chunk-sizes)
@@ -139,6 +151,10 @@ if ! [[ "$required_min_contention_clients" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$required_min_contention_target_client_mbps" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "--required-min-contention-target-client-mbps must be a non-negative number" >&2
+  exit 2
+fi
+if ! [[ "$required_immediate_target_client_mbps" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--required-immediate-target-client-mbps must be a non-negative number" >&2
   exit 2
 fi
 if ! [[ "$required_min_prereq_reports" =~ ^[0-9]+$ ]]; then
@@ -244,6 +260,7 @@ lab_capacity="$lab_baseline/bandwidth-capacity.jsonl"
 required_curve_payloads_json="$(csv_json_number_array "$required_curve_payload_sizes")"
 required_impairment_contention_json="$(csv_json_array "$required_impairment_contention_scenarios")"
 required_batch_intervals_json="$(csv_json_duration_millis_array "$required_batch_intervals_ms")"
+required_immediate_payloads_json="$(csv_json_number_array "$required_immediate_payload_sizes")"
 required_resource_pack_chunks_json="$(csv_json_number_array "$required_resource_pack_chunk_sizes")"
 required_resource_pack_intervals_json="$(csv_json_duration_millis_array "$required_resource_pack_intervals_ms")"
 required_disappearance_modes_json="$(csv_json_array "$required_disappearance_modes")"
@@ -404,6 +421,27 @@ if [[ -s "$lab_aggregate" ]]; then
     [[ -z "$missing_interval" ]] && continue
     append_issue "lab-missing-batch-interval" "lab-baseline" "lab baseline is missing a required batched-game-traffic interval" "{\"batchIntervalMillis\":$missing_interval}"
   done <<<"$missing_batch_intervals"
+
+  missing_immediate_shapes="$(jq -r -s --argjson expectedPayloads "$required_immediate_payloads_json" --argjson expectedTarget "$required_immediate_target_client_mbps" '
+    def is_immediate:
+      ((.benchmarkName // "") == "multi-client-fanout")
+      and (
+        ((.affectedKind // "") == "immediate")
+        or (((.case // "") | ascii_downcase) | contains("immediate"))
+      );
+    ([.[] | select(is_immediate) | {
+      payloadSize: (.payloadSize // empty | tonumber),
+      targetClientMbps: (.targetClientMbps // .perClientMbps // empty | tonumber)
+    }]) as $actual
+    | $expectedPayloads[] as $payload
+    | select((any($actual[]; .payloadSize == $payload and (((.targetClientMbps - $expectedTarget) | fabs) <= 0.000001))) | not)
+    | [$payload, $expectedTarget] | @tsv
+  ' "$lab_aggregate")"
+  while IFS=$'\t' read -r missing_payload missing_target; do
+    [[ -z "$missing_payload" || -z "$missing_target" ]] && continue
+    extra="$(jq -n --argjson payloadSize "$missing_payload" --argjson targetClientMbps "$missing_target" '{payloadSize:$payloadSize,targetClientMbps:$targetClientMbps}')"
+    append_issue "lab-missing-immediate-shape" "lab-baseline" "lab baseline is missing a required immediate small-packet fanout payload and target shape" "$extra"
+  done <<<"$missing_immediate_shapes"
 
   missing_resource_shapes="$(jq -r -s --argjson expectedChunks "$required_resource_pack_chunks_json" --argjson expectedIntervals "$required_resource_pack_intervals_json" '
     def is_resource:
@@ -622,6 +660,30 @@ if [[ -s "$impairment_summary" ]]; then
     append_issue "impairment-missing-batch-interval" "impairment-baseline" "impairment profile is missing a required batched-game-traffic interval" "$extra"
   done <<<"$missing_impairment_batch_intervals"
 
+  missing_impairment_immediate_shapes="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedPayloads "$required_immediate_payloads_json" --argjson expectedTarget "$required_immediate_target_client_mbps" '
+    def is_immediate:
+      ((.benchmarkName // "") == "multi-client-fanout")
+      and (
+        ((.affectedKind // "") == "immediate")
+        or (((.case // "") | ascii_downcase) | contains("immediate"))
+      );
+    (.profiles // [])[]
+    | .profile as $profile
+    | select(($expectedProfiles | index($profile)) != null)
+    | ([.aggregate.contentionRows[]? | select(is_immediate) | {
+        payloadSize: (.payloadSize // empty | tonumber),
+        targetClientMbps: (.targetClientMbps // .perClientMbps // empty | tonumber)
+      }]) as $actual
+    | $expectedPayloads[] as $payload
+    | select((any($actual[]; .payloadSize == $payload and (((.targetClientMbps - $expectedTarget) | fabs) <= 0.000001))) | not)
+    | [$profile, $payload, $expectedTarget] | @tsv
+  ' "$impairment_summary")"
+  while IFS=$'\t' read -r profile missing_payload missing_target; do
+    [[ -z "$profile" || -z "$missing_payload" || -z "$missing_target" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --argjson payloadSize "$missing_payload" --argjson targetClientMbps "$missing_target" '{profile:$profile,payloadSize:$payloadSize,targetClientMbps:$targetClientMbps}')"
+    append_issue "impairment-missing-immediate-shape" "impairment-baseline" "impairment profile is missing a required immediate small-packet fanout payload and target shape" "$extra"
+  done <<<"$missing_impairment_immediate_shapes"
+
   missing_impairment_resource_shapes="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedChunks "$required_resource_pack_chunks_json" --argjson expectedIntervals "$required_resource_pack_intervals_json" '
     (.profiles // [])[]
     | .profile as $profile
@@ -741,6 +803,8 @@ jq -n \
   --argjson requiredCurvePayloadSizes "$required_curve_payloads_json" \
   --argjson requiredImpairmentContentionScenarios "$required_impairment_contention_json" \
   --argjson requiredBatchIntervalsMillis "$required_batch_intervals_json" \
+  --argjson requiredImmediatePayloadSizes "$required_immediate_payloads_json" \
+  --argjson requiredImmediateTargetClientMbps "$required_immediate_target_client_mbps" \
   --argjson requiredResourcePackChunkSizes "$required_resource_pack_chunks_json" \
   --argjson requiredResourcePackIntervalsMillis "$required_resource_pack_intervals_json" \
   --argjson requiredDisappearanceModes "$required_disappearance_modes_json" \
@@ -770,6 +834,8 @@ jq -n \
     requiredCurvePayloadSizes: $requiredCurvePayloadSizes,
     requiredImpairmentContentionScenarios: $requiredImpairmentContentionScenarios,
     requiredBatchIntervalsMillis: $requiredBatchIntervalsMillis,
+    requiredImmediatePayloadSizes: $requiredImmediatePayloadSizes,
+    requiredImmediateTargetClientMbps: $requiredImmediateTargetClientMbps,
     requiredResourcePackChunkSizes: $requiredResourcePackChunkSizes,
     requiredResourcePackIntervalsMillis: $requiredResourcePackIntervalsMillis,
     requiredDisappearanceModes: $requiredDisappearanceModes,
@@ -794,6 +860,8 @@ jq -n \
   echo "- Required curve payload sizes: \`$required_curve_payload_sizes\`"
   echo "- Required impairment contention scenarios: \`$required_impairment_contention_scenarios\`"
   echo "- Required batch intervals ms: \`$required_batch_intervals_ms\`"
+  echo "- Required immediate payload sizes: \`$required_immediate_payload_sizes\`"
+  echo "- Required immediate target/client Mbps: \`$required_immediate_target_client_mbps\`"
   echo "- Required resource-pack chunk sizes: \`$required_resource_pack_chunk_sizes\`"
   echo "- Required resource-pack intervals ms: \`$required_resource_pack_intervals_ms\`"
   echo "- Required disappearance modes: \`$required_disappearance_modes\`"

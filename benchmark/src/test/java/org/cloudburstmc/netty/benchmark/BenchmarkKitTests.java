@@ -1864,6 +1864,61 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresImmediateShape() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-immediate-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"),
+                Files.readString(labBaseline.resolve("suite-aggregate.jsonl"), StandardCharsets.UTF_8)
+                        .replace("{\"case\":\"immediate-100x1-p256\",\"benchmarkName\":\"multi-client-fanout\","
+                                + "\"payloadSize\":256,\"targetClientMbps\":1,\"affectedKind\":\"immediate\""
+                                + readinessRetryFieldsJson() + "}\n", ""),
+                StandardCharsets.UTF_8);
+
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        Files.writeString(impairmentBaseline.resolve("impairment-summary.json"),
+                Files.readString(impairmentBaseline.resolve("impairment-summary.json"), StandardCharsets.UTF_8)
+                        .replace("{\"case\":\"immediate-100x1-p256\",\"benchmarkName\":\"multi-client-fanout\","
+                                + "\"payloadSize\":256,\"targetClientMbps\":1,\"affectedKind\":\"immediate\""
+                                + readinessRetryFieldsJson() + "},", ""),
+                StandardCharsets.UTF_8);
+
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode missingReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingReadiness.path("ready").asBoolean());
+        Assertions.assertEquals(256, missingReadiness.path("requiredImmediatePayloadSizes").get(0).asInt());
+        Assertions.assertEquals(1.0D, missingReadiness.path("requiredImmediateTargetClientMbps").asDouble(), 0.001D);
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("lab-missing-immediate-shape"));
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("impairment-missing-immediate-shape"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+    }
+
+    @Test
     public void testBaselineReadinessRequiresBlackholeDisappearanceMode() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -2467,7 +2522,7 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("validation.json"),
                 "{\"passed\":true,\"distinctHostnameCount\":2,\"hostReportCount\":2,\"rowCount\":"
-                        + (payloadSizes.length + 5)
+                        + (payloadSizes.length + 9)
                         + ",\"capacityRowCount\":" + payloadSizes.length
                         + ",\"prereqReportCount\":" + prereqReportCount
                         + ",\"readyPrereqReportCount\":" + readyPrereqReportCount
@@ -2478,7 +2533,7 @@ public class BenchmarkKitTests {
                         + ",\"minContentionClients\":" + minContentionClients
                         + ",\"minContentionTargetClientMbps\":" + minContentionTargetClientMbps
                         + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length
-                        + ",\"multi-client-fanout\":1,\"fairness\":1,\"disappearing-clients\":1,"
+                        + ",\"multi-client-fanout\":2,\"fairness\":1,\"disappearing-clients\":1,"
                         + "\"batched-game-traffic\":3,\"resource-pack-transfer\":2}}\n",
                 StandardCharsets.UTF_8);
 
@@ -2499,6 +2554,9 @@ public class BenchmarkKitTests {
                     .append("\"deliveredGbps\":1.0,\"probeRttP99Millis\":1.0}}\n");
         }
         aggregate.append("{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\",\"payloadSize\":512")
+                .append(readinessRetryFieldsJson()).append("}\n");
+        aggregate.append("{\"case\":\"immediate-100x1-p256\",\"benchmarkName\":\"multi-client-fanout\",")
+                .append("\"payloadSize\":256,\"targetClientMbps\":1,\"affectedKind\":\"immediate\"")
                 .append(readinessRetryFieldsJson()).append("}\n");
         aggregate.append("{\"case\":\"fairness\",\"benchmarkName\":\"fairness\",\"payloadSize\":512")
                 .append(readinessRetryFieldsJson()).append("}\n");
@@ -2863,6 +2921,9 @@ public class BenchmarkKitTests {
             profiles.append("{\"profile\":\"").append(profileNames[profileIndex]).append("\",")
                     .append("\"aggregate\":{\"contentionRows\":[")
                     .append("{\"benchmarkName\":\"multi-client-fanout\"")
+                    .append(readinessRetryFieldsJson()).append("},")
+                    .append("{\"case\":\"immediate-100x1-p256\",\"benchmarkName\":\"multi-client-fanout\",")
+                    .append("\"payloadSize\":256,\"targetClientMbps\":1,\"affectedKind\":\"immediate\"")
                     .append(readinessRetryFieldsJson()).append("},")
                     .append("{\"benchmarkName\":\"fairness\"")
                     .append(readinessRetryFieldsJson()).append("}");
