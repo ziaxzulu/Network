@@ -1181,6 +1181,11 @@ public class BenchmarkKitTests {
                 strictManifest.path("productionEvidence").path("document").asText());
         Assertions.assertTrue(strictManifest.path("productionEvidence").path("sha256").asText()
                 .matches("[0-9a-f]{64}"));
+        Assertions.assertTrue(strictManifest.path("sourceAudit").path("ready").asBoolean());
+        Assertions.assertTrue(strictManifest.path("sourceAudit").path("sha256").asText()
+                .matches("[0-9a-f]{64}"));
+        Assertions.assertEquals("0123456789ab",
+                strictManifest.path("sourceAudit").path("networkShortRevision").asText());
         Assertions.assertEquals(handoffManifest.toString(),
                 strictManifest.path("sourcePaths").path("handoffManifest").asText());
         Assertions.assertTrue(Files.exists(output.resolve("baselines/strict/handoff-manifest.json")));
@@ -2357,6 +2362,76 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresSourceAuditFingerprint() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-readiness-source-audit-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        Path labManifest = labBaseline.resolve("baseline-manifest.json");
+        JsonNode manifestWithoutSourceAudit = JSON.readTree(Files.readString(labManifest, StandardCharsets.UTF_8));
+        ((com.fasterxml.jackson.databind.node.ObjectNode) manifestWithoutSourceAudit).remove("sourceAudit");
+        Files.writeString(labManifest, JSON.writeValueAsString(manifestWithoutSourceAudit), StandardCharsets.UTF_8);
+
+        ProcessResult missingBaselineSourceAudit = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missingBaselineSourceAudit.exitCode, missingBaselineSourceAudit.output);
+        JsonNode missingBaselineSourceAuditJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(missingBaselineSourceAuditJson.path("requireSourceAudit").asBoolean());
+        Assertions.assertTrue(missingBaselineSourceAuditJson.findValuesAsText("code")
+                .contains("lab-missing-source-audit"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        Path handoffManifest = labBaseline.resolve("handoff-manifest.json");
+        JsonNode handoffWithoutSourceAudit = JSON.readTree(Files.readString(handoffManifest, StandardCharsets.UTF_8));
+        ((com.fasterxml.jackson.databind.node.ObjectNode) handoffWithoutSourceAudit).remove("sourceAudit");
+        Files.writeString(handoffManifest, JSON.writeValueAsString(handoffWithoutSourceAudit), StandardCharsets.UTF_8);
+
+        ProcessResult missingHandoffSourceAudit = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missingHandoffSourceAudit.exitCode, missingHandoffSourceAudit.output);
+        JsonNode missingHandoffSourceAuditJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(missingHandoffSourceAuditJson.findValuesAsText("code")
+                .contains("lab-handoff-missing-source-audit"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        JsonNode manifestWithMismatchedSourceAudit = JSON.readTree(Files.readString(labManifest, StandardCharsets.UTF_8));
+        ((com.fasterxml.jackson.databind.node.ObjectNode) manifestWithMismatchedSourceAudit.path("sourceAudit"))
+                .put("sha256", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        Files.writeString(labManifest, JSON.writeValueAsString(manifestWithMismatchedSourceAudit),
+                StandardCharsets.UTF_8);
+
+        ProcessResult mismatchedSourceAudit = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, mismatchedSourceAudit.exitCode, mismatchedSourceAudit.output);
+        JsonNode mismatchedSourceAuditJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(mismatchedSourceAuditJson.findValuesAsText("code")
+                .contains("lab-source-audit-handoff-mismatch"));
+    }
+
+    @Test
     public void testBaselineReadinessRequiresPrereqReports() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -2570,6 +2645,27 @@ public class BenchmarkKitTests {
                 + "\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}";
     }
 
+    private static String sourceAuditJson() {
+        return "{\"document\":\"/tmp/source-audit.json\","
+                + "\"exists\":true,"
+                + "\"sha256\":\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\","
+                + "\"ready\":true,"
+                + "\"issueCount\":0,"
+                + "\"networkRevision\":\"0123456789abcdef\","
+                + "\"networkShortRevision\":\"0123456789ab\","
+                + "\"networkDirtyTrackedFiles\":false,"
+                + "\"evidenceDocument\":" + productionEvidenceJson() + ","
+                + "\"requiredSources\":[\"geyser\",\"cubecraft\"],"
+                + "\"sources\":["
+                + "{\"id\":\"geyser\",\"visibility\":\"public\",\"available\":true,"
+                + "\"revision\":\"abcdef0123456789\",\"shortRevision\":\"abcdef012345\","
+                + "\"dirtyTrackedFiles\":false,\"pathIncluded\":false},"
+                + "{\"id\":\"cubecraft\",\"visibility\":\"private\",\"available\":true,"
+                + "\"revision\":\"fedcba9876543210\",\"shortRevision\":\"fedcba987654\","
+                + "\"dirtyTrackedFiles\":false,\"pathIncluded\":false}"
+                + "]}";
+    }
+
     private static void writeReadySourceAudit(Path sourceAudit) throws Exception {
         Files.createDirectories(sourceAudit.getParent());
         Files.writeString(sourceAudit,
@@ -2603,7 +2699,8 @@ public class BenchmarkKitTests {
         Files.createDirectories(handoffManifest.getParent());
         Files.writeString(handoffManifest,
                 "{\"kind\":\"raknet-lab-handoff\",\"productionEvidence\":"
-                        + productionEvidenceJson() + "}\n",
+                        + productionEvidenceJson() + ",\"sourceAudit\":"
+                        + sourceAuditJson() + "}\n",
                 StandardCharsets.UTF_8);
     }
 
@@ -2625,11 +2722,13 @@ public class BenchmarkKitTests {
         Files.createDirectories(labBaseline);
         Files.writeString(labBaseline.resolve("baseline-manifest.json"),
                 "{\"baselineKind\":\"raknet-lab-baseline\",\"productionEvidence\":"
-                        + productionEvidenceJson() + "}\n",
+                        + productionEvidenceJson() + ",\"sourceAudit\":"
+                        + sourceAuditJson() + "}\n",
                 StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("handoff-manifest.json"),
                 "{\"kind\":\"raknet-lab-handoff\",\"productionEvidence\":"
-                        + productionEvidenceJson() + "}\n",
+                        + productionEvidenceJson() + ",\"sourceAudit\":"
+                        + sourceAuditJson() + "}\n",
                 StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("validation.json"),
                 "{\"passed\":true,\"distinctHostnameCount\":2,\"hostReportCount\":2,\"rowCount\":"

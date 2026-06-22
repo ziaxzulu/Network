@@ -19,6 +19,7 @@ required_min_contention_target_client_mbps="5"
 required_min_prereq_reports="2"
 required_min_ready_prereq_reports="2"
 required_min_prereq_distinct_hostnames="2"
+require_source_audit=true
 
 usage() {
   cat <<'USAGE'
@@ -46,6 +47,8 @@ Options:
   --required-min-prereq-reports N Required lab prereq reports. Default: 2.
   --required-min-ready-prereq-reports N Required ready lab prereq reports. Default: 2.
   --required-min-prereq-distinct-hostnames N Required distinct lab prereq hostnames. Default: 2.
+  --require-source-audit          Require promoted baseline source-audit metadata. Default.
+  --no-require-source-audit       Do not require source-audit metadata. Intended for legacy smoke artifacts only.
   --out DIR                        Output directory. Default: directory containing the lab baseline, or benchmark/build/benchmark-results/baseline-readiness.
   --help                           Show this help.
 
@@ -124,6 +127,14 @@ while [[ $# -gt 0 ]]; do
     --required-min-prereq-distinct-hostnames)
       required_min_prereq_distinct_hostnames="$2"
       shift 2
+      ;;
+    --require-source-audit)
+      require_source_audit=true
+      shift
+      ;;
+    --no-require-source-audit)
+      require_source_audit=false
+      shift
       ;;
     --out)
       out_dir="$2"
@@ -257,6 +268,8 @@ lab_handoff_manifest="$lab_baseline/handoff-manifest.json"
 lab_validation="$lab_baseline/validation.json"
 lab_aggregate="$lab_baseline/suite-aggregate.jsonl"
 lab_capacity="$lab_baseline/bandwidth-capacity.jsonl"
+lab_source_audit_json="null"
+lab_handoff_source_audit_json="null"
 required_curve_payloads_json="$(csv_json_number_array "$required_curve_payload_sizes")"
 required_impairment_contention_json="$(csv_json_array "$required_impairment_contention_scenarios")"
 required_batch_intervals_json="$(csv_json_duration_millis_array "$required_batch_intervals_ms")"
@@ -289,6 +302,14 @@ if [[ -s "$lab_manifest" ]]; then
   if ! jq -e '(.productionEvidence.document // "") != "" and (.productionEvidence.exists == true) and ((.productionEvidence.sha256 // "") | test("^[0-9a-f]{64}$"))' "$lab_manifest" >/dev/null; then
     append_issue "lab-missing-production-evidence" "lab-baseline" "promoted lab baseline does not include a concrete production evidence fingerprint" "{\"path\":\"$lab_manifest\"}"
   fi
+  lab_source_audit_json="$(jq -c '.sourceAudit // null' "$lab_manifest")"
+  if "$require_source_audit"; then
+    if ! jq -e '.sourceAudit != null' "$lab_manifest" >/dev/null; then
+      append_issue "lab-missing-source-audit" "lab-baseline" "promoted lab baseline does not include source-audit metadata" "{\"path\":\"$lab_manifest\"}"
+    elif ! jq -e '(.sourceAudit.document // "") != "" and (.sourceAudit.exists == true) and (.sourceAudit.ready == true) and ((.sourceAudit.sha256 // "") | test("^[0-9a-f]{64}$"))' "$lab_manifest" >/dev/null; then
+      append_issue "lab-invalid-source-audit" "lab-baseline" "promoted lab baseline source-audit metadata is not a ready fingerprint" "{\"path\":\"$lab_manifest\"}"
+    fi
+  fi
   if [[ ! -s "$lab_handoff_manifest" ]]; then
     append_issue "lab-missing-handoff-manifest" "lab-baseline" "promoted lab baseline is missing its copied handoff manifest" "{\"path\":\"$lab_handoff_manifest\"}"
   elif ! jq -e '.kind == "raknet-lab-handoff"' "$lab_handoff_manifest" >/dev/null; then
@@ -298,6 +319,17 @@ if [[ -s "$lab_manifest" ]]; then
   elif ! jq -e --slurpfile handoff "$lab_handoff_manifest" '.productionEvidence == $handoff[0].productionEvidence' "$lab_manifest" >/dev/null; then
     extra="$(jq -n --slurpfile baseline "$lab_manifest" --slurpfile handoff "$lab_handoff_manifest" --arg baselinePath "$lab_manifest" --arg handoffPath "$lab_handoff_manifest" '{baselinePath:$baselinePath,handoffPath:$handoffPath,baselineProductionEvidence:$baseline[0].productionEvidence,handoffProductionEvidence:$handoff[0].productionEvidence}')"
     append_issue "lab-production-evidence-handoff-mismatch" "lab-baseline" "promoted lab baseline production evidence does not match its copied handoff manifest" "$extra"
+  fi
+  if "$require_source_audit" && [[ -s "$lab_handoff_manifest" ]]; then
+    lab_handoff_source_audit_json="$(jq -c '.sourceAudit // null' "$lab_handoff_manifest")"
+    if ! jq -e '.sourceAudit != null' "$lab_handoff_manifest" >/dev/null; then
+      append_issue "lab-handoff-missing-source-audit" "lab-baseline" "promoted lab baseline handoff manifest does not include source-audit metadata" "{\"path\":\"$lab_handoff_manifest\"}"
+    elif ! jq -e '(.sourceAudit.document // "") != "" and (.sourceAudit.exists == true) and (.sourceAudit.ready == true) and ((.sourceAudit.sha256 // "") | test("^[0-9a-f]{64}$"))' "$lab_handoff_manifest" >/dev/null; then
+      append_issue "lab-handoff-invalid-source-audit" "lab-baseline" "promoted lab baseline handoff source-audit metadata is not a ready fingerprint" "{\"path\":\"$lab_handoff_manifest\"}"
+    elif [[ "$lab_source_audit_json" != "$lab_handoff_source_audit_json" ]]; then
+      extra="$(jq -n --arg baselinePath "$lab_manifest" --arg handoffPath "$lab_handoff_manifest" --argjson baselineSourceAudit "$lab_source_audit_json" --argjson handoffSourceAudit "$lab_handoff_source_audit_json" '{baselinePath:$baselinePath,handoffPath:$handoffPath,baselineSourceAudit:$baselineSourceAudit,handoffSourceAudit:$handoffSourceAudit}')"
+      append_issue "lab-source-audit-handoff-mismatch" "lab-baseline" "promoted lab baseline source audit does not match its copied handoff manifest" "$extra"
+    fi
   fi
 fi
 
@@ -814,6 +846,9 @@ jq -n \
   --argjson requiredMinPrereqReports "$required_min_prereq_reports" \
   --argjson requiredMinReadyPrereqReports "$required_min_ready_prereq_reports" \
   --argjson requiredMinPrereqDistinctHostnames "$required_min_prereq_distinct_hostnames" \
+  --argjson requireSourceAudit "$require_source_audit" \
+  --argjson labSourceAudit "$lab_source_audit_json" \
+  --argjson labHandoffSourceAudit "$lab_handoff_source_audit_json" \
   --argjson issues "$issues_array" \
   --argjson nextActions "$next_actions_json" \
   --slurpfile labValidation "$([[ -s "$lab_validation" ]] && printf '%s' "$lab_validation" || printf '%s' /dev/null)" \
@@ -845,6 +880,9 @@ jq -n \
     requiredMinPrereqReports: $requiredMinPrereqReports,
     requiredMinReadyPrereqReports: $requiredMinReadyPrereqReports,
     requiredMinPrereqDistinctHostnames: $requiredMinPrereqDistinctHostnames,
+    requireSourceAudit: $requireSourceAudit,
+    labSourceAudit: $labSourceAudit,
+    labHandoffSourceAudit: $labHandoffSourceAudit,
     nextActions: $nextActions,
     issues: $issues
   }' >"$readiness_json"
@@ -871,6 +909,7 @@ jq -n \
   echo "- Required prereq reports: \`$required_min_prereq_reports\`"
   echo "- Required ready prereq reports: \`$required_min_ready_prereq_reports\`"
   echo "- Required distinct prereq hostnames: \`$required_min_prereq_distinct_hostnames\`"
+  echo "- Require source audit: \`$require_source_audit\`"
   echo
   echo "## Lab Baseline"
   echo

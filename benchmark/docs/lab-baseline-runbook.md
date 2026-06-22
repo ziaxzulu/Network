@@ -400,7 +400,7 @@ benchmark/scripts/promote-lab-baseline.sh \
   --min-contention-target-client-mbps 5
 ```
 
-The promoted baseline directory contains the comparable `suite-aggregate.jsonl`, validation reports, capacity selector artifacts, copied host/topology evidence, copied planning manifests, the copied handoff manifest, and a `baseline-manifest.json` with source paths, validation metadata, and the production-evidence fingerprint. Use that promoted directory, or the `benchmark/build/benchmark-baselines/latest` symlink, as the `--baseline` input for future candidate comparisons, and pass `--require-validation` so unvalidated candidates fail comparison.
+The promoted baseline directory contains the comparable `suite-aggregate.jsonl`, validation reports, capacity selector artifacts, copied host/topology evidence, copied planning manifests, the copied handoff manifest, and a `baseline-manifest.json` with source paths, validation metadata, the production-evidence fingerprint, and source-audit metadata. Use that promoted directory, or the `benchmark/build/benchmark-baselines/latest` symlink, as the `--baseline` input for future candidate comparisons, and pass `--require-validation` so unvalidated candidates fail comparison.
 
 After both the perfect-network baseline and adverse-network impairment campaign have been promoted, run the readiness check:
 
@@ -413,7 +413,7 @@ benchmark/scripts/check-baseline-readiness.sh \
   --out benchmark/build/benchmark-results/baseline-readiness
 ```
 
-The readiness report is the final artifact-level gate for accepting the baseline package set. It requires passing lab validation without bypass markers, a copied handoff manifest with matching production-evidence metadata, no missing retry-pressure-field bypass markers in the impairment package, separate-host evidence, required scenario families, selected capacity groups, immediate small-packet fanout at payload `256` and `1Mbps` per client, retry-pressure send-work fields in comparable aggregate rows, passing impairment profile validation without bypass allowances, required netem status evidence, and the expected impairment profiles.
+The readiness report is the final artifact-level gate for accepting the baseline package set. It requires passing lab validation without bypass markers, a copied handoff manifest with matching production-evidence and source-audit metadata, no missing retry-pressure-field bypass markers in the impairment package, separate-host evidence, required scenario families, selected capacity groups, immediate small-packet fanout at payload `256` and `1Mbps` per client, retry-pressure send-work fields in comparable aggregate rows, passing impairment profile validation without bypass allowances, required netem status evidence, and the expected impairment profiles.
 The recommended baseline handoff uses `500` contention clients at `5Mbps` per client, so keep those explicit readiness gates when checking the production comparison baseline. Use lower readiness overrides only for smoke campaigns that will not become the baseline of record.
 
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.

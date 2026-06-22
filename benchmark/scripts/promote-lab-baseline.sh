@@ -141,6 +141,7 @@ for i in "${!manifest_paths[@]}"; do
   fi
 done
 production_evidence_json="null"
+source_audit_json="null"
 if [[ -n "$handoff_manifest_path" ]]; then
   if [[ ! -s "$handoff_manifest_path" ]]; then
     echo "handoff manifest not found or empty: $handoff_manifest_path" >&2
@@ -155,6 +156,7 @@ if [[ -n "$handoff_manifest_path" ]]; then
     exit 2
   fi
   production_evidence_json="$(jq -c '.productionEvidence' "$handoff_manifest_path")"
+  source_audit_json="$(jq -c '.sourceAudit // null' "$handoff_manifest_path")"
 fi
 
 safe_name() {
@@ -433,6 +435,7 @@ jq -n \
   --arg destination "$destination" \
   --argjson allowValidationBypasses "$allow_validation_bypasses" \
   --argjson productionEvidence "$production_evidence_json" \
+  --argjson sourceAudit "$source_audit_json" \
   '{
     baselineKind: "raknet-lab-baseline",
     name: $name,
@@ -441,6 +444,7 @@ jq -n \
     destination: $destination,
     allowValidationBypasses: $allowValidationBypasses,
     productionEvidence: $productionEvidence,
+    sourceAudit: $sourceAudit,
     validation: $validation[0],
     sourcePaths: $sourcePaths[0],
     promotedFiles: $promotedFiles[0]
