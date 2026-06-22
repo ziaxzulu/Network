@@ -312,6 +312,23 @@ if [[ "$sudo_netem" != "true" ]]; then
   sudo_netem="false"
 fi
 target_host_role="$(jq -r '.targetHostRole // ""' "$manifest")"
+expected_prereq_roles_json="$(jq -c '
+  def role($spec):
+    if ($spec | contains("=")) then ($spec | split("=")[0])
+    elif ($spec | contains(":")) then ($spec | split(":")[0])
+    else empty
+    end;
+  [
+    "server",
+    ((.curveReceivers // [])[] | role(.)),
+    ((.contentionReceivers // [])[] | role(.)),
+    (.targetHostRole // empty)
+  ]
+  | map(select(length > 0))
+  | unique
+' "$manifest")"
+manifest_prereq_roles_json="$(jq -c '(.prereqRoles // []) | unique' "$manifest")"
+helper_prereq_roles_json="[]"
 expected_mtu_json="$expected_mtu"
 if ! [[ "$expected_mtu_json" =~ ^[0-9]+$ ]]; then
   expected_mtu_json="0"
@@ -537,6 +554,47 @@ elif [[ "$promote_script" != "$handoff_root/promote-and-check.sh" ]]; then
 fi
 check_path "$prereq_script" "handoff" true
 check_path "$promote_script" "handoff" true
+if [[ -x "$prereq_script" ]]; then
+  helper_prereq_roles_output="$("$prereq_script" --list-roles 2>/dev/null || true)"
+  if [[ -z "$helper_prereq_roles_output" ]]; then
+    append_issue "handoff-prereq-helper-list-roles-failed" "prereq-helper" "prereq helper did not print valid roles" \
+      "$(jq -n --arg path "$prereq_script" '{path:$path}')"
+  else
+    helper_prereq_roles_json="$(printf '%s\n' "$helper_prereq_roles_output" | jq -R -s 'split("\n") | map(select(length > 0)) | unique')"
+  fi
+fi
+missing_manifest_prereq_roles="$(jq -n -r --argjson expected "$expected_prereq_roles_json" --argjson actual "$manifest_prereq_roles_json" '
+  $expected[] as $role | select(($actual | index($role)) == null) | $role
+')"
+while IFS= read -r role; do
+  [[ -z "$role" ]] && continue
+  append_issue "handoff-prereq-role-missing" "handoff" "handoff manifest prereqRoles is missing a required role" \
+    "$(jq -n --arg role "$role" --argjson expected "$expected_prereq_roles_json" --argjson actual "$manifest_prereq_roles_json" '{role:$role,expectedPrereqRoles:$expected,actualPrereqRoles:$actual}')"
+done <<<"$missing_manifest_prereq_roles"
+unexpected_manifest_prereq_roles="$(jq -n -r --argjson expected "$expected_prereq_roles_json" --argjson actual "$manifest_prereq_roles_json" '
+  $actual[] as $role | select(($expected | index($role)) == null) | $role
+')"
+while IFS= read -r role; do
+  [[ -z "$role" ]] && continue
+  append_issue "handoff-prereq-role-unexpected" "handoff" "handoff manifest prereqRoles contains an unexpected role" \
+    "$(jq -n --arg role "$role" --argjson expected "$expected_prereq_roles_json" --argjson actual "$manifest_prereq_roles_json" '{role:$role,expectedPrereqRoles:$expected,actualPrereqRoles:$actual}')"
+done <<<"$unexpected_manifest_prereq_roles"
+missing_helper_prereq_roles="$(jq -n -r --argjson expected "$expected_prereq_roles_json" --argjson actual "$helper_prereq_roles_json" '
+  $expected[] as $role | select(($actual | index($role)) == null) | $role
+')"
+while IFS= read -r role; do
+  [[ -z "$role" ]] && continue
+  append_issue "handoff-prereq-helper-role-missing" "prereq-helper" "prereq helper does not list a required role" \
+    "$(jq -n --arg role "$role" --argjson expected "$expected_prereq_roles_json" --argjson actual "$helper_prereq_roles_json" '{role:$role,expectedPrereqRoles:$expected,actualPrereqRoles:$actual}')"
+done <<<"$missing_helper_prereq_roles"
+unexpected_helper_prereq_roles="$(jq -n -r --argjson expected "$expected_prereq_roles_json" --argjson actual "$helper_prereq_roles_json" '
+  $actual[] as $role | select(($expected | index($role)) == null) | $role
+')"
+while IFS= read -r role; do
+  [[ -z "$role" ]] && continue
+  append_issue "handoff-prereq-helper-role-unexpected" "prereq-helper" "prereq helper lists an unexpected role" \
+    "$(jq -n --arg role "$role" --argjson expected "$expected_prereq_roles_json" --argjson actual "$helper_prereq_roles_json" '{role:$role,expectedPrereqRoles:$expected,actualPrereqRoles:$actual}')"
+done <<<"$unexpected_helper_prereq_roles"
 check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
 check_readme_contains "benchmark/scripts/check-lab-host-prereqs.sh" "handoff README does not show the host prerequisite check"
 check_readme_contains "prereq-commands.sh" "handoff README does not show the generated prerequisite helper"
@@ -950,6 +1008,9 @@ jq -n \
   --argjson expectedImmediatePerClientMbps "$expected_immediate_per_client_mbps" \
   --argjson expectedMtu "$expected_mtu_json" \
   --argjson expectedMinCpus "$expected_min_cpus_json" \
+  --argjson expectedPrereqRoles "$expected_prereq_roles_json" \
+  --argjson manifestPrereqRoles "$manifest_prereq_roles_json" \
+  --argjson helperPrereqRoles "$helper_prereq_roles_json" \
   --argjson requireCpuPerformance "$require_cpu_performance" \
   --argjson expectedIterations "$expected_iterations_json" \
   --argjson requiredMinIterations "$required_min_iterations" \
@@ -1000,6 +1061,9 @@ jq -n \
     expectedImmediatePerClientMbps: $expectedImmediatePerClientMbps,
     expectedMtu: $expectedMtu,
     expectedMinCpus: $expectedMinCpus,
+    expectedPrereqRoles: $expectedPrereqRoles,
+    manifestPrereqRoles: $manifestPrereqRoles,
+    helperPrereqRoles: $helperPrereqRoles,
     requireCpuPerformance: $requireCpuPerformance,
     expectedIterations: $expectedIterations,
     requiredMinIterations: $requiredMinIterations,
@@ -1039,6 +1103,8 @@ jq -n \
   echo "- Required disappearance modes: \`$required_disappearance_modes\`"
   echo "- Expected MTU: \`$(jq -r '.expectedMtu' "$check_json")\`"
   echo "- Expected minimum CPUs: \`$(jq -r '.expectedMinCpus' "$check_json")\`"
+  echo "- Expected prereq roles: \`$(jq -r '.expectedPrereqRoles | join(",")' "$check_json")\`"
+  echo "- Helper prereq roles: \`$(jq -r '.helperPrereqRoles | join(",")' "$check_json")\`"
   echo "- Require CPU performance governor: \`$(jq -r '.requireCpuPerformance' "$check_json")\`"
   echo "- Expected measured iterations: \`$(jq -r '.expectedIterations' "$check_json")\`"
   echo "- Required minimum iterations: \`$(jq -r '.requiredMinIterations' "$check_json")\`"

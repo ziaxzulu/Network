@@ -19,6 +19,8 @@ package org.cloudburstmc.netty.benchmark;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.csv.CsvMapper;
 import com.fasterxml.jackson.dataformat.csv.CsvSchema;
 import io.netty.buffer.ByteBuf;
@@ -478,6 +480,7 @@ public class BenchmarkKitTests {
         Path handoff = output.resolve("handoff");
         Path artifacts = output.resolve("artifacts");
         Path sourceAudit = output.resolve("source-audit.json");
+        Duration handoffCheckTimeout = Duration.ofSeconds(60);
         writeReadySourceAudit(sourceAudit);
 
         ProcessResult result = runProcess(root, Duration.ofSeconds(30),
@@ -713,7 +716,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(contentionRows.stream().allMatch(row -> row.contains("\"reliability\":\"reliable_ordered\"")));
 
         Path defaultHandoffPreflight = output.resolve("handoff-preflight-default");
-        ProcessResult defaultHandoffCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult defaultHandoffCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -735,7 +738,7 @@ public class BenchmarkKitTests {
                 .contains("handoff-iterations-below-threshold"));
 
         Path handoffPreflight = output.resolve("handoff-preflight");
-        ProcessResult handoffCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult handoffCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -762,6 +765,12 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(1, handoffCheckJson.path("requiredMinIterations").asInt());
         Assertions.assertEquals(1500, handoffCheckJson.path("expectedMtu").asInt());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedMinCpus").asInt());
+        Assertions.assertTrue(textValues(handoffCheckJson.path("expectedPrereqRoles")).contains("server"));
+        Assertions.assertTrue(textValues(handoffCheckJson.path("expectedPrereqRoles")).contains("receiver-a"));
+        Assertions.assertEquals(textValues(handoffCheckJson.path("expectedPrereqRoles")),
+                textValues(handoffCheckJson.path("manifestPrereqRoles")));
+        Assertions.assertEquals(textValues(handoffCheckJson.path("expectedPrereqRoles")),
+                textValues(handoffCheckJson.path("helperPrereqRoles")));
         Assertions.assertEquals("benchmark/docs/production-usage-evidence.md",
                 handoffCheckJson.path("productionEvidence").path("document").asText());
         Assertions.assertTrue(handoffCheckJson.path("productionEvidence").path("sha256").asText()
@@ -781,8 +790,34 @@ public class BenchmarkKitTests {
             Assertions.assertEquals(1, profileRows.path("contentionRows").asInt());
         }
 
+        Path prereqRoleManifestPath = handoff.resolve("handoff-manifest.json");
+        String originalPrereqRoleManifest = Files.readString(prereqRoleManifestPath, StandardCharsets.UTF_8);
+        ObjectNode tamperedManifest = (ObjectNode) JSON.readTree(originalPrereqRoleManifest);
+        ArrayNode tamperedRoles = JSON.createArrayNode();
+        tamperedRoles.add("server");
+        tamperedManifest.set("prereqRoles", tamperedRoles);
+        Files.writeString(prereqRoleManifestPath, JSON.writerWithDefaultPrettyPrinter().writeValueAsString(tamperedManifest),
+                StandardCharsets.UTF_8);
+        ProcessResult tamperedPrereqRolesCheck = runProcess(root, handoffCheckTimeout,
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-prereq-roles-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1",
+                "--required-min-iterations", "1",
+                "--require-source-audit"
+        );
+        Assertions.assertEquals(1, tamperedPrereqRolesCheck.exitCode, tamperedPrereqRolesCheck.output);
+        JsonNode tamperedPrereqRolesJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-prereq-roles-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(tamperedPrereqRolesJson.findValuesAsText("code")
+                .contains("handoff-prereq-role-missing"));
+        Files.writeString(prereqRoleManifestPath, originalPrereqRoleManifest, StandardCharsets.UTF_8);
+
         Path currentRevisionPreflight = output.resolve("handoff-preflight-current-revision");
-        ProcessResult currentRevisionCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult currentRevisionCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -807,7 +842,7 @@ public class BenchmarkKitTests {
                         .replace("--required-min-contention-clients \"2\"",
                                 "--required-min-contention-clients \"1\""),
                 StandardCharsets.UTF_8);
-        ProcessResult tamperedReadmeCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult tamperedReadmeCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -833,7 +868,7 @@ public class BenchmarkKitTests {
                 originalPromoteScript.replace("benchmark/scripts/check-baseline-readiness.sh",
                         "benchmark/scripts/check-baseline-readiness-disabled.sh"),
                 StandardCharsets.UTF_8);
-        ProcessResult tamperedPromoteCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult tamperedPromoteCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -850,7 +885,7 @@ public class BenchmarkKitTests {
         Files.writeString(promoteScriptPath, originalPromoteScript, StandardCharsets.UTF_8);
 
         Files.writeString(promoteScriptPath, originalPromoteScript + "\nif broken\n", StandardCharsets.UTF_8);
-        ProcessResult invalidPromoteSyntaxCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult invalidPromoteSyntaxCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -869,7 +904,7 @@ public class BenchmarkKitTests {
         Path perfectMergeScript = handoff.resolve("perfect-plan/merge-all.sh");
         String originalPerfectMergeScript = Files.readString(perfectMergeScript, StandardCharsets.UTF_8);
         Files.writeString(perfectMergeScript, originalPerfectMergeScript + "\nif broken\n", StandardCharsets.UTF_8);
-        ProcessResult invalidMergeSyntaxCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult invalidMergeSyntaxCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -888,7 +923,7 @@ public class BenchmarkKitTests {
         Path receiverScript = handoff.resolve("perfect-plan/curve-plan/receiver-receiver-a-commands.sh");
         String originalReceiverScript = Files.readString(receiverScript, StandardCharsets.UTF_8);
         Files.writeString(receiverScript, originalReceiverScript + "\nif broken\n", StandardCharsets.UTF_8);
-        ProcessResult invalidReceiverSyntaxCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult invalidReceiverSyntaxCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -908,7 +943,7 @@ public class BenchmarkKitTests {
                 originalReceiverScript.replace("--iterations 1 --reliability",
                         "--iterations 2 --reliability"),
                 StandardCharsets.UTF_8);
-        ProcessResult driftedReceiverCommandCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult driftedReceiverCommandCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -928,7 +963,7 @@ public class BenchmarkKitTests {
         Path impairmentReceiverScript = handoff.resolve("impairment-plan/near-loss-plan/contention-plan/receiver-receiver-a-commands.sh");
         String originalImpairmentReceiverScript = Files.readString(impairmentReceiverScript, StandardCharsets.UTF_8);
         Files.delete(impairmentReceiverScript);
-        ProcessResult missingReceiverCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult missingReceiverCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -952,7 +987,7 @@ public class BenchmarkKitTests {
                 .put("sha256", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         Files.writeString(handoffManifestPath, JSON.writeValueAsString(manifestWithStaleEvidence),
                 StandardCharsets.UTF_8);
-        ProcessResult staleEvidenceCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult staleEvidenceCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -973,7 +1008,7 @@ public class BenchmarkKitTests {
         JsonNode manifestWithoutEvidence = JSON.readTree(originalHandoffManifest);
         ((com.fasterxml.jackson.databind.node.ObjectNode) manifestWithoutEvidence).remove("productionEvidence");
         Files.writeString(handoffManifestPath, JSON.writeValueAsString(manifestWithoutEvidence), StandardCharsets.UTF_8);
-        ProcessResult missingEvidenceCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult missingEvidenceCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -995,7 +1030,7 @@ public class BenchmarkKitTests {
                 originalCurveManifest.replaceFirst("\"reliability\":\"reliable_ordered\"",
                         "\"reliability\":\"unreliable\""),
                 StandardCharsets.UTF_8);
-        ProcessResult curveReliabilityCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult curveReliabilityCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -1017,7 +1052,7 @@ public class BenchmarkKitTests {
                 originalContentionManifest.replaceFirst("\"reliability\":\"reliable_ordered\"",
                         "\"reliability\":\"unreliable\""),
                 StandardCharsets.UTF_8);
-        ProcessResult contentionReliabilityCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult contentionReliabilityCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -1036,7 +1071,7 @@ public class BenchmarkKitTests {
         Files.writeString(contentionManifest,
                 originalContentionManifest.replaceFirst("\"clients\":2", "\"clients\":1"),
                 StandardCharsets.UTF_8);
-        ProcessResult tamperedHandoffCheck = runProcess(root, Duration.ofSeconds(20),
+        ProcessResult tamperedHandoffCheck = runProcess(root, handoffCheckTimeout,
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
                 "--handoff", handoff.toString(),
@@ -4045,6 +4080,14 @@ public class BenchmarkKitTests {
         throw new AssertionError("Missing source audit row for " + sourceId + ": " + auditJson);
     }
 
+    private static List<String> textValues(JsonNode values) {
+        List<String> result = new ArrayList<>();
+        for (JsonNode value : values) {
+            result.add(value.asText());
+        }
+        return result;
+    }
+
     private static Path initGitRepo(Path path) throws Exception {
         Files.createDirectories(path);
         runProcess(path, Duration.ofSeconds(10), "git", "init");
@@ -4205,6 +4248,7 @@ public class BenchmarkKitTests {
                 .directory(workingDirectory.toFile())
                 .redirectErrorStream(true)
                 .start();
+        process.getOutputStream().close();
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         Thread reader = new Thread(() -> copyOutput(process.getInputStream(), output), "benchmark-test-output-reader");
         reader.start();

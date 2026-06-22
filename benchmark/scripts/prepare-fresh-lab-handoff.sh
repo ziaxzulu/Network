@@ -256,6 +256,8 @@ jq -n \
         requiredMinContentionTargetClientMbps: ($preflight.requiredMinContentionTargetClientMbps // null),
         expectedMtu: ($preflight.expectedMtu // null),
         expectedMinCpus: ($preflight.expectedMinCpus // null),
+        expectedPrereqRoles: ($preflight.expectedPrereqRoles // []),
+        helperPrereqRoles: ($preflight.helperPrereqRoles // []),
         requireSourceAudit: ($preflight.requireSourceAudit == true),
         requireCurrentRevision: ($preflight.requireCurrentRevision == true),
         requireCpuPerformance: ($preflight.requireCpuPerformance == true)
