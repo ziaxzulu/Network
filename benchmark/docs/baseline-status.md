@@ -54,23 +54,24 @@ The smoke capacity selector did not choose a stable point, which is expected for
 Latest local pilot artifact in this worktree:
 
 ```text
-benchmark/build/benchmark-results/local-pilot-20260622T044216Z/
+benchmark/build/benchmark-results/current-pilot-20260622T065503Z/
 ```
 
-This run completed the representative pilot profile and produced parseable suite, aggregate, capacity-selector, and comparison artifacts. All aggregate rows were marked unstable under the default stability policy, mostly because the short loopback run had p99 probe-latency spread. Treat it as a developer regression fixture and artifact-shape proof, not a baseline-of-record result:
+This run completed the representative pilot profile and produced parseable suite, aggregate, and capacity-selector artifacts. It is current-branch loopback evidence that the benchmark shape executes and emits the retry-pressure fields, but it is still not a baseline-of-record result. Eight of the nine aggregate rows were unstable under the default stability policy, mostly because the short loopback run had p99 probe-latency spread. The immediate small-packet fanout row was stable locally:
 
-| Case | Delivered Gbps | Client p50 Mbps | p99 RTT ms | Max queue bytes | Unstable reason |
-| --- | ---: | ---: | ---: | ---: | --- |
-| `pilot-curve-1c-mtu` / `curve-50_0mbps` | `0.0499776` | `49.9776` | `8.984421` | `78000` | `p99-spread` |
-| `pilot-curve-1c-mtu` / `curve-100_0mbps` | `0.09997056` | `99.97056` | `10.327039` | `158400` | `p99-spread` |
-| `pilot-curve-1c-mtu` / `curve-250_0mbps` | `0.24944448` | `249.44448` | `21.266786` | `435600` | `p99-spread` |
-| `pilot-fanout-100x5` | `0.4979638272` | `4.9799168` | `62.40744` | `508467` | `p99-spread` |
-| `pilot-fairness-100-10poor` | `0.44977152` | `4.99712` | `25.897949` | `4233216` | `p99-spread` |
-| `pilot-disappear-100-blackhole` | `0.46617531733333334` | `4.99712` | `58.947094` | `2767016` | `p99-spread` |
-| `pilot-batch-100-20ms` | `0.51136` | `5.1008` | `41.909064` | `229587` | `p99-spread` |
-| `pilot-resource-100-8k-200ms` | `0.032768` | `0.32768` | `10.842546` | `8209` | `p99-spread` |
+| Case | Delivered Gbps | Client p50 Mbps | p99 RTT ms | Max queue bytes | Affected undelivered Gbps | Affected datagram out/s | Retry signal | Unstable reason |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `pilot-curve-1c-mtu` / `curve-50_0mbps` | `0.04997952` | `49.97952` | `9.072826` | `84000` | `0` | `0` | none | `p99-spread` |
+| `pilot-curve-1c-mtu` / `curve-100_0mbps` | `0.0999744` | `99.9744` | `10.558146` | `154800` | `0` | `0` | none | `p99-spread` |
+| `pilot-curve-1c-mtu` / `curve-250_0mbps` | `0.24944064` | `249.44064` | `41.686878` | `394800` | `0` | `0` | none | `p99-spread` |
+| `pilot-fanout-100x5` | `0.499666944` | `4.99712` | `52.030321` | `272947` | `0` | `0` | none | `throughput-spread`, `p99-spread` |
+| `pilot-immediate-100x1-p256` | `0.0999440384` | `0.999424` | `10.08904` | `1809` | `0` | `0` | none | none |
+| `pilot-fairness-100-10poor` | `0.449673216` | `4.995754666666667` | `44.808422` | `4215296` | `0.003749692` | `583.8333333333334` | `5.5` NACK out/s | `p99-spread` |
+| `pilot-disappear-100-blackhole` | `0.46633710933333333` | `4.99712` | `107.738895` | `2906280` | `0.039410752` | `6720.833333333333` | `4822.166666666667` stale datagrams/s | `p99-spread` |
+| `pilot-batch-100-20ms` | `0.51136` | `5.1008` | `61.464953` | `308994` | `0` | `0` | `5.6` stale datagrams/s, `0.2` NACK out/s | `p99-spread` |
+| `pilot-resource-100-8k-200ms` | `0.032768` | `0.32768` | `11.093554` | `8209` | `0` | `0` | none | `p99-spread` |
 
-The capacity selector did not choose a stable point for the local pilot. The best observed curve row was `curve-250_0mbps` at `0.249444Gbps`, rejected because unstable rows are not allowed. A self-comparison of the same historical artifact passed with `8` OK rows and `0` regressions; current pilot plans schedule `9` aggregate rows.
+The capacity selector did not choose a stable point for the local pilot. The best observed curve row was `curve-250_0mbps` at `0.249441Gbps`, rejected because unstable rows are not allowed. This is useful as a current developer regression fixture and artifact-shape proof, but capacity selection still requires a stable local curve or, preferably, separate-host lab evidence.
 
 Latest local best-case curve artifact in this worktree:
 
