@@ -34,6 +34,19 @@ Local loopback artifacts are useful for regression shape only. They should not b
 
 For a stronger single-host smoke path, use `benchmark/scripts/run-netns-worker-smoke.sh`. It runs the normal server/receiver worker roles through Linux network namespaces and veth pairs so `tc netem` and blackhole behavior are applied outside the JVM. This is useful for local retry-pressure and external-qdisc regression checks, but it is still not accepted as line-rate or baseline-of-record evidence.
 
+Latest current-branch smoke artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-branch-smoke-20260622T050230Z/
+```
+
+This run completed the smoke profile and produced `9` aggregate rows across best-case, curve, fanout, fairness, stop-reading disappearance, blackhole disappearance, batched game traffic, and resource-pack transfer cases. Every aggregate row includes the current retry-pressure send-work fields: `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`. Treat it as output-schema and instrumentation proof only; it uses one measured iteration per case and all rows are intentionally marked unstable by the default stability policy:
+
+| Case | Delivered Gbps | Undelivered Gbps | Affected undelivered Gbps | Affected datagram out/s | Retry signal |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `disappear-10-blackhole` | `0.001888256` | `0.000207008` | `0.000132144` | `58` | `26` stale datagrams/s |
+| `fairness-10-2poor` | `0.001974272` | `0.000128208` | `0.000061584` | `111` | `10` NACK out/s |
+
 Latest local pilot artifact in this worktree:
 
 ```text
