@@ -128,7 +128,7 @@ The handoff writes the perfect-network plan, impairment campaign plan, top-level
 benchmark/scripts/check-lab-handoff.sh --handoff benchmark/build/benchmark-results/lab-handoff-current
 ```
 
-That preflight checks handoff structure, generated scripts, profile plans, the production-evidence fingerprint, curve matrix coverage, contention scenario coverage, required `blackhole` disappearance mode, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. By default it also rejects handoffs below `500` contention clients or below `5Mbps` per client, matching the baseline readiness gate. It also checks that generated contention plans include the production-shape batch/resource rows and blackhole disappearance row before operators spend lab time on them. The underlying perfect-network baseline plan is equivalent to:
+That preflight checks handoff structure, generated scripts, profile plans, the production-evidence fingerprint, curve matrix coverage, contention scenario coverage, required `blackhole` disappearance mode, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. The immediate small-packet row uses its own lower `immediatePerClientMbps` target and is not used to satisfy the main `5Mbps` contention gate. By default the preflight rejects handoffs below `500` contention clients or below `5Mbps` for the main contention target, matching the baseline readiness gate. It also checks that generated contention plans include the production-shape batch/resource rows and blackhole disappearance row before operators spend lab time on them. The underlying perfect-network baseline plan is equivalent to:
 
 ```bash
 benchmark/scripts/plan-lab-baseline.sh \
@@ -156,6 +156,16 @@ The generated plan schedules:
 - `56` default-limiter curve rows across payloads `64,256,512,1200,1340,1400,262144`
 - `56` raised-limiter curve rows across the same payloads
 - `9` contention/workload rows at `500` clients split across two receiver hosts: fanout, immediate small-packet fanout, fairness, blackhole disappearance, three batched cadences, and two resource-pack transfers
+
+Current structural handoff audit in this worktree:
+
+```text
+benchmark/build/benchmark-results/lab-handoff-current-audit-20260622T061618Z/
+```
+
+This generated handoff passed `check-lab-handoff.sh` with `ready=true` and `0` issues. It contains `56` default-limiter curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, and five impairment profiles (`perfect`, `near-loss`, `regional-loss`, `poor`, `severe`) each with the same `56/56/9` row shape. The perfect contention plan includes `lab-perfect-contention-immediate-500x1-p256` at payload `256` and `1Mbps` per client, plus the main `5Mbps` fanout, fairness, blackhole disappearance, batched, and resource-pack rows. The generated perfect and impairment freshness checks reported `result=fresh` when created on `2026-06-22T06:17:07Z`.
+
+This audit used local placeholder host values (`127.0.0.1`, `lo`) and proves planner/preflight structure only. It is not separate-host line-rate evidence and does not replace the lab baseline run.
 
 Before promotion, the lab output must include:
 
