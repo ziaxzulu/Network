@@ -20,8 +20,11 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.concurrent.ScheduledFuture;
 
+import java.util.LinkedHashSet;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 final class DatagramImpairmentHandler extends ChannelDuplexHandler {
@@ -31,6 +34,7 @@ final class DatagramImpairmentHandler extends ChannelDuplexHandler {
     private final long jitterNanos;
     private final double lossPercent;
     private final Random random;
+    private final Set<DelayedDatagram> pending = new LinkedHashSet<>();
     private volatile boolean enabled;
 
     DatagramImpairmentHandler(long latencyMillis, long jitterMillis, double lossPercent, int peerId) {
@@ -59,13 +63,7 @@ final class DatagramImpairmentHandler extends ChannelDuplexHandler {
             super.channelRead(ctx, msg);
             return;
         }
-        ctx.executor().schedule(() -> {
-            if (ctx.channel().isActive()) {
-                ctx.fireChannelRead(msg);
-            } else {
-                ReferenceCountUtil.release(msg);
-            }
-        }, delayNanos, TimeUnit.NANOSECONDS);
+        schedule(ctx, DelayedDatagram.inbound(msg), delayNanos);
     }
 
     @Override
@@ -84,14 +82,47 @@ final class DatagramImpairmentHandler extends ChannelDuplexHandler {
             super.write(ctx, msg, promise);
             return;
         }
-        ctx.executor().schedule(() -> {
-            if (ctx.channel().isActive()) {
-                ctx.writeAndFlush(msg, promise);
+        schedule(ctx, DelayedDatagram.outbound(msg, promise), delayNanos);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        releasePending();
+        super.channelInactive(ctx);
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        releasePending();
+        super.handlerRemoved(ctx);
+    }
+
+    private void schedule(ChannelHandlerContext ctx, DelayedDatagram datagram, long delayNanos) {
+        this.pending.add(datagram);
+        datagram.future = ctx.executor().schedule(() -> deliver(ctx, datagram), delayNanos, TimeUnit.NANOSECONDS);
+    }
+
+    private void deliver(ChannelHandlerContext ctx, DelayedDatagram datagram) {
+        if (!this.pending.remove(datagram)) {
+            return;
+        }
+        if (ctx.channel().isActive() && (datagram.promise == null || !datagram.promise.isCancelled())) {
+            if (datagram.inbound) {
+                ctx.fireChannelRead(datagram.message);
             } else {
-                ReferenceCountUtil.release(msg);
-                promise.setSuccess();
+                ctx.writeAndFlush(datagram.message, datagram.promise);
             }
-        }, delayNanos, TimeUnit.NANOSECONDS);
+            return;
+        }
+        datagram.release();
+    }
+
+    private void releasePending() {
+        for (DelayedDatagram datagram : this.pending) {
+            datagram.cancel();
+            datagram.release();
+        }
+        this.pending.clear();
     }
 
     private boolean shouldDrop() {
@@ -111,5 +142,39 @@ final class DatagramImpairmentHandler extends ChannelDuplexHandler {
         long jitterRange = this.jitterNanos * 2L + 1L;
         long jitterOffset = Math.floorMod(this.random.nextLong(), jitterRange) - this.jitterNanos;
         return Math.max(0L, this.latencyNanos + jitterOffset);
+    }
+
+    private static final class DelayedDatagram {
+        private final Object message;
+        private final ChannelPromise promise;
+        private final boolean inbound;
+        private ScheduledFuture<?> future;
+
+        private DelayedDatagram(Object message, ChannelPromise promise, boolean inbound) {
+            this.message = message;
+            this.promise = promise;
+            this.inbound = inbound;
+        }
+
+        static DelayedDatagram inbound(Object message) {
+            return new DelayedDatagram(message, null, true);
+        }
+
+        static DelayedDatagram outbound(Object message, ChannelPromise promise) {
+            return new DelayedDatagram(message, promise, false);
+        }
+
+        void cancel() {
+            if (this.future != null) {
+                this.future.cancel(false);
+            }
+        }
+
+        void release() {
+            ReferenceCountUtil.release(this.message);
+            if (this.promise != null) {
+                this.promise.trySuccess();
+            }
+        }
     }
 }

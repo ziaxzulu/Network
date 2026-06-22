@@ -238,6 +238,36 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testDatagramImpairmentHandlerReleasesDelayedInboundOnClose() {
+        DatagramImpairmentHandler handler = new DatagramImpairmentHandler(1000, 0, 0.0D, 0);
+        EmbeddedChannel channel = new EmbeddedChannel(handler);
+        handler.enable();
+
+        ByteBuf inbound = UnpooledByteBufAllocator.DEFAULT.buffer(1).writeByte(1);
+        Assertions.assertFalse(channel.writeInbound(inbound));
+        Assertions.assertEquals(1, inbound.refCnt());
+
+        channel.close().syncUninterruptibly();
+        Assertions.assertEquals(0, inbound.refCnt());
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    public void testDatagramImpairmentHandlerReleasesDelayedOutboundOnClose() {
+        DatagramImpairmentHandler handler = new DatagramImpairmentHandler(1000, 0, 0.0D, 0);
+        EmbeddedChannel channel = new EmbeddedChannel(handler);
+        handler.enable();
+
+        ByteBuf outbound = UnpooledByteBufAllocator.DEFAULT.buffer(1).writeByte(1);
+        Assertions.assertFalse(channel.writeOutbound(outbound));
+        Assertions.assertEquals(1, outbound.refCnt());
+
+        channel.close().syncUninterruptibly();
+        Assertions.assertEquals(0, outbound.refCnt());
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
     public void testPeerStatsResetClearsMeasurementWindowCounters() {
         PeerStats peer = new PeerStats(0, false);
         peer.addBulkSent(64);
