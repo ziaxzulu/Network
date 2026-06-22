@@ -219,7 +219,13 @@ jq -n \
       ready: (($sourceAudit.ready == true) and ($preflight.ready == true)),
       networkRevision: ($sourceAudit.networkRevision // ""),
       networkShortRevision: ($sourceAudit.networkShortRevision // ""),
-      networkDirtyTrackedFiles: ($sourceAudit.networkDirtyTrackedFiles // null),
+      networkDirtyTrackedFiles: (
+        if $sourceAudit | has("networkDirtyTrackedFiles") then
+          $sourceAudit.networkDirtyTrackedFiles
+        else
+          null
+        end
+      ),
       sourceAuditIssueCount: ($sourceAudit.issueCount // null),
       handoffIssueCount: ($preflight.issueCount // null),
       plannedRows: {
@@ -236,7 +242,13 @@ jq -n \
         issueCount: ($sourceAudit.issueCount // null),
         networkRevision: ($sourceAudit.networkRevision // ""),
         networkShortRevision: ($sourceAudit.networkShortRevision // ""),
-        networkDirtyTrackedFiles: ($sourceAudit.networkDirtyTrackedFiles // null),
+        networkDirtyTrackedFiles: (
+          if $sourceAudit | has("networkDirtyTrackedFiles") then
+            $sourceAudit.networkDirtyTrackedFiles
+          else
+            null
+          end
+        ),
         requiredSources: ($sourceAudit.requiredSources // []),
         sourceCount: (($sourceAudit.sources // []) | length)
       },
