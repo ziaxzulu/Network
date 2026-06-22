@@ -45,6 +45,7 @@ Outputs under <out>/<name>/:
   validation.md            Human-readable validation report.
   bandwidth-capacity.*     Capacity selector artifacts when present.
   topology.md              Copied topology metadata when present.
+  artifact-collection.*    Copied handoff artifact collection contract when present.
   host-reports/            Copied host reports when present.
   prereq-reports/          Copied host prerequisite reports when present.
   manifests/               Copied planned manifests when supplied.
@@ -142,6 +143,8 @@ for i in "${!manifest_paths[@]}"; do
 done
 production_evidence_json="null"
 source_audit_json="null"
+artifact_collection_json_path=""
+artifact_collection_md_path=""
 if [[ -n "$handoff_manifest_path" ]]; then
   if [[ ! -s "$handoff_manifest_path" ]]; then
     echo "handoff manifest not found or empty: $handoff_manifest_path" >&2
@@ -157,6 +160,30 @@ if [[ -n "$handoff_manifest_path" ]]; then
   fi
   production_evidence_json="$(jq -c '.productionEvidence' "$handoff_manifest_path")"
   source_audit_json="$(jq -c '.sourceAudit // null' "$handoff_manifest_path")"
+  artifact_collection_json_path="$(jq -r '.artifactCollectionJson // ""' "$handoff_manifest_path")"
+  artifact_collection_md_path="$(jq -r '.artifactCollectionMd // ""' "$handoff_manifest_path")"
+  if [[ -z "$artifact_collection_json_path" || -z "$artifact_collection_md_path" ]]; then
+    echo "handoff manifest does not record artifact-collection.json and artifact-collection.md: $handoff_manifest_path" >&2
+    exit 2
+  fi
+  if [[ "$artifact_collection_json_path" != /* ]]; then
+    artifact_collection_json_path="$repo_root/$artifact_collection_json_path"
+  fi
+  if [[ "$artifact_collection_md_path" != /* ]]; then
+    artifact_collection_md_path="$repo_root/$artifact_collection_md_path"
+  fi
+  if [[ ! -s "$artifact_collection_json_path" ]]; then
+    echo "artifact collection JSON not found or empty: $artifact_collection_json_path" >&2
+    exit 2
+  fi
+  if [[ ! -s "$artifact_collection_md_path" ]]; then
+    echo "artifact collection checklist not found or empty: $artifact_collection_md_path" >&2
+    exit 2
+  fi
+  if ! jq -e '.kind == "raknet-lab-artifact-collection"' "$artifact_collection_json_path" >/dev/null; then
+    echo "artifact collection JSON has an unexpected kind: $artifact_collection_json_path" >&2
+    exit 2
+  fi
 fi
 
 safe_name() {
@@ -264,6 +291,8 @@ rm -f \
   "$destination/bandwidth-capacity.md" \
   "$destination/topology.md" \
   "$destination/handoff-manifest.json" \
+  "$destination/artifact-collection.json" \
+  "$destination/artifact-collection.md" \
   "$destination/baseline-manifest.json" \
   "$destination/BASELINE.md"
 rm -rf "$destination/host-reports" "$destination/prereq-reports" "$destination/manifests"
@@ -286,6 +315,8 @@ if [[ -n "$topology_file" && -s "$topology_file" ]]; then
 fi
 if [[ -n "$handoff_manifest_path" ]]; then
   cp "$handoff_manifest_path" "$destination/handoff-manifest.json"
+  cp "$artifact_collection_json_path" "$destination/artifact-collection.json"
+  cp "$artifact_collection_md_path" "$destination/artifact-collection.md"
 fi
 
 host_report_count=0
@@ -343,6 +374,8 @@ jq -n \
   --arg capacityFile "$capacity_file" \
   --arg topologyFile "$topology_file" \
   --arg handoffManifest "$handoff_manifest_path" \
+  --arg artifactCollectionJson "$artifact_collection_json_path" \
+  --arg artifactCollectionMd "$artifact_collection_md_path" \
   --argjson manifests "$(printf '%s\n' "${manifest_paths[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')" \
   '{
     input: $input,
@@ -351,6 +384,8 @@ jq -n \
     capacityFile: (if $capacityFile == "" then null else $capacityFile end),
     topologyFile: (if $topologyFile == "" then null else $topologyFile end),
     handoffManifest: (if $handoffManifest == "" then null else $handoffManifest end),
+    artifactCollectionJson: (if $artifactCollectionJson == "" then null else $artifactCollectionJson end),
+    artifactCollectionMd: (if $artifactCollectionMd == "" then null else $artifactCollectionMd end),
     manifests: $manifests
   }' >"$source_paths_json"
 
@@ -418,6 +453,12 @@ jq -n \
   fi
   if [[ -s "$destination/handoff-manifest.json" ]]; then
     echo "- Handoff manifest: \`handoff-manifest.json\`"
+  fi
+  if [[ -s "$destination/artifact-collection.json" ]]; then
+    echo "- Artifact collection: \`artifact-collection.json\`"
+  fi
+  if [[ -s "$destination/artifact-collection.md" ]]; then
+    echo "- Artifact collection checklist: \`artifact-collection.md\`"
   fi
 } >"$destination/BASELINE.md"
 

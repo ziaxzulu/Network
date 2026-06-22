@@ -1777,10 +1777,18 @@ public class BenchmarkKitTests {
                 strictManifest.path("sourceAudit").path("networkShortRevision").asText());
         Assertions.assertEquals(handoffManifest.toString(),
                 strictManifest.path("sourcePaths").path("handoffManifest").asText());
+        Assertions.assertEquals(handoffManifest.getParent().resolve("artifact-collection.json").toString(),
+                strictManifest.path("sourcePaths").path("artifactCollectionJson").asText());
+        Assertions.assertEquals(handoffManifest.getParent().resolve("artifact-collection.md").toString(),
+                strictManifest.path("sourcePaths").path("artifactCollectionMd").asText());
         Assertions.assertTrue(Files.exists(output.resolve("baselines/strict/handoff-manifest.json")));
+        Assertions.assertTrue(Files.exists(output.resolve("baselines/strict/artifact-collection.json")));
+        Assertions.assertTrue(Files.exists(output.resolve("baselines/strict/artifact-collection.md")));
         String strictReport = Files.readString(output.resolve("baselines/strict/BASELINE.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(strictReport.contains("Production evidence: `benchmark/docs/production-usage-evidence.md`"));
         Assertions.assertTrue(strictReport.contains("Handoff manifest: `handoff-manifest.json`"));
+        Assertions.assertTrue(strictReport.contains("Artifact collection: `artifact-collection.json`"));
+        Assertions.assertTrue(strictReport.contains("Artifact collection checklist: `artifact-collection.md`"));
 
         Path looseLab = output.resolve("loose-lab");
         writeValidationLabArtifacts(looseLab, 2, 2, false);
@@ -3195,6 +3203,75 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresPackagedArtifactCollection() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-packaged-collection-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        Files.delete(labBaseline.resolve("artifact-collection.json"));
+
+        ProcessResult missingCollection = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missingCollection.exitCode, missingCollection.output);
+        JsonNode missingCollectionJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingCollectionJson.path("ready").asBoolean());
+        Assertions.assertTrue(missingCollectionJson.findValuesAsText("code")
+                .contains("lab-missing-artifact-collection-json"));
+        Assertions.assertTrue(missingCollectionJson.path("nextActions").findValuesAsText("code")
+                .contains("promote-lab-baseline"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        ObjectNode collection = (ObjectNode) JSON.readTree(Files.readString(
+                labBaseline.resolve("artifact-collection.json"), StandardCharsets.UTF_8));
+        ArrayNode groups = JSON.createArrayNode();
+        for (JsonNode group : collection.path("collectionGroups")) {
+            if (!"impairment-netem-evidence".equals(group.path("id").asText())) {
+                groups.add(group);
+            }
+        }
+        collection.set("collectionGroups", groups);
+        Files.writeString(labBaseline.resolve("artifact-collection.json"), JSON.writeValueAsString(collection),
+                StandardCharsets.UTF_8);
+
+        ProcessResult tamperedCollection = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, tamperedCollection.exitCode, tamperedCollection.output);
+        JsonNode tamperedCollectionJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(tamperedCollectionJson.findValuesAsText("code")
+                .contains("lab-artifact-collection-group-missing"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+        JsonNode readyJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertEquals(9, readyJson.path("labBaseline").path("artifactCollectionGroups").size());
+    }
+
+    @Test
     public void testBaselineReadinessRequiresPackagedImpairmentProfileEvidence() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -3529,6 +3606,10 @@ public class BenchmarkKitTests {
                 + "]}";
     }
 
+    private static String jsonEscape(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
     private static void writeReadySourceAudit(Path sourceAudit) throws Exception {
         Files.createDirectories(sourceAudit.getParent());
         Files.writeString(sourceAudit,
@@ -3560,10 +3641,50 @@ public class BenchmarkKitTests {
 
     private static void writeHandoffManifest(Path handoffManifest) throws Exception {
         Files.createDirectories(handoffManifest.getParent());
+        Path artifactCollectionJson = handoffManifest.getParent().resolve("artifact-collection.json");
+        Path artifactCollectionMd = handoffManifest.getParent().resolve("artifact-collection.md");
+        String perfectArtifacts = handoffManifest.getParent().resolve("perfect-artifacts").toString();
+        String impairmentArtifacts = handoffManifest.getParent().resolve("impairment-artifacts").toString();
+        writeArtifactCollection(artifactCollectionJson, artifactCollectionMd, handoffManifest,
+                perfectArtifacts, impairmentArtifacts);
         Files.writeString(handoffManifest,
                 "{\"kind\":\"raknet-lab-handoff\",\"productionEvidence\":"
                         + productionEvidenceJson() + ",\"sourceAudit\":"
-                        + sourceAuditJson() + "}\n",
+                        + sourceAuditJson()
+                        + ",\"perfectArtifacts\":\"" + jsonEscape(perfectArtifacts) + "\""
+                        + ",\"impairmentArtifacts\":\"" + jsonEscape(impairmentArtifacts) + "\""
+                        + ",\"artifactCollectionJson\":\"" + jsonEscape(artifactCollectionJson.toString()) + "\""
+                        + ",\"artifactCollectionMd\":\"" + jsonEscape(artifactCollectionMd.toString()) + "\""
+                        + "}\n",
+                StandardCharsets.UTF_8);
+    }
+
+    private static void writeArtifactCollection(Path artifactCollectionJson,
+                                                Path artifactCollectionMd,
+                                                Path handoffManifest,
+                                                String perfectArtifacts,
+                                                String impairmentArtifacts) throws Exception {
+        Files.writeString(artifactCollectionJson,
+                "{\"kind\":\"raknet-lab-artifact-collection\","
+                        + "\"handoffManifest\":\"" + jsonEscape(handoffManifest.toString()) + "\","
+                        + "\"perfectArtifacts\":\"" + jsonEscape(perfectArtifacts) + "\","
+                        + "\"impairmentArtifacts\":\"" + jsonEscape(impairmentArtifacts) + "\","
+                        + "\"prereqRoles\":[\"server\",\"receiver-a\",\"receiver-b\"],"
+                        + "\"profiles\":[\"perfect\",\"near-loss\",\"regional-loss\",\"poor\",\"severe\"],"
+                        + "\"collectionGroups\":["
+                        + "{\"id\":\"perfect-topology\"},"
+                        + "{\"id\":\"perfect-host-captures\"},"
+                        + "{\"id\":\"perfect-prereq-reports\"},"
+                        + "{\"id\":\"perfect-worker-artifacts\"},"
+                        + "{\"id\":\"perfect-combined-artifacts\"},"
+                        + "{\"id\":\"impairment-profile-artifacts\"},"
+                        + "{\"id\":\"impairment-netem-evidence\"},"
+                        + "{\"id\":\"impairment-campaign-summary\"},"
+                        + "{\"id\":\"promotion-readiness\"}"
+                        + "]}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(artifactCollectionMd,
+                "# RakNet Lab Artifact Collection\n",
                 StandardCharsets.UTF_8);
     }
 
@@ -3588,11 +3709,7 @@ public class BenchmarkKitTests {
                         + productionEvidenceJson() + ",\"sourceAudit\":"
                         + sourceAuditJson() + "}\n",
                 StandardCharsets.UTF_8);
-        Files.writeString(labBaseline.resolve("handoff-manifest.json"),
-                "{\"kind\":\"raknet-lab-handoff\",\"productionEvidence\":"
-                        + productionEvidenceJson() + ",\"sourceAudit\":"
-                        + sourceAuditJson() + "}\n",
-                StandardCharsets.UTF_8);
+        writeHandoffManifest(labBaseline.resolve("handoff-manifest.json"));
         Files.writeString(labBaseline.resolve("validation.json"),
                 "{\"passed\":true,\"distinctHostnameCount\":2,\"hostReportCount\":2,\"rowCount\":"
                         + (payloadSizes.length + 9)

@@ -289,11 +289,15 @@ csv_json_duration_millis_array() {
 
 lab_manifest="$lab_baseline/baseline-manifest.json"
 lab_handoff_manifest="$lab_baseline/handoff-manifest.json"
+lab_artifact_collection_json="$lab_baseline/artifact-collection.json"
+lab_artifact_collection_md="$lab_baseline/artifact-collection.md"
 lab_validation="$lab_baseline/validation.json"
 lab_aggregate="$lab_baseline/suite-aggregate.jsonl"
 lab_capacity="$lab_baseline/bandwidth-capacity.jsonl"
 lab_source_audit_json="null"
 lab_handoff_source_audit_json="null"
+lab_handoff_kind=""
+lab_artifact_collection_groups_json="[]"
 lab_packaged_manifest_count="0"
 lab_packaged_host_report_count="0"
 lab_packaged_prereq_summary="$(jq -n '{
@@ -314,6 +318,17 @@ required_resource_pack_chunks_json="$(csv_json_number_array "$required_resource_
 required_resource_pack_intervals_json="$(csv_json_duration_millis_array "$required_resource_pack_intervals_ms")"
 required_disappearance_modes_json="$(csv_json_array "$required_disappearance_modes")"
 required_retry_pressure_fields_json="$(csv_json_array "$required_retry_pressure_fields")"
+required_artifact_collection_groups_json="$(jq -n -c '[
+  "perfect-topology",
+  "perfect-host-captures",
+  "perfect-prereq-reports",
+  "perfect-worker-artifacts",
+  "perfect-combined-artifacts",
+  "impairment-profile-artifacts",
+  "impairment-netem-evidence",
+  "impairment-campaign-summary",
+  "promotion-readiness"
+]')"
 
 if [[ -d "$lab_baseline/host-reports" ]]; then
   lab_packaged_host_report_count="$(find "$lab_baseline/host-reports" -maxdepth 1 -type f -name '*-host-report.md' 2>/dev/null | wc -l | tr -d ' ')"
@@ -365,6 +380,9 @@ fi
 if [[ ! -s "$lab_capacity" ]]; then
   append_issue "missing-lab-capacity" "lab-baseline" "promoted lab baseline bandwidth-capacity.jsonl is missing" "{\"path\":\"$lab_capacity\"}"
 fi
+if [[ -s "$lab_handoff_manifest" ]]; then
+  lab_handoff_kind="$(jq -r '.kind // ""' "$lab_handoff_manifest" 2>/dev/null || true)"
+fi
 
 if [[ -s "$lab_manifest" ]]; then
   if ! jq -e '.baselineKind == "raknet-lab-baseline"' "$lab_manifest" >/dev/null; then
@@ -404,6 +422,34 @@ if [[ -s "$lab_manifest" ]]; then
       extra="$(jq -n --arg baselinePath "$lab_manifest" --arg handoffPath "$lab_handoff_manifest" --argjson baselineSourceAudit "$lab_source_audit_json" --argjson handoffSourceAudit "$lab_handoff_source_audit_json" '{baselinePath:$baselinePath,handoffPath:$handoffPath,baselineSourceAudit:$baselineSourceAudit,handoffSourceAudit:$handoffSourceAudit}')"
       append_issue "lab-source-audit-handoff-mismatch" "lab-baseline" "promoted lab baseline source audit does not match its copied handoff manifest" "$extra"
     fi
+  fi
+  if [[ ! -s "$lab_artifact_collection_json" ]]; then
+    append_issue "lab-missing-artifact-collection-json" "lab-baseline" "promoted lab baseline is missing its copied artifact collection JSON" "{\"path\":\"$lab_artifact_collection_json\"}"
+  elif ! jq -e '.kind == "raknet-lab-artifact-collection"' "$lab_artifact_collection_json" >/dev/null; then
+    append_issue "lab-invalid-artifact-collection-kind" "lab-baseline" "promoted lab baseline artifact collection JSON has an unexpected kind" "{\"path\":\"$lab_artifact_collection_json\"}"
+  else
+    lab_artifact_collection_groups_json="$(jq -c '[.collectionGroups[]?.id] | unique' "$lab_artifact_collection_json")"
+    missing_artifact_collection_groups="$(jq -n -r --argjson expected "$required_artifact_collection_groups_json" --argjson actual "$lab_artifact_collection_groups_json" '
+      $expected[] as $group | select(($actual | index($group)) == null) | $group
+    ')"
+    while IFS= read -r group; do
+      [[ -z "$group" ]] && continue
+      extra="$(jq -n --arg group "$group" --argjson expected "$required_artifact_collection_groups_json" --argjson actual "$lab_artifact_collection_groups_json" '{group:$group,expectedGroups:$expected,actualGroups:$actual}')"
+      append_issue "lab-artifact-collection-group-missing" "lab-baseline" "promoted lab baseline artifact collection is missing a required group" "$extra"
+    done <<<"$missing_artifact_collection_groups"
+    if [[ -s "$lab_handoff_manifest" && "$lab_handoff_kind" == "raknet-lab-handoff" ]]; then
+      if ! jq -e --slurpfile handoff "$lab_handoff_manifest" '.perfectArtifacts == ($handoff[0].perfectArtifacts // "")' "$lab_artifact_collection_json" >/dev/null; then
+        extra="$(jq -n --slurpfile handoff "$lab_handoff_manifest" --slurpfile collection "$lab_artifact_collection_json" '{handoffPerfectArtifacts:$handoff[0].perfectArtifacts,collectionPerfectArtifacts:$collection[0].perfectArtifacts}')"
+        append_issue "lab-artifact-collection-perfect-root-mismatch" "lab-baseline" "promoted lab baseline artifact collection perfect root does not match the copied handoff manifest" "$extra"
+      fi
+      if ! jq -e --slurpfile handoff "$lab_handoff_manifest" '.impairmentArtifacts == ($handoff[0].impairmentArtifacts // "")' "$lab_artifact_collection_json" >/dev/null; then
+        extra="$(jq -n --slurpfile handoff "$lab_handoff_manifest" --slurpfile collection "$lab_artifact_collection_json" '{handoffImpairmentArtifacts:$handoff[0].impairmentArtifacts,collectionImpairmentArtifacts:$collection[0].impairmentArtifacts}')"
+        append_issue "lab-artifact-collection-impairment-root-mismatch" "lab-baseline" "promoted lab baseline artifact collection impairment root does not match the copied handoff manifest" "$extra"
+      fi
+    fi
+  fi
+  if [[ ! -s "$lab_artifact_collection_md" ]]; then
+    append_issue "lab-missing-artifact-collection-md" "lab-baseline" "promoted lab baseline is missing its copied artifact collection checklist" "{\"path\":\"$lab_artifact_collection_md\"}"
   fi
 fi
 
@@ -990,12 +1036,18 @@ next_actions_json="$(jq -s '
       "missing-lab-validation",
       "missing-lab-aggregate",
       "missing-lab-capacity",
-      "invalid-lab-baseline-kind"
+      "invalid-lab-baseline-kind",
+      "lab-missing-artifact-collection-json",
+      "lab-missing-artifact-collection-md",
+      "lab-invalid-artifact-collection-kind",
+      "lab-artifact-collection-group-missing",
+      "lab-artifact-collection-perfect-root-mismatch",
+      "lab-artifact-collection-impairment-root-mismatch"
     ]) then {
       code: "promote-lab-baseline",
       title: "Promote the perfect-network lab baseline",
-      detail: "Create a promoted lab baseline package after merged perfect-network artifacts exist.",
-      command: "benchmark/scripts/promote-lab-baseline.sh --input <perfect-artifacts>/combined --manifest <curve-manifest.jsonl> --manifest <raised-curve-manifest.jsonl> --manifest <contention-manifest.jsonl>"
+      detail: "Create a promoted lab baseline package after merged perfect-network artifacts exist, passing the current handoff manifest so source and artifact collection evidence are packaged.",
+      command: "benchmark/scripts/promote-lab-baseline.sh --input <perfect-artifacts>/combined --handoff-manifest <lab-handoff>/handoff-manifest.json --manifest <curve-manifest.jsonl> --manifest <raised-curve-manifest.jsonl> --manifest <contention-manifest.jsonl>"
     } else empty end,
     if has_any_code([
       "failed-lab-validation",
@@ -1068,6 +1120,8 @@ proof_checklist_json="$(jq -n '
       stage: "Fresh handoff",
       requiredProof: [
         "handoff-manifest.json",
+        "artifact-collection.json",
+        "artifact-collection.md",
         "fresh-handoff-summary.json",
         "source-audit.json",
         "preflight/handoff-check.json"
@@ -1112,6 +1166,7 @@ proof_checklist_json="$(jq -n '
         "baseline-manifest.json",
         "copied planning manifests",
         "copied handoff/source-audit metadata",
+        "copied artifact collection contract",
         "validation.json",
         "suite-aggregate.jsonl",
         "bandwidth-capacity.jsonl",
@@ -1153,6 +1208,10 @@ jq -n \
   --argjson packagedManifestCount "$lab_packaged_manifest_count" \
   --argjson packagedHostReportCount "$lab_packaged_host_report_count" \
   --argjson packagedPrereq "$lab_packaged_prereq_summary" \
+  --arg labArtifactCollectionJson "$lab_artifact_collection_json" \
+  --arg labArtifactCollectionMd "$lab_artifact_collection_md" \
+  --argjson labArtifactCollectionGroups "$lab_artifact_collection_groups_json" \
+  --argjson requiredArtifactCollectionGroups "$required_artifact_collection_groups_json" \
   --argjson labSourceAudit "$lab_source_audit_json" \
   --argjson labHandoffSourceAudit "$lab_handoff_source_audit_json" \
   --argjson impairmentPackagedCampaignManifestExists "$impairment_packaged_campaign_manifest_exists" \
@@ -1171,6 +1230,9 @@ jq -n \
       packagedManifestCount: $packagedManifestCount,
       packagedHostReportCount: $packagedHostReportCount,
       packagedPrereq: $packagedPrereq,
+      artifactCollectionJson: $labArtifactCollectionJson,
+      artifactCollectionMd: $labArtifactCollectionMd,
+      artifactCollectionGroups: $labArtifactCollectionGroups,
       validation: ($labValidation[0] // null)
     },
     impairmentBaseline: {
@@ -1195,6 +1257,7 @@ jq -n \
     requiredMinPrereqReports: $requiredMinPrereqReports,
     requiredMinReadyPrereqReports: $requiredMinReadyPrereqReports,
     requiredMinPrereqDistinctHostnames: $requiredMinPrereqDistinctHostnames,
+    requiredArtifactCollectionGroups: $requiredArtifactCollectionGroups,
     requireSourceAudit: $requireSourceAudit,
     labSourceAudit: $labSourceAudit,
     labHandoffSourceAudit: $labHandoffSourceAudit,
@@ -1227,6 +1290,9 @@ jq -n \
   echo "- Required ready prereq reports: \`$required_min_ready_prereq_reports\`"
   echo "- Required distinct prereq hostnames: \`$required_min_prereq_distinct_hostnames\`"
   echo "- Require source audit: \`$require_source_audit\`"
+  echo "- Artifact collection JSON: \`$lab_artifact_collection_json\`"
+  echo "- Artifact collection checklist: \`$lab_artifact_collection_md\`"
+  echo "- Artifact collection groups: \`$(jq -r '.labBaseline.artifactCollectionGroups | join(",")' "$readiness_json")\`"
   echo
   echo "## Lab Baseline"
   echo
@@ -1251,6 +1317,7 @@ jq -n \
     echo "- Validated minimum iterations: \`$(jq -r '.minIterations // "missing"' "$lab_validation")\`"
     echo "- Validated minimum contention clients: \`$(jq -r '.minContentionClients // "missing"' "$lab_validation")\`"
     echo "- Validated minimum contention target/client Mbps: \`$(jq -r '.minContentionTargetClientMbps // "missing"' "$lab_validation")\`"
+    echo "- Packaged artifact collection groups: \`$(jq -r '.labBaseline.artifactCollectionGroups | join(",")' "$readiness_json")\`"
   else
     echo "No lab validation file found."
   fi
