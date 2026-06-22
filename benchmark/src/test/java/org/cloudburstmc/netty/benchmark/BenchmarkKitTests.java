@@ -304,11 +304,53 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/validate-all.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/summarize-campaign.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/manifest.jsonl")));
+        Assertions.assertTrue(Files.exists(handoff.resolve("handoff-manifest.json")));
+        Assertions.assertTrue(result.output.contains("Handoff manifest:"));
 
         String readme = Files.readString(handoff.resolve("README.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(readme.contains("RakNet Lab Baseline Handoff"));
+        Assertions.assertTrue(readme.contains("handoff-manifest.json"));
         Assertions.assertTrue(readme.contains("promote-lab-baseline.sh"));
         Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
+
+        JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertEquals("raknet-lab-handoff", handoffManifest.path("kind").asText());
+        Assertions.assertEquals(root.toString(), handoffManifest.path("repoRoot").asText());
+        Assertions.assertEquals(handoff.toString(), handoffManifest.path("outputRoot").asText());
+        Assertions.assertEquals(artifacts.toString(), handoffManifest.path("artifactRoot").asText());
+        Assertions.assertEquals(handoff.resolve("perfect-plan").toString(), handoffManifest.path("perfectPlan").asText());
+        Assertions.assertEquals(handoff.resolve("impairment-plan").toString(),
+                handoffManifest.path("impairmentPlan").asText());
+        Assertions.assertEquals(artifacts.resolve("perfect").toString(),
+                handoffManifest.path("perfectArtifacts").asText());
+        Assertions.assertEquals(artifacts.resolve("impairment").toString(),
+                handoffManifest.path("impairmentArtifacts").asText());
+        Assertions.assertEquals("127.0.0.1", handoffManifest.path("serverHost").asText());
+        Assertions.assertEquals("0.0.0.0", handoffManifest.path("bindHost").asText());
+        Assertions.assertEquals(19132, handoffManifest.path("port").asInt());
+        Assertions.assertEquals("lo", handoffManifest.path("interface").asText());
+        Assertions.assertEquals("receiver-a", handoffManifest.path("targetHostRole").asText());
+        Assertions.assertEquals(2, handoffManifest.path("profiles").size());
+        Assertions.assertEquals("perfect", handoffManifest.path("profiles").get(0).asText());
+        Assertions.assertEquals("near-loss", handoffManifest.path("profiles").get(1).asText());
+        Assertions.assertEquals(1, handoffManifest.path("curveReceivers").size());
+        Assertions.assertEquals("receiver-a=1", handoffManifest.path("curveReceivers").get(0).asText());
+        Assertions.assertEquals(1, handoffManifest.path("contentionReceivers").size());
+        Assertions.assertEquals("receiver-a=2", handoffManifest.path("contentionReceivers").get(0).asText());
+        Assertions.assertEquals(1, handoffManifest.path("contentionCases").size());
+        Assertions.assertEquals("fanout", handoffManifest.path("contentionCases").get(0).asText());
+        Assertions.assertEquals(64, handoffManifest.path("contentionPayloadSize").asInt());
+        Assertions.assertEquals(1.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(1000, handoffManifest.path("raisedPacketLimit").asInt());
+        Assertions.assertEquals(10000, handoffManifest.path("raisedGlobalPacketLimit").asInt());
+        Assertions.assertEquals(1048576, handoffManifest.path("maxQueuedBytes").asInt());
+        Assertions.assertEquals("1s", handoffManifest.path("warmup").asText());
+        Assertions.assertEquals("1s", handoffManifest.path("duration").asText());
+        Assertions.assertEquals(1, handoffManifest.path("iterations").asInt());
+        Assertions.assertEquals("1s", handoffManifest.path("startDelay").asText());
+        Assertions.assertEquals("180s", handoffManifest.path("startOffset").asText());
+        Assertions.assertFalse(handoffManifest.path("sudoNetem").asBoolean());
 
         List<String> profiles = Files.readAllLines(handoff.resolve("impairment-plan/manifest.jsonl"), StandardCharsets.UTF_8);
         Assertions.assertEquals(2, profiles.size());

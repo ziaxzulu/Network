@@ -71,6 +71,7 @@ Options:
 Outputs:
   perfect-plan/                     plan-lab-baseline.sh output.
   impairment-plan/                  plan-lab-impairment.sh output.
+  handoff-manifest.json             Machine-readable handoff metadata.
   README.md                         Handoff run order and promotion/readiness commands.
 USAGE
 }
@@ -225,6 +226,11 @@ for value in "$profiles" "$contention_cases"; do
   fi
 done
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required to write the lab handoff manifest" >&2
+  exit 2
+fi
+
 if [[ -z "$output_root" ]]; then
   output_root="$repo_root/benchmark/build/benchmark-results/lab-handoff-$timestamp"
 elif [[ "$output_root" != /* ]]; then
@@ -243,6 +249,21 @@ impairment_plan="$output_root/impairment-plan"
 perfect_artifacts="$artifact_root/perfect"
 impairment_artifacts="$artifact_root/impairment"
 readme="$output_root/README.md"
+handoff_manifest="$output_root/handoff-manifest.json"
+
+json_array_from_args() {
+  if [[ "$#" -eq 0 ]]; then
+    printf '[]'
+    return
+  fi
+
+  printf '%s\n' "$@" | jq -R -s 'split("\n") | map(select(length > 0))'
+}
+
+json_array_from_csv() {
+  printf '%s' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+    | jq -R -s 'split("\n") | map(select(length > 0))'
+}
 
 common_baseline_args=(
   --server-host "$server_host"
@@ -294,6 +315,82 @@ fi
   -- \
   "${common_baseline_args[@]}"
 
+git_revision="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+curve_receivers_json="$(json_array_from_args "${curve_receivers[@]}")"
+contention_receivers_json="$(json_array_from_args "${contention_receivers[@]}")"
+profiles_json="$(json_array_from_csv "$profiles")"
+contention_cases_json="$(json_array_from_csv "$contention_cases")"
+
+jq -n \
+  --arg kind "raknet-lab-handoff" \
+  --arg generatedAt "$timestamp" \
+  --arg gitRevision "$git_revision" \
+  --arg repoRoot "$repo_root" \
+  --arg outputRoot "$output_root" \
+  --arg artifactRoot "$artifact_root" \
+  --arg perfectPlan "$perfect_plan" \
+  --arg impairmentPlan "$impairment_plan" \
+  --arg perfectArtifacts "$perfect_artifacts" \
+  --arg impairmentArtifacts "$impairment_artifacts" \
+  --arg readme "$readme" \
+  --arg serverHost "$server_host" \
+  --arg bindHost "$bind_host" \
+  --arg port "$port" \
+  --arg interface "$interface" \
+  --arg targetHostRole "$target_host_role" \
+  --arg casePrefix "$case_prefix" \
+  --arg contentionPayloadSize "$contention_payload_size" \
+  --arg perClientMbps "$per_client_mbps" \
+  --arg raisedPacketLimit "$raised_packet_limit" \
+  --arg raisedGlobalPacketLimit "$raised_global_packet_limit" \
+  --arg maxQueuedBytes "$max_queued_bytes" \
+  --arg warmup "$warmup" \
+  --arg duration "$duration" \
+  --arg iterations "$iterations" \
+  --arg startDelay "$start_delay" \
+  --arg startOffset "$start_offset" \
+  --arg commonArgs "$common_args" \
+  --argjson curveReceivers "$curve_receivers_json" \
+  --argjson contentionReceivers "$contention_receivers_json" \
+  --argjson profiles "$profiles_json" \
+  --argjson contentionCases "$contention_cases_json" \
+  --argjson sudoNetem "$sudo_netem" \
+  '{
+    kind: $kind,
+    generatedAt: $generatedAt,
+    gitRevision: $gitRevision,
+    repoRoot: $repoRoot,
+    outputRoot: $outputRoot,
+    artifactRoot: $artifactRoot,
+    readme: $readme,
+    perfectPlan: $perfectPlan,
+    impairmentPlan: $impairmentPlan,
+    perfectArtifacts: $perfectArtifacts,
+    impairmentArtifacts: $impairmentArtifacts,
+    serverHost: $serverHost,
+    bindHost: $bindHost,
+    port: ($port | tonumber),
+    interface: $interface,
+    profiles: $profiles,
+    targetHostRole: $targetHostRole,
+    curveReceivers: $curveReceivers,
+    contentionReceivers: $contentionReceivers,
+    contentionCases: $contentionCases,
+    casePrefix: $casePrefix,
+    contentionPayloadSize: ($contentionPayloadSize | tonumber),
+    perClientMbps: ($perClientMbps | tonumber),
+    raisedPacketLimit: ($raisedPacketLimit | tonumber),
+    raisedGlobalPacketLimit: ($raisedGlobalPacketLimit | tonumber),
+    maxQueuedBytes: ($maxQueuedBytes | tonumber),
+    warmup: $warmup,
+    duration: $duration,
+    iterations: ($iterations | tonumber),
+    startDelay: $startDelay,
+    startOffset: $startOffset,
+    sudoNetem: $sudoNetem,
+    commonArgs: $commonArgs
+  }' >"$handoff_manifest"
+
 cat >"$readme" <<EOF
 # RakNet Lab Baseline Handoff
 
@@ -305,6 +402,7 @@ cat >"$readme" <<EOF
 - Artifact root: \`$artifact_root\`
 - Perfect-network plan: \`$perfect_plan\`
 - Impairment campaign plan: \`$impairment_plan\`
+- Handoff manifest: \`$handoff_manifest\`
 - Profiles: \`$profiles\`
 - Impairment target host role: \`$target_host_role\`
 - Curve receivers: \`$(IFS=,; echo "${curve_receivers[*]}")\`
@@ -365,4 +463,5 @@ EOF
 echo "Lab handoff: $output_root"
 echo "Perfect-network plan: $perfect_plan"
 echo "Impairment campaign plan: $impairment_plan"
+echo "Handoff manifest: $handoff_manifest"
 echo "README: $readme"
