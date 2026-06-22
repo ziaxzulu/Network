@@ -34,6 +34,14 @@ Local loopback artifacts are useful for regression shape only. They should not b
 
 For a stronger single-host smoke path, use `benchmark/scripts/run-netns-worker-smoke.sh`. It runs the normal server/receiver worker roles through Linux network namespaces and veth pairs so `tc netem` and blackhole behavior are applied outside the JVM. This is useful for local retry-pressure and external-qdisc regression checks, but it is still not accepted as line-rate or baseline-of-record evidence.
 
+Current netns blackhole dry-run artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/netns-blackhole-dry-current/
+```
+
+This dry-run generated the server, healthy-receiver, affected-receiver, qdisc-status, blackhole-scheduling, and merge commands for a `20` client disappearing-client smoke with `18` healthy clients, `2` affected clients, payload `512`, `5Mbps` per client, and server-to-client blackhole applied outside the JVM. It did not execute traffic: this host has `ip` and `tc`, but `sudo -n true` reports that a password is required, and `run-netns-worker-smoke.sh --execute` requires root or equivalent `CAP_NET_ADMIN`.
+
 Latest current-branch smoke artifact in this worktree:
 
 ```text
