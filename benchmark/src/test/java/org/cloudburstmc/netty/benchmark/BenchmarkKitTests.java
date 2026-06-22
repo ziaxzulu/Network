@@ -812,6 +812,31 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testLabValidationRequiresConcreteSelectedCapacityCandidate() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-lab-validation-capacity-test");
+        Path lab = output.resolve("lab");
+        writeValidationLabArtifacts(lab, 2, 2);
+        Files.writeString(lab.resolve("bandwidth-capacity.jsonl"),
+                "{\"summaryKind\":\"bandwidth-capacity\",\"case\":\"curve-100_0mbps\",\"payloadSize\":512,"
+                        + "\"selected\":true}\n",
+                StandardCharsets.UTF_8);
+
+        ProcessResult invalid = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/validate-lab-baseline.sh").toString(),
+                "--input", lab.toString(),
+                "--out", lab.resolve("validation").toString()
+        );
+        Assertions.assertEquals(1, invalid.exitCode, invalid.output);
+        JsonNode invalidJson = JSON.readTree(Files.readString(
+                lab.resolve("validation/validation.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(invalidJson.findValuesAsText("code")
+                .contains("invalid-selected-capacity"));
+    }
+
+    @Test
     public void testPromotionRejectsValidationBypassesByDefault() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1203,6 +1228,53 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresConcreteSelectedCapacityCandidates() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-capacity-candidate-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        writeInvalidReadinessLabCapacity(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+
+        ProcessResult invalidLabCapacity = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, invalidLabCapacity.exitCode, invalidLabCapacity.output);
+        JsonNode invalidLabReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(invalidLabReadiness.findValuesAsText("code")
+                .contains("lab-invalid-selected-capacity"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        Files.writeString(impairmentBaseline.resolve("impairment-summary.json"),
+                Files.readString(impairmentBaseline.resolve("impairment-summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"selectedDeliveredGbps\":1", "\"selectedDeliveredGbps\":0"),
+                StandardCharsets.UTF_8);
+
+        ProcessResult invalidImpairmentCapacity = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, invalidImpairmentCapacity.exitCode, invalidImpairmentCapacity.output);
+        JsonNode invalidImpairmentReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(invalidImpairmentReadiness.findValuesAsText("code")
+                .contains("impairment-invalid-selected-capacity"));
+    }
+
+    @Test
     public void testBaselineReadinessRequiresContentionValidationGates() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1537,7 +1609,8 @@ public class BenchmarkKitTests {
                     .append(payloadSize)
                     .append("\",\"payloadSize\":")
                     .append(payloadSize)
-                    .append(",\"selected\":true}\n");
+                    .append(",\"selected\":true,\"selectedCandidate\":{\"benchmarkName\":\"curve-100_0mbps\",")
+                    .append("\"deliveredGbps\":1.0,\"probeRttP99Millis\":1.0}}\n");
         }
         aggregate.append("{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"fairness\",\"benchmarkName\":\"fairness\",\"payloadSize\":512}\n");
@@ -1545,6 +1618,18 @@ public class BenchmarkKitTests {
         aggregate.append("{\"case\":\"batch\",\"benchmarkName\":\"batched-game-traffic\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"resource-pack\",\"benchmarkName\":\"resource-pack-transfer\",\"payloadSize\":8192}\n");
         Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
+        Files.writeString(labBaseline.resolve("bandwidth-capacity.jsonl"), capacity.toString(), StandardCharsets.UTF_8);
+    }
+
+    private static void writeInvalidReadinessLabCapacity(Path labBaseline, int... payloadSizes) throws Exception {
+        StringBuilder capacity = new StringBuilder();
+        for (int payloadSize : payloadSizes) {
+            capacity.append("{\"summaryKind\":\"bandwidth-capacity\",\"case\":\"lab-curve-p")
+                    .append(payloadSize)
+                    .append("\",\"payloadSize\":")
+                    .append(payloadSize)
+                    .append(",\"selected\":true}\n");
+        }
         Files.writeString(labBaseline.resolve("bandwidth-capacity.jsonl"), capacity.toString(), StandardCharsets.UTF_8);
     }
 
@@ -1620,7 +1705,8 @@ public class BenchmarkKitTests {
         Files.writeString(labRoot.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
         Files.writeString(labRoot.resolve("bandwidth-capacity.jsonl"),
                 "{\"summaryKind\":\"bandwidth-capacity\",\"case\":\"curve-100_0mbps\",\"payloadSize\":512,"
-                        + "\"selected\":true}\n",
+                        + "\"selected\":true,\"selectedCandidate\":{\"benchmarkName\":\"curve-100_0mbps\","
+                        + "\"deliveredGbps\":1.0,\"probeRttP99Millis\":1.0}}\n",
                 StandardCharsets.UTF_8);
     }
 
@@ -1772,7 +1858,8 @@ public class BenchmarkKitTests {
                         .append(payloadSizes[payloadIndex])
                         .append("\",\"payloadSize\":")
                         .append(payloadSizes[payloadIndex])
-                        .append(",\"selected\":true}");
+                        .append(",\"selected\":true,\"selectedBenchmarkName\":\"curve-100_0mbps\",")
+                        .append("\"selectedDeliveredGbps\":1,\"selectedProbeRttP99Millis\":1}");
             }
             profiles.append("]}}");
         }

@@ -315,6 +315,19 @@ if [[ -s "$lab_capacity" ]]; then
     [[ -z "$missing_payload" ]] && continue
     append_issue "lab-missing-capacity-payload" "lab-baseline" "lab baseline capacity selector is missing a required payload size" "{\"payloadSize\":$missing_payload}"
   done <<<"$missing_capacity_payloads"
+
+  invalid_lab_capacity="$(jq -r -s '
+    def n($value): ($value // 0) | tonumber;
+    .[]
+    | select((.summaryKind // "") == "bandwidth-capacity")
+    | select((.selected // false) == true and (((.selectedCandidate.benchmarkName // "") == "") or n(.selectedCandidate.deliveredGbps) <= 0))
+    | [(.case // ""), (.payloadSize // 0)] | @tsv
+  ' "$lab_capacity")"
+  while IFS=$'\t' read -r case_name payload_size; do
+    [[ -z "$case_name" && -z "$payload_size" ]] && continue
+    extra="$(jq -n --arg case "$case_name" --argjson payloadSize "${payload_size:-0}" '{case:$case,payloadSize:$payloadSize}')"
+    append_issue "lab-invalid-selected-capacity" "lab-baseline" "lab baseline capacity selector has a selected row without a concrete positive-throughput selected candidate" "$extra"
+  done <<<"$invalid_lab_capacity"
 fi
 
 impairment_manifest="$impairment_baseline/impairment-baseline-manifest.json"
@@ -395,6 +408,21 @@ if [[ -s "$impairment_summary" ]]; then
     extra="$(jq -n --arg profile "$profile" --arg case "$case_name" --argjson payloadSize "${payload_size:-0}" '{profile:$profile,case:$case,payloadSize:$payloadSize}')"
     append_issue "impairment-unselected-capacity" "impairment-baseline" "impairment profile has an unselected capacity row" "$extra"
   done <<<"$unselected_impairment_capacity"
+
+  invalid_impairment_capacity="$(jq -r --argjson expectedProfiles "$expected_profiles_json" '
+    def n($value): ($value // 0) | tonumber;
+    (.profiles // [])[]
+    | .profile as $profile
+    | select(($expectedProfiles | index($profile)) != null)
+    | .capacity.rows[]?
+    | select((.selected // false) == true and (((.selectedBenchmarkName // "") == "") or n(.selectedDeliveredGbps) <= 0))
+    | [$profile, (.case // ""), (.payloadSize // 0)] | @tsv
+  ' "$impairment_summary")"
+  while IFS=$'\t' read -r profile case_name payload_size; do
+    [[ -z "$profile" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --arg case "$case_name" --argjson payloadSize "${payload_size:-0}" '{profile:$profile,case:$case,payloadSize:$payloadSize}')"
+    append_issue "impairment-invalid-selected-capacity" "impairment-baseline" "impairment profile capacity selector has a selected row without a concrete positive-throughput selected candidate" "$extra"
+  done <<<"$invalid_impairment_capacity"
 
   missing_impairment_contention="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedScenarios "$required_impairment_contention_json" '
     def scenario($row):

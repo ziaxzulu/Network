@@ -700,6 +700,12 @@ jq -n \
           bestObservedCandidate: (.bestObservedCandidate // null)
         })))
       else [] end)
+    + (if ($capacityRows | length) > 0 then
+        ($capacityRows | map(select((.selected // false) == true and (((.selectedCandidate.benchmarkName // "") == "") or n(.selectedCandidate.deliveredGbps) <= 0)) | issue("invalid-selected-capacity"; "selected capacity row is missing a concrete positive-throughput selected candidate"; null; {
+          capacityCase: (.case // null),
+          selectedCandidate: (.selectedCandidate // null)
+        })))
+      else [] end)
   ) as $issues |
   {
     checkedAt: $checkedAt,
