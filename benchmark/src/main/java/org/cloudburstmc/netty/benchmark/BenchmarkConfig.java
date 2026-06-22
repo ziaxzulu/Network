@@ -124,6 +124,8 @@ public final class BenchmarkConfig {
             this.disappearingClients = parseNonNegativeInt(key, value);
         } else if ("payload-size".equals(key)) {
             this.payloadSize = parsePositiveInt(key, value);
+        } else if ("chunk-size".equals(key) || "resource-pack-chunk-size".equals(key)) {
+            this.payloadSize = parsePositiveInt(key, value);
         } else if ("payload-sizes".equals(key)) {
             this.payloadSizes = parseIntegerList(key, value);
         } else if ("batch-payload-sizes".equals(key)) {
@@ -168,7 +170,8 @@ public final class BenchmarkConfig {
             this.ratesMbps = parseRateList(key, value);
         } else if ("probe-interval".equals(key)) {
             this.probeIntervalMillis = parseDurationMillis(value);
-        } else if ("batch-interval".equals(key) || "flush-interval".equals(key)) {
+        } else if ("batch-interval".equals(key) || "flush-interval".equals(key)
+                || "chunk-interval".equals(key) || "resource-pack-interval".equals(key)) {
             this.batchIntervalMillis = parseDurationMillis(value);
         } else if ("logical-packets-per-batch".equals(key) || "batch-logical-packets".equals(key)) {
             this.logicalPacketsPerBatch = parsePositiveInt(key, value);

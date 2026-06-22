@@ -539,6 +539,7 @@ fairness-10-2poor|fairness --clients 10 --impaired-clients 2 --warmup 0ms --dura
 disappear-10-stopread|disappearing-clients --clients 10 --disappearing-clients 1 --disappear-after 500ms --disappear-mode stop-reading --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --workers 1
 disappear-10-blackhole|disappearing-clients --clients 10 --disappearing-clients 1 --disappear-after 500ms --disappear-mode blackhole --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --workers 1
 batch-10-20ms|batched-game-traffic --clients 10 --warmup 0ms --duration 1s --iterations 1 --batch-interval 20ms --logical-packets-per-batch 4 --batch-payload-sizes 64,256 --batch-groups 2 --per-client-mbps 0.2 --workers 1
+resource-10-8k-200ms|resource-pack-transfer --clients 10 --warmup 0ms --duration 1s --iterations 1 --chunk-size 8192 --chunk-interval 200ms --workers 1
 CASES
 }
 
@@ -549,6 +550,7 @@ pilot-fanout-100x5|multi-client-fanout --clients 100 --warmup 1s --duration 5s -
 pilot-fairness-100-10poor|fairness --clients 100 --impaired-clients 10 --warmup 1s --duration 6s --iterations 3 --payload-size 512 --per-client-mbps 5 --impairment-latency 100ms --impairment-jitter 10ms --impairment-loss 5 --workers 1
 pilot-disappear-100-blackhole|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 2s --disappear-mode blackhole --warmup 1s --duration 6s --iterations 3 --payload-size 512 --per-client-mbps 5 --workers 1
 pilot-batch-100-20ms|batched-game-traffic --clients 100 --warmup 1s --duration 5s --iterations 3 --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5 --workers 1
+pilot-resource-100-8k-200ms|resource-pack-transfer --clients 100 --warmup 1s --duration 5s --iterations 3 --chunk-size 8192 --chunk-interval 200ms --workers 1
 CASES
 }
 
@@ -567,6 +569,7 @@ disappear-100-close|disappearing-clients --clients 100 --disappearing-clients 10
 disappear-100-stopread|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode stop-reading --warmup 2s --duration 15s --iterations 3 --payload-size 512 --per-client-mbps 5
 disappear-100-blackhole|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode blackhole --warmup 2s --duration 15s --iterations 3 --payload-size 512 --per-client-mbps 5
 batch-100-20ms|batched-game-traffic --clients 100 --warmup 2s --duration 10s --iterations 3 --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5
+resource-100-8k-200ms|resource-pack-transfer --clients 100 --warmup 2s --duration 10s --iterations 3 --chunk-size 8192 --chunk-interval 200ms
 CASES
 }
 
@@ -588,6 +591,8 @@ disappear-100-blackhole|disappearing-clients --clients 100 --disappearing-client
 batch-100-10ms|batched-game-traffic --clients 100 --warmup 10s --duration 60s --iterations 3 --batch-interval 10ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5
 batch-100-20ms|batched-game-traffic --clients 100 --warmup 10s --duration 60s --iterations 3 --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5
 batch-100-50ms|batched-game-traffic --clients 100 --warmup 10s --duration 60s --iterations 3 --batch-interval 50ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5
+resource-100-8k-200ms|resource-pack-transfer --clients 100 --warmup 10s --duration 60s --iterations 3 --chunk-size 8192 --chunk-interval 200ms
+resource-100-256k-200ms|resource-pack-transfer --clients 100 --warmup 10s --duration 60s --iterations 3 --chunk-size 262144 --chunk-interval 200ms
 CASES
 }
 

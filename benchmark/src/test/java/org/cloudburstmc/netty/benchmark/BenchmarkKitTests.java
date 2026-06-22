@@ -117,6 +117,22 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testResourcePackTransferParsing() {
+        BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
+                "resource-pack-transfer",
+                "--clients", "20",
+                "--chunk-size", "262144",
+                "--chunk-interval", "200ms",
+                "--duration", "1s"
+        });
+
+        Assertions.assertEquals(BenchmarkScenario.RESOURCE_PACK_TRANSFER, config.scenario());
+        Assertions.assertEquals(20, config.clients());
+        Assertions.assertEquals(262144, config.payloadSize());
+        Assertions.assertEquals(200, config.batchIntervalMillis());
+    }
+
+    @Test
     public void testLatencyHistogramPercentiles() {
         LatencyHistogram histogram = new LatencyHistogram();
         histogram.record(1_000_000L);
@@ -282,13 +298,14 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, result.exitCode, result.output);
 
         List<String> manifest = Files.readAllLines(output.resolve("manifest.jsonl"), StandardCharsets.UTF_8);
-        Assertions.assertEquals(5, manifest.size());
+        Assertions.assertEquals(6, manifest.size());
         Assertions.assertTrue(manifest.stream().allMatch(row -> row.contains("\"status\":\"dry-run\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-curve-1c-mtu\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-fanout-100x5\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-fairness-100-10poor\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-disappear-100-blackhole\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-batch-100-20ms\"")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-resource-100-8k-200ms\"")));
     }
 
     @Test

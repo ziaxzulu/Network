@@ -23,6 +23,7 @@ public enum BenchmarkScenario {
     FAIRNESS("fairness"),
     DISAPPEARING_CLIENTS("disappearing-clients"),
     BATCHED_GAME_TRAFFIC("batched-game-traffic"),
+    RESOURCE_PACK_TRANSFER("resource-pack-transfer"),
     MATRIX("matrix"),
     RECEIVER_WORKER("receiver-worker"),
     SERVER_WORKER("server-worker");

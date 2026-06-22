@@ -51,6 +51,7 @@ Use `--dry-run` to inspect the command set without executing it, `--only <case-s
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode stop-reading --warmup 2s --duration 15s --per-client-mbps 5"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode blackhole --warmup 2s --duration 15s --per-client-mbps 5"
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="batched-game-traffic --clients 100 --warmup 2s --duration 10s --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="resource-pack-transfer --clients 100 --warmup 2s --duration 10s --chunk-size 8192 --chunk-interval 200ms"
 ```
 
 Use `--rate-mbps 0` or `--rates-mbps unlimited` for an uncapped sender. Use `--target-gbps 1` as shorthand for `--rate-mbps 1000`. For production-style fanout, prefer `--per-client-mbps 5`; the runner converts that to aggregate offered rate from the established client count.
@@ -79,6 +80,8 @@ The `disappearing-clients` scenario supports `--disappear-mode close` for clean 
 Use `--max-queued-bytes N` to override per-session `RAK_MAX_QUEUED_BYTES` for slow-client and disappearance cap sweeps. The configured cap is recorded as `configuredMaxQueuedBytes`; the observed `maxQueuedBytes` metric remains the largest queue depth seen during the run.
 
 The `batched-game-traffic` scenario sends bursty, length-framed synthetic batches on a fixed flush cadence. Use `--batch-interval 10ms|20ms|50ms`, `--logical-packets-per-batch`, `--batch-payload-sizes`, and `--batch-groups` to approximate CubeCraft, Nukkit, Cloudburst, and Geyser-style grouped fanout. Compression is not modeled yet; batch payload sizes represent already-encoded batch bytes.
+
+The `resource-pack-transfer` scenario sends one large bulk chunk to each established client on a fixed cadence while probes continue. Use `--chunk-size 8192 --chunk-interval 200ms` for Nukkit-style smaller resource-pack responses and `--chunk-size 262144 --chunk-interval 200ms` for Geyser-style large chunks. It records the derived target Mbps from chunk size, interval, and client count.
 
 ## Baseline Suite Runner
 

@@ -51,6 +51,7 @@ public final class BenchmarkMain {
         System.out.println("  --packet-limit <packets-per-10ms> --global-packet-limit <packets-per-10ms>");
         System.out.println("  --impairment-latency 50ms --impairment-jitter 5ms --impairment-loss 2%");
         System.out.println("  --payload-size 512 --payload-sizes 64,512,1200");
+        System.out.println("  --chunk-size 262144 --chunk-interval 200ms for resource-pack-transfer");
         System.out.println("  --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 1");
         System.out.println("  --reliability reliable_ordered|reliable|unreliable");
         System.out.println("  --rate-mbps 1000 --per-client-mbps 5 --target-gbps 1 --rates-mbps 100,500,1000,unlimited");

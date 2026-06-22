@@ -12,7 +12,7 @@ The benchmark is a good synthetic for established-channel transport pressure:
 - queue, ACK/NACK, stale datagram, disconnect, fairness, per-client throughput, send/deliver, and probe-latency indicators
 - local loopback runs for regression and remote worker runs for separate-host lab evidence
 
-It is not a full Bedrock production emulator yet. The main remaining workload gaps are compression modeling, captured logical packet distributions, pass-through versus re-encode batch behavior, immediate-send/resource-pack pacing, proxy pass-through, and captured host/NIC-level impairment results. Source evidence and the gap list are in [`production-usage-evidence.md`](production-usage-evidence.md).
+It is not a full Bedrock production emulator yet. The main remaining workload gaps are compression modeling, captured logical packet distributions, pass-through versus re-encode batch behavior, immediate-send behavior outside resource-pack pacing, proxy pass-through, and captured host/NIC-level impairment results. Source evidence and the gap list are in [`production-usage-evidence.md`](production-usage-evidence.md).
 
 ## Base Matrix
 

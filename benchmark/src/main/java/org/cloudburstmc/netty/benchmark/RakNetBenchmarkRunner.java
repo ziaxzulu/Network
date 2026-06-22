@@ -82,6 +82,8 @@ public final class RakNetBenchmarkRunner {
             cases.add(singleCase(config, "disappearing-clients", config.payloadSize(), config.reliability(), config.rateMbps()));
         } else if (config.scenario() == BenchmarkScenario.BATCHED_GAME_TRAFFIC) {
             cases.add(singleCase(config, "batched-game-traffic", config.payloadSize(), config.reliability(), config.rateMbps()));
+        } else if (config.scenario() == BenchmarkScenario.RESOURCE_PACK_TRANSFER) {
+            cases.add(singleCase(config, "resource-pack-transfer", config.payloadSize(), config.reliability(), config.rateMbps()));
         } else {
             cases.add(singleCase(config, "baseline-bandwidth", config.payloadSize(), config.reliability(), config.rateMbps()));
         }
@@ -94,10 +96,15 @@ public final class RakNetBenchmarkRunner {
         double targetClientMbps = config.effectiveTargetClientMbps(targetMbps, config.clients());
         int affectedClients = Math.max(config.impairedClients(), config.disappearingClients());
         boolean batched = config.scenario() == BenchmarkScenario.BATCHED_GAME_TRAFFIC;
+        boolean pacedTransfer = config.scenario() == BenchmarkScenario.RESOURCE_PACK_TRANSFER;
+        if (pacedTransfer) {
+            targetClientMbps = pacedTransferClientMbps(payloadSize, config.batchIntervalMillis());
+            targetMbps = targetClientMbps * Math.max(1, config.clients());
+        }
         return new BenchmarkCase(name, config.clients(), affectedClients, config.disappearingClients(), payloadSize,
                 reliability, targetMbps, targetClientMbps, config.disappearAfterMillis(), config.impairmentLatencyMillis(),
                 config.impairmentJitterMillis(), config.impairmentLossPercent(), config.disappearanceMode(), batched,
-                config.batchIntervalMillis(), config.logicalPacketsPerBatch(), config.batchGroups(), config.batchPayloadSizes());
+                pacedTransfer, config.batchIntervalMillis(), config.logicalPacketsPerBatch(), config.batchGroups(), config.batchPayloadSizes());
     }
 
     private void runLocal(BenchmarkConfig config, BenchmarkCase benchmarkCase, BenchmarkRunResult result) throws Exception {
@@ -471,6 +478,10 @@ public final class RakNetBenchmarkRunner {
             runBatchedTraffic(config, benchmarkCase, peers, durationMillis, clientChannels, blackholes, allowDisappearance);
             return;
         }
+        if (benchmarkCase.pacedTransfer()) {
+            runPacedBulkTraffic(config, benchmarkCase, peers, durationMillis, clientChannels, blackholes, allowDisappearance);
+            return;
+        }
         final long endNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durationMillis);
         final long probeIntervalNanos = TimeUnit.MILLISECONDS.toNanos(config.probeIntervalMillis());
         final long aggregateMessageRate = config.effectiveMessageRate(benchmarkCase.payloadSize(), benchmarkCase.targetMbps());
@@ -554,6 +565,51 @@ public final class RakNetBenchmarkRunner {
                 LockSupport.parkNanos(sleepNanos);
             }
         }
+    }
+
+    private void runPacedBulkTraffic(BenchmarkConfig config, BenchmarkCase benchmarkCase, List<ServerPeer> peers,
+                                     long durationMillis, List<Channel> clientChannels,
+                                     List<DatagramBlackholeHandler> blackholes, boolean allowDisappearance) {
+        final long endNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durationMillis);
+        final long probeIntervalNanos = TimeUnit.MILLISECONDS.toNanos(config.probeIntervalMillis());
+        final long transferIntervalNanos = TimeUnit.MILLISECONDS.toNanos(benchmarkCase.batchIntervalMillis());
+        final long disappearAtNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(benchmarkCase.disappearAfterMillis());
+        long nextTransferNanos = System.nanoTime();
+        long nextProbeNanos = nextTransferNanos;
+        long bulkSequence = 0L;
+        long probeSequence = 0L;
+        boolean disappeared = benchmarkCase.disappearingClients() == 0 || !allowDisappearance;
+
+        while (System.nanoTime() < endNanos) {
+            long now = System.nanoTime();
+            if (!disappeared && now >= disappearAtNanos) {
+                applyDisappearance(clientChannels, blackholes, peers, benchmarkCase);
+                disappeared = true;
+            }
+
+            if (now >= nextProbeNanos) {
+                probeSequence = sendProbes(peers, benchmarkCase, probeSequence);
+                nextProbeNanos += probeIntervalNanos;
+            }
+
+            if (now >= nextTransferNanos) {
+                for (ServerPeer peer : peers) {
+                    bulkSequence = sendBulk(peer, benchmarkCase, bulkSequence);
+                }
+                nextTransferNanos += transferIntervalNanos;
+                continue;
+            }
+
+            long sleepNanos = Math.min(Math.min(nextTransferNanos, nextProbeNanos) - now, TimeUnit.MILLISECONDS.toNanos(1L));
+            if (sleepNanos > 0L) {
+                LockSupport.parkNanos(sleepNanos);
+            }
+        }
+    }
+
+    private static double pacedTransferClientMbps(int payloadSize, long intervalMillis) {
+        double chunksPerSecond = 1000.0D / Math.max(1L, intervalMillis);
+        return (payloadSize * 8.0D * chunksPerSecond) / 1_000_000.0D;
     }
 
     private static long targetBytesPerClientBurst(BenchmarkCase benchmarkCase) {

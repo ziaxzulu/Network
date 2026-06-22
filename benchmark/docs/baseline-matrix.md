@@ -51,7 +51,7 @@ Benchmark implications:
 - Prefer payload sizes near real RakNet/Bedrock shapes: small control packets, threshold-adjacent packets around `256B` and `512B`, near-MTU batches around `1200-1400B`, and split-heavy chunk/resource-pack payloads.
 - Use `batched-game-traffic` for bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
 - Add a future Bedrock-like workload layer that uses captured logical packet distributions and optionally compresses batches with thresholds `1`, `256`, and `512`, distinguishing pass-through compressed batches from re-encoded modified batches.
-- Add future immediate-send and resource-pack profiles so split-heavy payload coverage is not limited to an always-on bulk stream.
+- Use `resource-pack-transfer` for paced large-chunk transfers so split-heavy payload coverage is not limited to an always-on bulk stream. Immediate-send profiles outside resource-pack pacing remain a future gap.
 - Use `--max-queued-bytes` queue/backlog cap sweeps on fairness and disappearance rows when measuring slow-client disconnect thresholds.
 - Add host/NIC-level impairment and blackhole disappearance profiles before treating the suite as production-representative.
 - Add a later proxy profile with one downstream and one upstream RakNet channel per user to represent pass-through deployments.
@@ -246,7 +246,6 @@ The current workload can:
 Remaining batch gaps:
 
 - immediate-send lane outside periodic batch flushes
-- resource-pack profiles such as Geyser-style `256KiB` chunks paced around `200ms` and Nukkit-style smaller chunk responses
 - captured gameplay packet-size distributions
 - compression threshold and algorithm modeling around `1B`, `256B`, and `512B`, including pass-through versus re-encode behavior
 - batch-size histograms beyond the configured payload-size list
@@ -262,7 +261,27 @@ Initial target shape:
 | Group count | `1`, `4`, `16` payload variants |
 | Per-client target | `1Mbps`, `5Mbps` |
 
-### 7. Proxy Pass-Through Shape
+### 7. Resource-Pack And Paced Split Transfers
+
+Purpose: approximate large, paced transfer paths such as Geyser resource-pack chunks and smaller Nukkit resource-pack responses without folding them into the continuous bandwidth curve.
+
+The harness includes `resource-pack-transfer`, which sends one bulk chunk to each established client on a fixed interval while probe messages continue to measure latency:
+
+```bash
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="resource-pack-transfer --clients 100 --warmup 10s --duration 60s --iterations 3 --chunk-size 8192 --chunk-interval 200ms"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="resource-pack-transfer --clients 100 --warmup 10s --duration 60s --iterations 3 --chunk-size 262144 --chunk-interval 200ms"
+```
+
+Initial target shape:
+
+| Dimension | Values |
+| --- | --- |
+| Clients | `20`, `100`, `500` |
+| Chunk size | `8192`, `262144` |
+| Chunk interval | `200ms` |
+| Network | perfect plus host-level impairment profiles |
+
+### 8. Proxy Pass-Through Shape
 
 Purpose: approximate deployments where each user has one downstream RakNet session and one upstream RakNet session, so the process handles twice the connected channel count plus forwarding work.
 
@@ -302,6 +321,8 @@ Use this smaller set as the first recurring perfect-network baseline before expa
 | `batch-fanout-100-10ms` | `100` | mixed | `reliable_ordered` | perfect | `10ms`, `5Mbps` per client |
 | `batch-fanout-100-20ms` | `100` | mixed | `reliable_ordered` | perfect | `20ms`, `5Mbps` per client |
 | `batch-fanout-100-50ms` | `100` | mixed | `reliable_ordered` | perfect | `50ms`, `5Mbps` per client |
+| `resource-100-8k-200ms` | `100` | `8192` | `reliable_ordered` | perfect | one chunk/client every `200ms` |
+| `resource-100-256k-200ms` | `100` | `262144` | `reliable_ordered` | perfect | one chunk/client every `200ms` |
 
 Use host-level impairment as a companion baseline, not as part of the unshaped perfect-network profile:
 
