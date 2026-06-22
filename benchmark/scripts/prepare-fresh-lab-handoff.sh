@@ -205,30 +205,50 @@ jq -n \
   --arg generatedAt "$(date -u +%Y%m%dT%H%M%SZ)" \
   --arg handoff "$handoff_out" \
   --arg artifactRoot "$artifact_root" \
-  --arg sourceAudit "$source_audit_json" \
-  --arg preflight "$preflight_out/handoff-check.json" \
+  --arg sourceAuditPath "$source_audit_json" \
+  --arg preflightPath "$preflight_out/handoff-check.json" \
   --arg summary "$summary_json" \
-  --argjson sourceAuditReady "$(jq '.ready == true' "$source_audit_json")" \
-  --arg sourceAuditRevision "$(jq -r '.networkShortRevision // ""' "$source_audit_json")" \
-  --argjson handoffReady "$(jq '.ready == true' "$preflight_out/handoff-check.json")" \
-  --argjson handoffIssueCount "$(jq '.issueCount // 0' "$preflight_out/handoff-check.json")" \
-  '{
-    kind: $kind,
-    generatedAt: $generatedAt,
-    handoff: $handoff,
-    artifactRoot: $artifactRoot,
-    sourceAudit: {
-      path: $sourceAudit,
-      ready: $sourceAuditReady,
-      networkShortRevision: $sourceAuditRevision
-    },
-    preflight: {
-      path: $preflight,
-      ready: $handoffReady,
-      issueCount: $handoffIssueCount
-    },
-    summary: $summary
-  }' >"$summary_json"
+  --slurpfile sourceAuditData "$source_audit_json" \
+  --slurpfile preflightData "$preflight_out/handoff-check.json" \
+  '
+    ($sourceAuditData[0] // {}) as $sourceAudit |
+    ($preflightData[0] // {}) as $preflight |
+    {
+      kind: $kind,
+      generatedAt: $generatedAt,
+      ready: (($sourceAudit.ready == true) and ($preflight.ready == true)),
+      networkRevision: ($sourceAudit.networkRevision // ""),
+      networkShortRevision: ($sourceAudit.networkShortRevision // ""),
+      networkDirtyTrackedFiles: ($sourceAudit.networkDirtyTrackedFiles // null),
+      sourceAuditIssueCount: ($sourceAudit.issueCount // null),
+      handoffIssueCount: ($preflight.issueCount // null),
+      plannedRows: {
+        perfectCurve: ($preflight.actualPerfectCurveRows // null),
+        perfectRaisedCurve: ($preflight.actualPerfectRaisedCurveRows // null),
+        perfectContention: ($preflight.actualPerfectContentionRows // null),
+        impairmentProfiles: ($preflight.actualImpairmentProfileRows // [])
+      },
+      handoff: $handoff,
+      artifactRoot: $artifactRoot,
+      sourceAudit: {
+        path: $sourceAuditPath,
+        ready: ($sourceAudit.ready == true),
+        issueCount: ($sourceAudit.issueCount // null),
+        networkRevision: ($sourceAudit.networkRevision // ""),
+        networkShortRevision: ($sourceAudit.networkShortRevision // ""),
+        networkDirtyTrackedFiles: ($sourceAudit.networkDirtyTrackedFiles // null),
+        requiredSources: ($sourceAudit.requiredSources // []),
+        sourceCount: (($sourceAudit.sources // []) | length)
+      },
+      preflight: {
+        path: $preflightPath,
+        ready: ($preflight.ready == true),
+        issueCount: ($preflight.issueCount // null),
+        issues: ($preflight.issues // [])
+      },
+      summary: $summary
+    }
+  ' >"$summary_json"
 
 echo "Fresh lab handoff: $handoff_out"
 echo "Source audit: $source_audit_json"

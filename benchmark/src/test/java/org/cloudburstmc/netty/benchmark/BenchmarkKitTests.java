@@ -826,9 +826,27 @@ public class BenchmarkKitTests {
 
         JsonNode summaryJson = JSON.readTree(Files.readString(summary, StandardCharsets.UTF_8));
         Assertions.assertEquals("raknet-fresh-lab-handoff", summaryJson.path("kind").asText());
+        Assertions.assertTrue(summaryJson.path("ready").asBoolean(), summaryJson.toPrettyString());
+        Assertions.assertEquals(sourceAuditJson.path("networkRevision").asText(),
+                summaryJson.path("networkRevision").asText());
+        Assertions.assertEquals(sourceAuditJson.path("networkShortRevision").asText(),
+                summaryJson.path("networkShortRevision").asText());
+        Assertions.assertTrue(summaryJson.path("networkDirtyTrackedFiles").isBoolean());
+        Assertions.assertEquals(0, summaryJson.path("sourceAuditIssueCount").asInt());
+        Assertions.assertEquals(0, summaryJson.path("handoffIssueCount").asInt());
+        Assertions.assertEquals(56, summaryJson.path("plannedRows").path("perfectCurve").asInt());
+        Assertions.assertEquals(56, summaryJson.path("plannedRows").path("perfectRaisedCurve").asInt());
+        Assertions.assertEquals(9, summaryJson.path("plannedRows").path("perfectContention").asInt());
+        Assertions.assertEquals(1, summaryJson.path("plannedRows").path("impairmentProfiles").size());
+        Assertions.assertEquals("perfect", summaryJson.path("plannedRows").path("impairmentProfiles").get(0)
+                .path("profile").asText());
         Assertions.assertTrue(summaryJson.path("sourceAudit").path("ready").asBoolean());
+        Assertions.assertEquals(0, summaryJson.path("sourceAudit").path("issueCount").asInt());
+        Assertions.assertEquals(2, summaryJson.path("sourceAudit").path("requiredSources").size());
+        Assertions.assertTrue(summaryJson.path("sourceAudit").path("sourceCount").asInt() >= 2);
         Assertions.assertTrue(summaryJson.path("preflight").path("ready").asBoolean());
         Assertions.assertEquals(0, summaryJson.path("preflight").path("issueCount").asInt());
+        Assertions.assertTrue(summaryJson.path("preflight").path("issues").isArray());
     }
 
     @Test
