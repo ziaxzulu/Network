@@ -483,7 +483,13 @@ if [[ -n "$source_audit" ]]; then
       issueCount: (.issueCount // 0),
       networkRevision: (.networkRevision // ""),
       networkShortRevision: (.networkShortRevision // ""),
-      networkDirtyTrackedFiles: (.networkDirtyTrackedFiles // null),
+      networkDirtyTrackedFiles: (
+        if has("networkDirtyTrackedFiles") then
+          .networkDirtyTrackedFiles
+        else
+          null
+        end
+      ),
       evidenceDocument: (.evidenceDocument // null),
       requiredSources: (.requiredSources // []),
       sources: [(.sources // [])[] | {

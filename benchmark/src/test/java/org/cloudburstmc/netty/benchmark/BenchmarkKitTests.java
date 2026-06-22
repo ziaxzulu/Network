@@ -525,6 +525,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(sourceAudit.toString(), handoffManifest.path("sourceAudit").path("document").asText());
         Assertions.assertTrue(handoffManifest.path("sourceAudit").path("ready").asBoolean());
         Assertions.assertEquals(0, handoffManifest.path("sourceAudit").path("issueCount").asInt());
+        Assertions.assertFalse(handoffManifest.path("sourceAudit").path("networkDirtyTrackedFiles").asBoolean());
         Assertions.assertTrue(handoffManifest.path("sourceAudit").path("sha256").asText()
                 .matches("[0-9a-f]{64}"));
         Assertions.assertEquals(2, handoffManifest.path("sourceAudit").path("sources").size());
@@ -813,6 +814,8 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8));
         Assertions.assertEquals(sourceAudit.toString(), handoffManifest.path("sourceAudit").path("document").asText());
         Assertions.assertTrue(handoffManifest.path("sourceAudit").path("ready").asBoolean());
+        Assertions.assertEquals(sourceAuditJson.path("networkDirtyTrackedFiles").asBoolean(),
+                handoffManifest.path("sourceAudit").path("networkDirtyTrackedFiles").asBoolean());
         Assertions.assertEquals(500, handoffManifest.path("contentionClientTotal").asInt());
         Assertions.assertEquals(5.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
 
