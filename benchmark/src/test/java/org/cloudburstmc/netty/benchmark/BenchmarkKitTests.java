@@ -420,6 +420,32 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(2, handoffCheckJson.path("expectedContentionClients").asInt());
         Assertions.assertEquals(1.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
 
+        Path handoffReadme = handoff.resolve("README.md");
+        Files.writeString(handoffReadme,
+                Files.readString(handoffReadme, StandardCharsets.UTF_8)
+                        .replace("--required-min-contention-clients \"2\"",
+                                "--required-min-contention-clients \"1\""),
+                StandardCharsets.UTF_8);
+        ProcessResult tamperedReadmeCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-readme-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
+        );
+        Assertions.assertEquals(1, tamperedReadmeCheck.exitCode, tamperedReadmeCheck.output);
+        JsonNode tamperedReadmeCheckJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-readme-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(tamperedReadmeCheckJson.findValuesAsText("code")
+                .contains("missing-readme-command"));
+        Files.writeString(handoffReadme,
+                Files.readString(handoffReadme, StandardCharsets.UTF_8)
+                        .replace("--required-min-contention-clients \"1\"",
+                                "--required-min-contention-clients \"2\""),
+                StandardCharsets.UTF_8);
+
         Path contentionManifest = handoff.resolve("perfect-plan/contention-plan/manifest.jsonl");
         Files.writeString(contentionManifest,
                 Files.readString(contentionManifest, StandardCharsets.UTF_8)

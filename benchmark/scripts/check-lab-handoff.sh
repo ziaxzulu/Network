@@ -131,6 +131,19 @@ check_path() {
   fi
 }
 
+check_readme_contains() {
+  local pattern="$1"
+  local message="$2"
+  local readme="$handoff_root/README.md"
+  if [[ ! -s "$readme" ]]; then
+    return
+  fi
+  if ! grep -Fq -- "$pattern" "$readme"; then
+    append_issue "missing-readme-command" "handoff-readme" "$message" \
+      "$(jq -n --arg path "$readme" --arg pattern "$pattern" '{path:$path,pattern:$pattern}')"
+  fi
+}
+
 manifest="$handoff_root/handoff-manifest.json"
 if [[ ! -s "$manifest" ]]; then
   append_issue "missing-handoff-manifest" "handoff" "handoff-manifest.json is missing or empty" "$(jq -n --arg path "$manifest" '{path:$path}')"
@@ -196,6 +209,15 @@ if ! jq -n -e --argjson actual "$expected_per_client_mbps" --argjson required "$
 fi
 
 check_path "$handoff_root/README.md" "handoff"
+check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
+check_readme_contains "benchmark/scripts/check-lab-host-prereqs.sh" "handoff README does not show the host prerequisite check"
+check_readme_contains "benchmark/scripts/promote-lab-baseline.sh" "handoff README does not show the perfect-network promotion command"
+check_readme_contains "--min-contention-clients \"$expected_contention_clients\"" "handoff README promotion command does not enforce the handoff contention client count"
+check_readme_contains "--min-contention-target-client-mbps \"$expected_per_client_mbps\"" "handoff README promotion command does not enforce the handoff per-client Mbps target"
+check_readme_contains "benchmark/scripts/promote-lab-impairment.sh" "handoff README does not show the impairment promotion command"
+check_readme_contains "benchmark/scripts/check-baseline-readiness.sh" "handoff README does not show the final readiness command"
+check_readme_contains "--required-min-contention-clients \"$expected_contention_clients\"" "handoff README readiness command does not enforce the handoff contention client count"
+check_readme_contains "--required-min-contention-target-client-mbps \"$expected_per_client_mbps\"" "handoff README readiness command does not enforce the handoff per-client Mbps target"
 check_path "$perfect_plan/check-plan-freshness.sh" "perfect-plan" true
 check_path "$perfect_plan/host-capture-commands.sh" "perfect-plan" true
 check_path "$perfect_plan/merge-all.sh" "perfect-plan" true
