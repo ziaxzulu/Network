@@ -102,6 +102,8 @@ Outputs:
   perfect-plan/                     plan-lab-baseline.sh output.
   impairment-plan/                  plan-lab-impairment.sh output.
   handoff-manifest.json             Machine-readable handoff metadata.
+  artifact-collection.json          Machine-readable artifact collection checklist.
+  artifact-collection.md            Human-readable artifact collection checklist.
   README.md                         Handoff preflight, run order, promotion, and readiness commands.
   promote-and-check.sh              Promotes completed artifacts and runs readiness with this handoff's paths.
 USAGE
@@ -470,6 +472,8 @@ perfect_artifacts="$artifact_root/perfect"
 impairment_artifacts="$artifact_root/impairment"
 readme="$output_root/README.md"
 handoff_manifest="$output_root/handoff-manifest.json"
+artifact_collection_json="$output_root/artifact-collection.json"
+artifact_collection_md="$output_root/artifact-collection.md"
 promote_script="$output_root/promote-and-check.sh"
 prereq_script="$output_root/prereq-commands.sh"
 production_evidence_doc_rel="benchmark/docs/production-usage-evidence.md"
@@ -668,6 +672,8 @@ jq -n \
   --arg impairmentArtifacts "$impairment_artifacts" \
   --arg productionEvidenceDoc "$production_evidence_doc_rel" \
   --arg productionEvidenceSha256 "$production_evidence_sha256" \
+  --arg artifactCollectionJson "$artifact_collection_json" \
+  --arg artifactCollectionMd "$artifact_collection_md" \
   --arg readme "$readme" \
   --arg promoteScript "$promote_script" \
   --arg prereqScript "$prereq_script" \
@@ -719,6 +725,8 @@ jq -n \
     outputRoot: $outputRoot,
     artifactRoot: $artifactRoot,
     readme: $readme,
+    artifactCollectionJson: $artifactCollectionJson,
+    artifactCollectionMd: $artifactCollectionMd,
     promoteScript: $promoteScript,
     prereqScript: $prereqScript,
     perfectPlan: $perfectPlan,
@@ -770,6 +778,202 @@ jq -n \
     requireCpuPerformance: $requireCpuPerformance,
     commonArgs: $commonArgs
   }' >"$handoff_manifest"
+
+jq -n \
+  --arg kind "raknet-lab-artifact-collection" \
+  --arg generatedAt "$timestamp" \
+  --arg handoffManifest "$handoff_manifest" \
+  --arg outputRoot "$output_root" \
+  --arg artifactRoot "$artifact_root" \
+  --arg perfectPlan "$perfect_plan" \
+  --arg impairmentPlan "$impairment_plan" \
+  --arg perfectArtifacts "$perfect_artifacts" \
+  --arg impairmentArtifacts "$impairment_artifacts" \
+  --arg promoteScript "$promote_script" \
+  --arg prereqScript "$prereq_script" \
+  --argjson prereqRoles "$prereq_roles_json" \
+  --argjson profiles "$profiles_json" \
+  --slurpfile impairmentManifest "$impairment_plan/manifest.jsonl" \
+  '{
+    kind: $kind,
+    generatedAt: $generatedAt,
+    handoffManifest: $handoffManifest,
+    outputRoot: $outputRoot,
+    artifactRoot: $artifactRoot,
+    perfectPlan: $perfectPlan,
+    impairmentPlan: $impairmentPlan,
+    perfectArtifacts: $perfectArtifacts,
+    impairmentArtifacts: $impairmentArtifacts,
+    promoteScript: $promoteScript,
+    prereqScript: $prereqScript,
+    prereqRoles: $prereqRoles,
+    profiles: $profiles,
+    requiredBeforePromotion: [
+      "perfect-topology",
+      "perfect-host-captures",
+      "perfect-prereq-reports",
+      "perfect-worker-artifacts",
+      "perfect-combined-artifacts",
+      "impairment-profile-artifacts",
+      "impairment-netem-evidence",
+      "impairment-campaign-summary"
+    ],
+    collectionGroups: [
+      {
+        id: "perfect-topology",
+        phase: "perfect-network",
+        required: true,
+        destination: ($perfectArtifacts + "/topology.md"),
+        producer: ($perfectPlan + "/topology-template.md"),
+        expected: ["topology.md"]
+      },
+      {
+        id: "perfect-host-captures",
+        phase: "perfect-network",
+        required: true,
+        destination: ($perfectArtifacts + "/host-<role>-<hostname>/"),
+        producer: ($perfectPlan + "/host-capture-commands.sh"),
+        roles: $prereqRoles,
+        expected: ["host-report.md"]
+      },
+      {
+        id: "perfect-prereq-reports",
+        phase: "perfect-network",
+        required: true,
+        destination: ($perfectArtifacts + "/prereq-<role>-<hostname>/"),
+        producer: ($prereqScript + " with ARTIFACT_ROOT=" + $perfectArtifacts),
+        roles: $prereqRoles,
+        expected: ["prereq.json", "prereq.md"]
+      },
+      {
+        id: "perfect-worker-artifacts",
+        phase: "perfect-network",
+        required: true,
+        destination: $perfectArtifacts,
+        producer: ($perfectPlan + "/README.md worker commands"),
+        expected: [
+          "curve/server-*/summary.json",
+          "curve/receiver-*/summary.json",
+          "curve-raised/server-*/summary.json",
+          "curve-raised/receiver-*/summary.json",
+          "contention/server-*/summary.json",
+          "contention/receiver-*/summary.json"
+        ]
+      },
+      {
+        id: "perfect-combined-artifacts",
+        phase: "perfect-network",
+        required: true,
+        destination: ($perfectArtifacts + "/combined/"),
+        producer: ($perfectPlan + "/merge-all.sh"),
+        expected: [
+          "suite-aggregate.jsonl",
+          "bandwidth-capacity.jsonl",
+          "validation.json",
+          "validation.md"
+        ]
+      },
+      {
+        id: "impairment-profile-artifacts",
+        phase: "impairment-campaign",
+        required: true,
+        destination: $impairmentArtifacts,
+        producer: ($impairmentPlan + "/README.md profile commands"),
+        profiles: [
+          $impairmentManifest[] | {
+            profile,
+            artifactRoot,
+            plan,
+            expected: [
+              "topology.md",
+              "host-<role>-<hostname>/host-report.md",
+              "prereq-<role>-<hostname>/prereq.json",
+              "curve/server-*/summary.json",
+              "curve/receiver-*/summary.json",
+              "curve-raised/server-*/summary.json",
+              "curve-raised/receiver-*/summary.json",
+              "contention/server-*/summary.json",
+              "contention/receiver-*/summary.json",
+              "combined/suite-aggregate.jsonl",
+              "combined/bandwidth-capacity.jsonl",
+              "combined/validation.json"
+            ]
+          }
+        ]
+      },
+      {
+        id: "impairment-netem-evidence",
+        phase: "impairment-campaign",
+        required: true,
+        destination: ($impairmentArtifacts + "/<profile>/netem/"),
+        producer: ($impairmentPlan + "/netem/<profile>-*.sh"),
+        profiles: [
+          $impairmentManifest[] | {
+            profile,
+            netemEvidenceDir,
+            expected: [
+              (.profile + "-apply-*.txt"),
+              (.profile + "-status-*.txt"),
+              (.profile + "-clear-*.txt")
+            ]
+          }
+        ]
+      },
+      {
+        id: "impairment-campaign-summary",
+        phase: "impairment-campaign",
+        required: true,
+        destination: ($impairmentArtifacts + "/campaign-summary/"),
+        producer: ($impairmentPlan + "/summarize-campaign.sh"),
+        expected: [
+          "impairment-summary.json",
+          "impairment-summary.jsonl",
+          "impairment-summary.md"
+        ]
+      },
+      {
+        id: "promotion-readiness",
+        phase: "promotion",
+        required: true,
+        destination: "benchmark/build/benchmark-baselines/ and benchmark/build/benchmark-results/baseline-readiness-*",
+        producer: $promoteScript,
+        expected: [
+          "baseline-manifest.json",
+          "impairment-baseline-manifest.json",
+          "readiness.json",
+          "readiness.md"
+        ]
+      }
+    ]
+  }' >"$artifact_collection_json"
+
+{
+  echo "# RakNet Lab Artifact Collection"
+  echo
+  echo "- Generated: \`$timestamp\`"
+  echo "- Handoff manifest: \`$handoff_manifest\`"
+  echo "- Artifact root: \`$artifact_root\`"
+  echo "- Perfect-network artifacts: \`$perfect_artifacts\`"
+  echo "- Impairment artifacts: \`$impairment_artifacts\`"
+  echo "- Prereq roles: \`$(IFS=,; echo "${prereq_roles[*]}")\`"
+  echo "- Profiles: \`$profiles\`"
+  echo
+  echo "Use this checklist while copying remote lab artifacts back to the merge/control host. The JSON file next to this document is the machine-readable contract validated by \`check-lab-handoff.sh\`."
+  echo
+  echo "## Required Groups"
+  echo
+  echo "| ID | Phase | Destination | Producer |"
+  echo "| --- | --- | --- | --- |"
+  jq -r '.collectionGroups[] | "| `\(.id)` | `\(.phase)` | `\(.destination)` | `\(.producer)` |"' "$artifact_collection_json"
+  echo
+  echo "## Impairment Profiles"
+  echo
+  echo "| Profile | Artifact root | Netem evidence |"
+  echo "| --- | --- | --- |"
+  jq -r '.collectionGroups[] | select(.id == "impairment-netem-evidence") | .profiles[] | "| `\(.profile)` | `\(.netemEvidenceDir | sub("/netem$"; ""))` | `\(.netemEvidenceDir)` |"' "$artifact_collection_json"
+  echo
+  echo "Promotion must wait until the perfect-network combined artifacts and impairment campaign summary exist."
+} >"$artifact_collection_md"
 
 cat >"$prereq_script" <<EOF
 #!/usr/bin/env bash
@@ -968,6 +1172,8 @@ cat >"$readme" <<EOF
 - Perfect-network plan: \`$perfect_plan\`
 - Impairment campaign plan: \`$impairment_plan\`
 - Handoff manifest: \`$handoff_manifest\`
+- Artifact collection JSON: \`$artifact_collection_json\`
+- Artifact collection checklist: \`$artifact_collection_md\`
 - Prereq helper: \`$prereq_script\`
 - Promotion/readiness helper: \`$promote_script\`
 - Production evidence document: \`$production_evidence_doc_rel\`
@@ -1007,17 +1213,18 @@ checks shortly before execution, then follow each generated plan README.
 
 1. On the merge/control host, run \`benchmark/scripts/check-lab-handoff.sh --handoff "$output_root"$preflight_flags\`.
 2. Run \`perfect-plan/check-plan-freshness.sh\` shortly before execution.
-3. On each server and receiver host, run \`prereq-commands.sh\` with the correct role, for example \`HOST_ROLE=server "$prereq_script"\` or \`HOST_ROLE=$target_host_role "$prereq_script"\`. Valid roles for this handoff are \`$(IFS=,; echo "${prereq_roles[*]}")\`. The helper runs \`benchmark/scripts/check-lab-host-prereqs.sh\`, writes strict \`prereq.json\` and \`prereq.md\` reports under \`$perfect_artifacts\` by default using \`$strict_prereq_flags\`, and adds \`--require-sudo-netem\` automatically for \`$target_host_role\` when sudo netem is enabled.
-4. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
-5. Run \`perfect-plan/host-capture-commands.sh\` on the server and each receiver host with the correct \`HOST_ROLE\`.
-6. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.
-7. Copy receiver artifacts, prereq reports, and host captures back under \`$perfect_artifacts\`.
-8. Run \`perfect-plan/merge-all.sh\` from the repository root.
-9. Run \`impairment-plan/check-plan-freshness.sh\`.
-10. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
-11. Copy every profile's receiver artifacts, prereq reports, and \`netem/\` evidence back under \`$impairment_artifacts\`. For per-profile prereq checks, rerun \`prereq-commands.sh\` with \`ARTIFACT_ROOT\` set to the profile artifact root before validation.
-12. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
-13. Run \`promote-and-check.sh\` to promote the perfect-network and impairment baselines with this handoff's manifests, then run the final readiness gate.
+3. Keep \`artifact-collection.md\` open as the copy-back checklist. Its sibling \`artifact-collection.json\` is the machine-readable collection contract checked by the handoff preflight.
+4. On each server and receiver host, run \`prereq-commands.sh\` with the correct role, for example \`HOST_ROLE=server "$prereq_script"\` or \`HOST_ROLE=$target_host_role "$prereq_script"\`. Valid roles for this handoff are \`$(IFS=,; echo "${prereq_roles[*]}")\`. The helper runs \`benchmark/scripts/check-lab-host-prereqs.sh\`, writes strict \`prereq.json\` and \`prereq.md\` reports under \`$perfect_artifacts\` by default using \`$strict_prereq_flags\`, and adds \`--require-sudo-netem\` automatically for \`$target_host_role\` when sudo netem is enabled.
+5. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
+6. Run \`perfect-plan/host-capture-commands.sh\` on the server and each receiver host with the correct \`HOST_ROLE\`.
+7. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.
+8. Copy receiver artifacts, prereq reports, and host captures back under \`$perfect_artifacts\`.
+9. Run \`perfect-plan/merge-all.sh\` from the repository root.
+10. Run \`impairment-plan/check-plan-freshness.sh\`.
+11. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
+12. Copy every profile's receiver artifacts, prereq reports, and \`netem/\` evidence back under \`$impairment_artifacts\`. For per-profile prereq checks, rerun \`prereq-commands.sh\` with \`ARTIFACT_ROOT\` set to the profile artifact root before validation.
+13. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
+14. Run \`promote-and-check.sh\` to promote the perfect-network and impairment baselines with this handoff's manifests, then run the final readiness gate.
 
 ## Optional TeamZiax VM/eBPF Companion Evidence
 
@@ -1091,6 +1298,8 @@ echo "Lab handoff: $output_root"
 echo "Perfect-network plan: $perfect_plan"
 echo "Impairment campaign plan: $impairment_plan"
 echo "Handoff manifest: $handoff_manifest"
+echo "Artifact collection JSON: $artifact_collection_json"
+echo "Artifact collection checklist: $artifact_collection_md"
 echo "Prereq helper: $prereq_script"
 echo "Promotion/readiness helper: $promote_script"
 echo "README: $readme"

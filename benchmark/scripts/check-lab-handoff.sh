@@ -288,6 +288,8 @@ perfect_artifacts="$(jq -r '.perfectArtifacts // ""' "$manifest")"
 impairment_artifacts="$(jq -r '.impairmentArtifacts // ""' "$manifest")"
 promote_script="$(jq -r '.promoteScript // ""' "$manifest")"
 prereq_script="$(jq -r '.prereqScript // ""' "$manifest")"
+artifact_collection_json="$(jq -r '.artifactCollectionJson // ""' "$manifest")"
+artifact_collection_md="$(jq -r '.artifactCollectionMd // ""' "$manifest")"
 curve_payloads_json="$(jq -c '.curvePayloadSizes // []' "$manifest")"
 curve_rates_json="$(jq -c '.curveRatesMbps // []' "$manifest")"
 profiles_json="$(jq -c '.profiles // []' "$manifest")"
@@ -386,6 +388,18 @@ expected_contention_scenarios_json="$(jq -c '
 expected_resource_pack_payloads_json="$(jq -c '.resourcePackChunkSizes // []' "$manifest")"
 expected_batch_intervals_millis_json="$(jq -r '.batchIntervals[]? // empty' "$manifest" | json_duration_millis_array_from_values)"
 expected_resource_pack_intervals_millis_json="$(jq -r '.resourcePackInterval // empty' "$manifest" | json_duration_millis_array_from_values)"
+required_collection_groups_json="$(jq -n -c '[
+  "perfect-topology",
+  "perfect-host-captures",
+  "perfect-prereq-reports",
+  "perfect-worker-artifacts",
+  "perfect-combined-artifacts",
+  "impairment-profile-artifacts",
+  "impairment-netem-evidence",
+  "impairment-campaign-summary",
+  "promotion-readiness"
+]')"
+artifact_collection_groups_json="[]"
 
 if [[ "$expected_contention_clients" != "$computed_contention_clients" ]]; then
   append_issue "handoff-contention-client-total-mismatch" "handoff" "handoff contentionClientTotal does not match contention receiver distribution" \
@@ -552,8 +566,65 @@ elif [[ "$promote_script" != "$handoff_root/promote-and-check.sh" ]]; then
   append_issue "handoff-promote-script-mismatch" "handoff" "handoff manifest promote script path does not match the handoff directory" \
     "$(jq -n --arg expected "$handoff_root/promote-and-check.sh" --arg actual "$promote_script" '{expected:$expected,actual:$actual}')"
 fi
+if [[ -z "$artifact_collection_json" ]]; then
+  append_issue "handoff-missing-artifact-collection-json" "handoff" "handoff manifest does not record artifact-collection.json" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
+  artifact_collection_json="$handoff_root/artifact-collection.json"
+elif [[ "$artifact_collection_json" != "$handoff_root/artifact-collection.json" ]]; then
+  append_issue "handoff-artifact-collection-json-mismatch" "handoff" "handoff manifest artifact collection JSON path does not match the handoff directory" \
+    "$(jq -n --arg expected "$handoff_root/artifact-collection.json" --arg actual "$artifact_collection_json" '{expected:$expected,actual:$actual}')"
+fi
+if [[ -z "$artifact_collection_md" ]]; then
+  append_issue "handoff-missing-artifact-collection-md" "handoff" "handoff manifest does not record artifact-collection.md" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
+  artifact_collection_md="$handoff_root/artifact-collection.md"
+elif [[ "$artifact_collection_md" != "$handoff_root/artifact-collection.md" ]]; then
+  append_issue "handoff-artifact-collection-md-mismatch" "handoff" "handoff manifest artifact collection Markdown path does not match the handoff directory" \
+    "$(jq -n --arg expected "$handoff_root/artifact-collection.md" --arg actual "$artifact_collection_md" '{expected:$expected,actual:$actual}')"
+fi
 check_path "$prereq_script" "handoff" true
 check_path "$promote_script" "handoff" true
+check_path "$artifact_collection_json" "handoff"
+check_path "$artifact_collection_md" "handoff"
+if [[ -s "$artifact_collection_json" ]]; then
+  if ! jq -e 'type == "object"' "$artifact_collection_json" >/dev/null; then
+    append_issue "invalid-artifact-collection-json" "artifact-collection" "artifact collection JSON is not a JSON object" \
+      "$(jq -n --arg path "$artifact_collection_json" '{path:$path}')"
+  elif ! jq -e '.kind == "raknet-lab-artifact-collection"' "$artifact_collection_json" >/dev/null; then
+    append_issue "invalid-artifact-collection-kind" "artifact-collection" "artifact collection JSON has an unexpected kind" \
+      "$(jq -n --arg path "$artifact_collection_json" '{path:$path}')"
+  else
+    artifact_collection_groups_json="$(jq -c '[.collectionGroups[]?.id] | unique' "$artifact_collection_json")"
+    if ! jq -e --arg manifest "$manifest" '.handoffManifest == $manifest' "$artifact_collection_json" >/dev/null; then
+      append_issue "artifact-collection-handoff-manifest-mismatch" "artifact-collection" "artifact collection does not point at this handoff manifest" \
+        "$(jq -n --arg expected "$manifest" --arg actual "$(jq -r '.handoffManifest // ""' "$artifact_collection_json")" '{expected:$expected,actual:$actual}')"
+    fi
+    if ! jq -e --arg path "$perfect_artifacts" '.perfectArtifacts == $path' "$artifact_collection_json" >/dev/null; then
+      append_issue "artifact-collection-perfect-root-mismatch" "artifact-collection" "artifact collection perfect artifact root does not match the handoff manifest" \
+        "$(jq -n --arg expected "$perfect_artifacts" --arg actual "$(jq -r '.perfectArtifacts // ""' "$artifact_collection_json")" '{expected:$expected,actual:$actual}')"
+    fi
+    if ! jq -e --arg path "$impairment_artifacts" '.impairmentArtifacts == $path' "$artifact_collection_json" >/dev/null; then
+      append_issue "artifact-collection-impairment-root-mismatch" "artifact-collection" "artifact collection impairment artifact root does not match the handoff manifest" \
+        "$(jq -n --arg expected "$impairment_artifacts" --arg actual "$(jq -r '.impairmentArtifacts // ""' "$artifact_collection_json")" '{expected:$expected,actual:$actual}')"
+    fi
+    if ! jq -e --argjson expected "$profiles_json" '(.profiles // []) == $expected' "$artifact_collection_json" >/dev/null; then
+      append_issue "artifact-collection-profiles-mismatch" "artifact-collection" "artifact collection profile list does not match the handoff manifest" \
+        "$(jq -n --arg path "$artifact_collection_json" '{path:$path}')"
+    fi
+    if ! jq -e --argjson expected "$expected_prereq_roles_json" '((.prereqRoles // []) | unique) == $expected' "$artifact_collection_json" >/dev/null; then
+      append_issue "artifact-collection-prereq-roles-mismatch" "artifact-collection" "artifact collection prereq roles do not match the expected handoff roles" \
+        "$(jq -n --arg path "$artifact_collection_json" '{path:$path}')"
+    fi
+    missing_collection_groups="$(jq -n -r --argjson expected "$required_collection_groups_json" --argjson actual "$artifact_collection_groups_json" '
+      $expected[] as $group | select(($actual | index($group)) == null) | $group
+    ')"
+    while IFS= read -r group; do
+      [[ -z "$group" ]] && continue
+      append_issue "artifact-collection-group-missing" "artifact-collection" "artifact collection is missing a required group" \
+        "$(jq -n --arg group "$group" --argjson expected "$required_collection_groups_json" --argjson actual "$artifact_collection_groups_json" '{group:$group,expectedGroups:$expected,actualGroups:$actual}')"
+    done <<<"$missing_collection_groups"
+  fi
+fi
 if [[ -x "$prereq_script" ]]; then
   helper_prereq_roles_output="$("$prereq_script" --list-roles 2>/dev/null || true)"
   if [[ -z "$helper_prereq_roles_output" ]]; then
@@ -596,6 +667,8 @@ while IFS= read -r role; do
     "$(jq -n --arg role "$role" --argjson expected "$expected_prereq_roles_json" --argjson actual "$helper_prereq_roles_json" '{role:$role,expectedPrereqRoles:$expected,actualPrereqRoles:$actual}')"
 done <<<"$unexpected_helper_prereq_roles"
 check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
+check_readme_contains "artifact-collection.json" "handoff README does not show the artifact collection JSON"
+check_readme_contains "artifact-collection.md" "handoff README does not show the artifact collection checklist"
 check_readme_contains "benchmark/scripts/check-lab-host-prereqs.sh" "handoff README does not show the host prerequisite check"
 check_readme_contains "prereq-commands.sh" "handoff README does not show the generated prerequisite helper"
 if [[ -n "$expected_mtu" ]]; then
@@ -991,9 +1064,13 @@ jq -n \
   --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg handoffRoot "$handoff_root" \
   --arg manifest "$manifest" \
+  --arg artifactCollectionJson "$artifact_collection_json" \
+  --arg artifactCollectionMd "$artifact_collection_md" \
   --argjson expectedCurvePayloadSizes "$curve_payloads_json" \
   --argjson expectedCurveRatesMbps "$curve_rates_json" \
   --argjson expectedProfiles "$profiles_json" \
+  --argjson requiredArtifactCollectionGroups "$required_collection_groups_json" \
+  --argjson artifactCollectionGroups "$artifact_collection_groups_json" \
   --argjson expectedContentionScenarios "$expected_contention_scenarios_json" \
   --argjson expectedResourcePackPayloadSizes "$expected_resource_pack_payloads_json" \
   --argjson expectedBatchIntervalsMillis "$expected_batch_intervals_millis_json" \
@@ -1039,6 +1116,10 @@ jq -n \
     issueCount: ($issues | length),
     handoffRoot: $handoffRoot,
     handoffManifest: $manifest,
+    artifactCollectionJson: $artifactCollectionJson,
+    artifactCollectionMd: $artifactCollectionMd,
+    requiredArtifactCollectionGroups: $requiredArtifactCollectionGroups,
+    artifactCollectionGroups: $artifactCollectionGroups,
     expectedCurvePayloadSizes: $expectedCurvePayloadSizes,
     expectedCurveRatesMbps: $expectedCurveRatesMbps,
     expectedCurveRowsPerCurvePlan: $expectedCurveRows,
@@ -1090,6 +1171,9 @@ jq -n \
   echo "- Result: \`$(jq -r 'if .ready then "ready" else "not-ready" end' "$check_json")\`"
   echo "- Issues: \`$(jq -r '.issueCount' "$check_json")\`"
   echo "- Handoff: \`$handoff_root\`"
+  echo "- Artifact collection JSON: \`$(jq -r '.artifactCollectionJson' "$check_json")\`"
+  echo "- Artifact collection checklist: \`$(jq -r '.artifactCollectionMd' "$check_json")\`"
+  echo "- Artifact collection groups: \`$(jq -r '.artifactCollectionGroups | join(",")' "$check_json")\`"
   echo "- Expected curve rows per curve plan: \`$(jq -r '.expectedCurveRowsPerCurvePlan' "$check_json")\`"
   echo "- Actual perfect curve rows: \`$(jq -r '.actualPerfectCurveRows' "$check_json")\`"
   echo "- Actual perfect raised curve rows: \`$(jq -r '.actualPerfectRaisedCurveRows' "$check_json")\`"

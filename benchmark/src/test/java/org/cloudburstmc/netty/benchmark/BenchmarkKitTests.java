@@ -558,11 +558,17 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(Files.exists(handoff.resolve("handoff-manifest.json")));
         Path promoteScript = handoff.resolve("promote-and-check.sh");
         Path prereqScript = handoff.resolve("prereq-commands.sh");
+        Path artifactCollectionJson = handoff.resolve("artifact-collection.json");
+        Path artifactCollectionMd = handoff.resolve("artifact-collection.md");
         Assertions.assertTrue(Files.exists(promoteScript));
         Assertions.assertTrue(Files.isExecutable(promoteScript));
         Assertions.assertTrue(Files.exists(prereqScript));
         Assertions.assertTrue(Files.isExecutable(prereqScript));
+        Assertions.assertTrue(Files.exists(artifactCollectionJson));
+        Assertions.assertTrue(Files.exists(artifactCollectionMd));
         Assertions.assertTrue(result.output.contains("Handoff manifest:"));
+        Assertions.assertTrue(result.output.contains("Artifact collection JSON:"));
+        Assertions.assertTrue(result.output.contains("Artifact collection checklist:"));
         Assertions.assertTrue(result.output.contains("Prereq helper:"));
         Assertions.assertTrue(result.output.contains("Promotion/readiness helper:"));
 
@@ -604,6 +610,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("RakNet Lab Baseline Handoff"));
         Assertions.assertTrue(readme.contains("check-lab-handoff.sh"));
         Assertions.assertTrue(readme.contains("handoff-manifest.json"));
+        Assertions.assertTrue(readme.contains("artifact-collection.json"));
+        Assertions.assertTrue(readme.contains("artifact-collection.md"));
         Assertions.assertTrue(readme.contains("Prereq helper: `" + prereqScript + "`"));
         Assertions.assertTrue(readme.contains("Promotion/readiness helper: `" + promoteScript + "`"));
         Assertions.assertTrue(readme.contains("prereq-commands.sh"));
@@ -650,6 +658,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(artifacts.toString(), handoffManifest.path("artifactRoot").asText());
         Assertions.assertEquals(promoteScript.toString(), handoffManifest.path("promoteScript").asText());
         Assertions.assertEquals(prereqScript.toString(), handoffManifest.path("prereqScript").asText());
+        Assertions.assertEquals(artifactCollectionJson.toString(), handoffManifest.path("artifactCollectionJson").asText());
+        Assertions.assertEquals(artifactCollectionMd.toString(), handoffManifest.path("artifactCollectionMd").asText());
         Assertions.assertEquals(handoff.resolve("perfect-plan").toString(), handoffManifest.path("perfectPlan").asText());
         Assertions.assertEquals(handoff.resolve("impairment-plan").toString(),
                 handoffManifest.path("impairmentPlan").asText());
@@ -721,6 +731,26 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("1s", handoffManifest.path("startDelay").asText());
         Assertions.assertEquals("180s", handoffManifest.path("startOffset").asText());
         Assertions.assertFalse(handoffManifest.path("sudoNetem").asBoolean());
+
+        JsonNode artifactCollection = JSON.readTree(Files.readString(artifactCollectionJson, StandardCharsets.UTF_8));
+        Assertions.assertEquals("raknet-lab-artifact-collection", artifactCollection.path("kind").asText());
+        Assertions.assertEquals(handoff.resolve("handoff-manifest.json").toString(),
+                artifactCollection.path("handoffManifest").asText());
+        Assertions.assertEquals(artifacts.resolve("perfect").toString(),
+                artifactCollection.path("perfectArtifacts").asText());
+        Assertions.assertEquals(artifacts.resolve("impairment").toString(),
+                artifactCollection.path("impairmentArtifacts").asText());
+        Assertions.assertTrue(textValues(artifactCollection.path("requiredBeforePromotion"))
+                .contains("perfect-combined-artifacts"));
+        Assertions.assertTrue(textValues(artifactCollection.path("requiredBeforePromotion"))
+                .contains("impairment-netem-evidence"));
+        Assertions.assertTrue(artifactCollection.path("collectionGroups").findValuesAsText("id")
+                .contains("perfect-prereq-reports"));
+        Assertions.assertTrue(artifactCollection.path("collectionGroups").findValuesAsText("id")
+                .contains("impairment-campaign-summary"));
+        Assertions.assertEquals(2, artifactCollection.path("collectionGroups").findValues("profiles").get(0).size());
+        Assertions.assertTrue(Files.readString(artifactCollectionMd, StandardCharsets.UTF_8)
+                .contains("RakNet Lab Artifact Collection"));
 
         List<String> profiles = Files.readAllLines(handoff.resolve("impairment-plan/manifest.jsonl"), StandardCharsets.UTF_8);
         Assertions.assertEquals(2, profiles.size());
@@ -801,6 +831,14 @@ public class BenchmarkKitTests {
                 textValues(handoffCheckJson.path("manifestPrereqRoles")));
         Assertions.assertEquals(textValues(handoffCheckJson.path("expectedPrereqRoles")),
                 textValues(handoffCheckJson.path("helperPrereqRoles")));
+        Assertions.assertEquals(artifactCollectionJson.toString(),
+                handoffCheckJson.path("artifactCollectionJson").asText());
+        Assertions.assertEquals(artifactCollectionMd.toString(),
+                handoffCheckJson.path("artifactCollectionMd").asText());
+        Assertions.assertTrue(textValues(handoffCheckJson.path("artifactCollectionGroups"))
+                .contains("perfect-worker-artifacts"));
+        Assertions.assertTrue(textValues(handoffCheckJson.path("artifactCollectionGroups"))
+                .contains("impairment-netem-evidence"));
         Assertions.assertEquals("benchmark/docs/production-usage-evidence.md",
                 handoffCheckJson.path("productionEvidence").path("document").asText());
         Assertions.assertTrue(handoffCheckJson.path("productionEvidence").path("sha256").asText()
@@ -845,6 +883,55 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(tamperedPrereqRolesJson.findValuesAsText("code")
                 .contains("handoff-prereq-role-missing"));
         Files.writeString(prereqRoleManifestPath, originalPrereqRoleManifest, StandardCharsets.UTF_8);
+
+        String originalArtifactCollection = Files.readString(artifactCollectionJson, StandardCharsets.UTF_8);
+        Files.delete(artifactCollectionJson);
+        ProcessResult missingArtifactCollectionCheck = runProcess(root, handoffCheckTimeout,
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-artifact-collection-missing").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1",
+                "--required-min-iterations", "1",
+                "--require-source-audit"
+        );
+        Assertions.assertEquals(1, missingArtifactCollectionCheck.exitCode, missingArtifactCollectionCheck.output);
+        JsonNode missingArtifactCollectionJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-artifact-collection-missing/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(missingArtifactCollectionJson.findValuesAsText("code")
+                .contains("missing-path"));
+        Files.writeString(artifactCollectionJson, originalArtifactCollection, StandardCharsets.UTF_8);
+
+        ObjectNode tamperedArtifactCollection = (ObjectNode) JSON.readTree(originalArtifactCollection);
+        ArrayNode groupsWithoutNetem = JSON.createArrayNode();
+        for (JsonNode group : tamperedArtifactCollection.path("collectionGroups")) {
+            if (!"impairment-netem-evidence".equals(group.path("id").asText())) {
+                groupsWithoutNetem.add(group);
+            }
+        }
+        tamperedArtifactCollection.set("collectionGroups", groupsWithoutNetem);
+        Files.writeString(artifactCollectionJson, JSON.writeValueAsString(tamperedArtifactCollection),
+                StandardCharsets.UTF_8);
+        ProcessResult tamperedArtifactCollectionCheck = runProcess(root, handoffCheckTimeout,
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-artifact-collection-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1",
+                "--required-min-iterations", "1",
+                "--require-source-audit"
+        );
+        Assertions.assertEquals(1, tamperedArtifactCollectionCheck.exitCode,
+                tamperedArtifactCollectionCheck.output);
+        JsonNode tamperedArtifactCollectionJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-artifact-collection-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(tamperedArtifactCollectionJson.findValuesAsText("code")
+                .contains("artifact-collection-group-missing"));
+        Files.writeString(artifactCollectionJson, originalArtifactCollection, StandardCharsets.UTF_8);
 
         Path currentRevisionPreflight = output.resolve("handoff-preflight-current-revision");
         ProcessResult currentRevisionCheck = runProcess(root, handoffCheckTimeout,
