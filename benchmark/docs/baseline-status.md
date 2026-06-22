@@ -164,10 +164,10 @@ The generated plan schedules:
 Current structural handoff audit in this worktree:
 
 ```text
-benchmark/build/benchmark-results/lab-handoff-current-audit-20260622T061618Z/
+benchmark/build/benchmark-results/lab-handoff-current-audit-20260622T070505Z/
 ```
 
-This generated handoff passed `check-lab-handoff.sh` with `ready=true` and `0` issues. It contains `56` default-limiter curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, and five impairment profiles (`perfect`, `near-loss`, `regional-loss`, `poor`, `severe`) each with the same `56/56/9` row shape. The perfect contention plan includes `lab-perfect-contention-immediate-500x1-p256` at payload `256` and `1Mbps` per client, plus the main `5Mbps` fanout, fairness, blackhole disappearance, batched, and resource-pack rows. The generated perfect and impairment freshness checks reported `result=fresh` when created on `2026-06-22T06:17:07Z`.
+This generated handoff passed `check-lab-handoff.sh` with `ready=true` and `0` issues. It contains `56` default-limiter curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, and five impairment profiles (`perfect`, `near-loss`, `regional-loss`, `poor`, `severe`) each with the same `56/56/9` row shape. The perfect contention plan includes `lab-perfect-contention-immediate-500x1-p256` at payload `256` and `1Mbps` per client, plus the main `5Mbps` fanout, fairness, blackhole disappearance, batched, and resource-pack rows. The handoff source audit is ready, has `0` issues, and records Network revision `cb399603b15d`. The generated perfect and impairment freshness checks reported `result=fresh` when run at `2026-06-22T07:05:41Z`.
 
 This audit used local placeholder host values (`127.0.0.1`, `lo`) and proves planner/preflight structure only. It is not separate-host line-rate evidence and does not replace the lab baseline run.
 
