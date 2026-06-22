@@ -19,6 +19,12 @@ benchmark/build/benchmark-results/lab-<date>-<topology>/
 
 Record the exact branch, commit, host names, NICs, CPU pinning, JVM, impairment profile, and any non-default kernel/NIC tuning in `topology.md`.
 
+## VM Harness Relationship
+
+The TeamZiax Bedrock eBPF filter repository has a useful VM benchmark pattern for root-free test orchestration: host-side QEMU lifecycle management, guest setup, shared capture/output directories, and repeatable artifact collection. That orchestration shape is reusable for future isolated Network lab runs.
+
+Do not copy the eBPF benchmark workload directly into this baseline. Its PCAP/XDP replay path measures packet-filter behavior, while this benchmark baseline must use active established RakNet server and receiver workers so ACK/NACK, retransmit, queue, fairness, disappearance, and probe-latency behavior come from real connected sessions.
+
 ## Host Capture
 
 Capture host state before each baseline or candidate suite. Run this on every server and receiver host:
