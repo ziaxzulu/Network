@@ -309,6 +309,7 @@ public class BenchmarkKitTests {
 
         String readme = Files.readString(handoff.resolve("README.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(readme.contains("RakNet Lab Baseline Handoff"));
+        Assertions.assertTrue(readme.contains("check-lab-handoff.sh"));
         Assertions.assertTrue(readme.contains("handoff-manifest.json"));
         Assertions.assertTrue(readme.contains("promote-lab-baseline.sh"));
         Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
@@ -374,6 +375,21 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(56, raisedCurveRows.size());
         Assertions.assertTrue(raisedCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":64")));
         Assertions.assertTrue(raisedCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")));
+
+        Path handoffPreflight = output.resolve("handoff-preflight");
+        ProcessResult handoffCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", handoffPreflight.toString()
+        );
+        Assertions.assertEquals(0, handoffCheck.exitCode, handoffCheck.output);
+        JsonNode handoffCheckJson = JSON.readTree(Files.readString(handoffPreflight.resolve("handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(handoffCheckJson.path("ready").asBoolean());
+        Assertions.assertEquals(0, handoffCheckJson.path("issueCount").asInt());
+        Assertions.assertEquals(56, handoffCheckJson.path("expectedCurveRowsPerCurvePlan").asInt());
+        Assertions.assertEquals(2, handoffCheckJson.path("expectedProfiles").size());
 
         ProcessResult freshness = runProcess(root, Duration.ofSeconds(10),
                 "bash",

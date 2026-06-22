@@ -92,6 +92,15 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
 
 Use the generated handoff README as the operator run order. The lower-level commands below are still useful when diagnosing or building a custom campaign.
 
+Before distributing the generated command scripts to lab hosts, run the handoff preflight on the merge/control host:
+
+```bash
+benchmark/scripts/check-lab-handoff.sh \
+  --handoff benchmark/build/benchmark-results/lab-handoff-<date>-<topology>
+```
+
+The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, perfect-network and impairment profile manifests, curve payload/rate coverage, and contention scenario coverage. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
+
 For a baseline-of-record campaign, start with the lab planner. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
 
 ```bash

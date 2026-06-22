@@ -76,7 +76,7 @@ Outputs:
   perfect-plan/                     plan-lab-baseline.sh output.
   impairment-plan/                  plan-lab-impairment.sh output.
   handoff-manifest.json             Machine-readable handoff metadata.
-  README.md                         Handoff run order and promotion/readiness commands.
+  README.md                         Handoff preflight, run order, promotion, and readiness commands.
 USAGE
 }
 
@@ -445,16 +445,17 @@ checks shortly before execution, then follow each generated plan README.
 
 ## Run Order
 
-1. On the merge/control host, run \`perfect-plan/check-plan-freshness.sh\`.
-2. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
-3. Run \`perfect-plan/host-capture-commands.sh\` on the server and each receiver host with the correct \`HOST_ROLE\`.
-4. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.
-5. Copy receiver artifacts and host captures back under \`$perfect_artifacts\`.
-6. Run \`perfect-plan/merge-all.sh\` from the repository root.
-7. Run \`impairment-plan/check-plan-freshness.sh\`.
-8. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
-9. Copy every profile's receiver artifacts and \`netem/\` evidence back under \`$impairment_artifacts\`.
-10. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
+1. On the merge/control host, run \`benchmark/scripts/check-lab-handoff.sh --handoff "$output_root"\`.
+2. Run \`perfect-plan/check-plan-freshness.sh\` shortly before execution.
+3. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
+4. Run \`perfect-plan/host-capture-commands.sh\` on the server and each receiver host with the correct \`HOST_ROLE\`.
+5. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.
+6. Copy receiver artifacts and host captures back under \`$perfect_artifacts\`.
+7. Run \`perfect-plan/merge-all.sh\` from the repository root.
+8. Run \`impairment-plan/check-plan-freshness.sh\`.
+9. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
+10. Copy every profile's receiver artifacts and \`netem/\` evidence back under \`$impairment_artifacts\`.
+11. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
 
 ## Promote Baselines
 

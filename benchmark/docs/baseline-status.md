@@ -81,7 +81,13 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
   --sudo-netem
 ```
 
-The handoff writes the perfect-network plan, impairment campaign plan, top-level run order, promotion commands, and readiness-gate command. The underlying perfect-network baseline plan is equivalent to:
+The handoff writes the perfect-network plan, impairment campaign plan, top-level run order, promotion commands, and readiness-gate command. Before distributing commands to lab hosts, run:
+
+```bash
+benchmark/scripts/check-lab-handoff.sh --handoff benchmark/build/benchmark-results/lab-handoff-current
+```
+
+That preflight checks handoff structure, generated scripts, profile plans, and matrix coverage. The underlying perfect-network baseline plan is equivalent to:
 
 ```bash
 benchmark/scripts/plan-lab-baseline.sh \
