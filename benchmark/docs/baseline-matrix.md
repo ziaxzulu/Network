@@ -384,7 +384,7 @@ benchmark/scripts/plan-lab-impairment.sh \
   --raised-global-packet-limit 1000000
 ```
 
-The generated netem scripts write timestamped `tc` command output under each profile artifact root's `netem/` directory. The generated `validate-all.sh` requires `<profile>-status-*.txt` evidence by default, so keep those files with the merged benchmark artifacts before promoting the adverse-network run to a baseline. Campaign summary and promotion reject profile validation bypass flags by default; use `--allow-validation-bypasses` only for non-baseline smoke packages.
+The generated netem scripts write timestamped `tc` command output under each profile artifact root's `netem/` directory. The generated `validate-all.sh` requires `<profile>-status-*.txt` evidence by default, so keep those files with the merged benchmark artifacts before promoting the adverse-network run to a baseline. Campaign summary and promotion reject profile validation bypass flags and contention rows missing required retry-pressure fields by default; use `--allow-validation-bypasses` and `--allow-missing-retry-pressure-fields` only for non-baseline smoke packages.
 
 For slow-client backlog sensitivity, repeat the fairness or disappearance rows with explicit queue caps, for example `--max-queued-bytes 1048576` and `--max-queued-bytes 4194304`. The configured cap is recorded as `configuredMaxQueuedBytes`, selected bandwidth rows are grouped by it, and baseline comparisons fail if a candidate changes it while reusing the same case key.
 

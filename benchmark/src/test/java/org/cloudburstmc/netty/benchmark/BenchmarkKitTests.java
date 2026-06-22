@@ -1290,16 +1290,34 @@ public class BenchmarkKitTests {
                 "--out", campaign.resolve("summary-missing-retry").toString(),
                 "--allow-validation-bypasses"
         );
-        Assertions.assertEquals(0, missingRetrySummary.exitCode, missingRetrySummary.output);
+        Assertions.assertEquals(1, missingRetrySummary.exitCode, missingRetrySummary.output);
         JsonNode missingRetrySummaryJson = JSON.readTree(Files.readString(
                 campaign.resolve("summary-missing-retry/impairment-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingRetrySummaryJson.path("passed").asBoolean());
+        Assertions.assertTrue(missingRetrySummaryJson.findValuesAsText("code")
+                .contains("missing-retry-pressure-field"));
         Assertions.assertFalse(missingRetrySummaryJson.path("profiles").get(0).path("aggregate")
                 .path("contentionRows").get(0).has("undeliveredServerGbps"));
+
+        ProcessResult smokeMissingRetrySummary = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/summarize-lab-impairment.sh").toString(),
+                "--manifest", campaign.resolve("manifest.jsonl").toString(),
+                "--out", campaign.resolve("summary-missing-retry-smoke").toString(),
+                "--allow-validation-bypasses",
+                "--allow-missing-retry-pressure-fields"
+        );
+        Assertions.assertEquals(0, smokeMissingRetrySummary.exitCode, smokeMissingRetrySummary.output);
+        JsonNode smokeMissingRetrySummaryJson = JSON.readTree(Files.readString(
+                campaign.resolve("summary-missing-retry-smoke/impairment-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(smokeMissingRetrySummaryJson.path("allowMissingRetryPressureFields").asBoolean());
+        Assertions.assertEquals("undeliveredServerGbps",
+                smokeMissingRetrySummaryJson.path("requiredRetryPressureFields").get(0).asText());
 
         ProcessResult missingRetryPromotion = runProcess(root, Duration.ofSeconds(15),
                 "bash",
                 root.resolve("benchmark/scripts/promote-lab-impairment.sh").toString(),
-                "--input", campaign.resolve("summary-missing-retry").toString(),
+                "--input", campaign.resolve("summary-missing-retry-smoke").toString(),
                 "--out", output.resolve("baselines").toString(),
                 "--name", "impairment-missing-summary-retry",
                 "--no-latest",

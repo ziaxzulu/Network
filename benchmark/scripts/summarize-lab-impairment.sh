@@ -6,7 +6,9 @@ out_dir=""
 allow_missing_validation=false
 allow_failed_validation=false
 allow_validation_bypasses=false
+allow_missing_retry_pressure_fields=false
 require_netem_evidence=true
+required_retry_pressure_fields="undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond"
 
 usage() {
   cat <<'USAGE'
@@ -24,7 +26,12 @@ Options:
   --allow-missing-validation       Do not fail when a profile has no validation.json.
   --allow-failed-validation        Do not fail when a profile validation failed.
   --allow-validation-bypasses      Do not fail when profile validation used bypass flags. Smoke only.
+  --allow-missing-retry-pressure-fields
+                                     Do not fail when contention rows lack retry-pressure fields. Smoke only.
   --allow-missing-netem-evidence   Do not fail when profile status evidence is missing.
+  --required-retry-pressure-fields CSV
+                                    Required contention-row retry-pressure metric fields.
+                                    Default: undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond.
   --help                           Show this help.
 
 Outputs:
@@ -56,9 +63,17 @@ while [[ $# -gt 0 ]]; do
       allow_validation_bypasses=true
       shift
       ;;
+    --allow-missing-retry-pressure-fields)
+      allow_missing_retry_pressure_fields=true
+      shift
+      ;;
     --allow-missing-netem-evidence)
       require_netem_evidence=false
       shift
+      ;;
+    --required-retry-pressure-fields)
+      required_retry_pressure_fields="$2"
+      shift 2
       ;;
     --help|-h)
       usage
@@ -319,11 +334,19 @@ done < <(jq -r '[.profile, .latency, .jitter, .loss, .artifactRoot, .netemEviden
 allow_missing_validation_json=false
 allow_failed_validation_json=false
 allow_validation_bypasses_json=false
+allow_missing_retry_pressure_fields_json=false
 require_netem_evidence_json=false
 "$allow_missing_validation" && allow_missing_validation_json=true
 "$allow_failed_validation" && allow_failed_validation_json=true
 "$allow_validation_bypasses" && allow_validation_bypasses_json=true
+"$allow_missing_retry_pressure_fields" && allow_missing_retry_pressure_fields_json=true
 "$require_netem_evidence" && require_netem_evidence_json=true
+required_retry_pressure_fields_json="$(jq -cn --arg fields "$required_retry_pressure_fields" '
+  $fields
+  | split(",")
+  | map(gsub("^\\s+|\\s+$"; ""))
+  | map(select(length > 0))
+')"
 
 jq -s \
   --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -332,6 +355,8 @@ jq -s \
   --argjson allowMissingValidation "$allow_missing_validation_json" \
   --argjson allowFailedValidation "$allow_failed_validation_json" \
   --argjson allowValidationBypasses "$allow_validation_bypasses_json" \
+  --argjson allowMissingRetryPressureFields "$allow_missing_retry_pressure_fields_json" \
+  --argjson requiredRetryPressureFields "$required_retry_pressure_fields_json" \
   --argjson requireNetemEvidence "$require_netem_evidence_json" '
   def issue($code; $message; $profile; $extra):
     {code:$code,message:$message,profile:$profile} + $extra;
@@ -345,6 +370,14 @@ jq -s \
     + ($profiles | map(select(.validation.exists and (.validation.passed | not) and ($allowFailedValidation | not)) | issue("failed-validation"; "profile validation did not pass"; .profile; {validationPath:.validation.path, issueCount:.validation.issueCount})))
     + ($profiles | map(select(.validation.exists and ((.validation.bypassFlags // []) | length) > 0 and ($allowValidationBypasses | not)) | issue("validation-bypass-flags"; "profile validation used baseline bypass flags"; .profile; {validationPath:.validation.path, bypassFlags:.validation.bypassFlags})))
     + ($profiles | map(select(.aggregate.exists | not) | issue("missing-aggregate"; "profile is missing combined suite-aggregate.jsonl"; .profile; {artifactRoot:.artifactRoot})))
+    + (if $allowMissingRetryPressureFields then [] else
+        ($profiles
+        | map(. as $profile
+          | .aggregate.contentionRows[]? as $row
+          | $requiredRetryPressureFields[] as $field
+          | select(($row | has($field)) | not)
+          | issue("missing-retry-pressure-field"; "contention row is missing a required retry-pressure field"; $profile.profile; {case:($row.case // null), benchmarkName:($row.benchmarkName // null), field:$field})))
+      end)
     + ($profiles | map(select($requireNetemEvidence and (.netem.statusEvidenceCount == 0)) | issue("missing-netem-status-evidence"; "profile is missing netem status evidence"; .profile; {netemEvidenceDir:.netem.evidenceDir})))
   ) as $issues |
   {
@@ -361,6 +394,8 @@ jq -s \
     allowMissingValidation: $allowMissingValidation,
     allowFailedValidation: $allowFailedValidation,
     allowValidationBypasses: $allowValidationBypasses,
+    allowMissingRetryPressureFields: $allowMissingRetryPressureFields,
+    requiredRetryPressureFields: $requiredRetryPressureFields,
     passed: (($issues | length) == 0),
     issues: $issues,
     profiles: $profiles
@@ -378,6 +413,8 @@ jq -s \
   echo "- Aggregate rows: \`$(jq -r '.aggregateRowCount' "$summary_json")\`"
   echo "- Capacity rows: \`$(jq -r '.capacityRowCount' "$summary_json")\`"
   echo "- Netem status evidence files: \`$(jq -r '.netemStatusEvidenceCount' "$summary_json")\`"
+  echo "- Required retry-pressure fields: \`$(jq -r '.requiredRetryPressureFields | join(",")' "$summary_json")\`"
+  echo "- Allow missing retry-pressure fields: \`$(jq -r '.allowMissingRetryPressureFields' "$summary_json")\`"
   echo
   echo "## Profiles"
   echo
