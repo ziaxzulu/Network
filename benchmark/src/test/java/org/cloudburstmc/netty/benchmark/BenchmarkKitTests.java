@@ -774,6 +774,28 @@ public class BenchmarkKitTests {
                                 "--required-min-contention-clients \"2\""),
                 StandardCharsets.UTF_8);
 
+        Path promoteScriptPath = handoff.resolve("promote-and-check.sh");
+        String originalPromoteScript = Files.readString(promoteScriptPath, StandardCharsets.UTF_8);
+        Files.writeString(promoteScriptPath,
+                originalPromoteScript.replace("benchmark/scripts/check-baseline-readiness.sh",
+                        "benchmark/scripts/check-baseline-readiness-disabled.sh"),
+                StandardCharsets.UTF_8);
+        ProcessResult tamperedPromoteCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-promote-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
+        );
+        Assertions.assertEquals(1, tamperedPromoteCheck.exitCode, tamperedPromoteCheck.output);
+        JsonNode tamperedPromoteJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-promote-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(tamperedPromoteJson.findValuesAsText("code")
+                .contains("missing-helper-command"));
+        Files.writeString(promoteScriptPath, originalPromoteScript, StandardCharsets.UTF_8);
+
         Path handoffManifestPath = handoff.resolve("handoff-manifest.json");
         String originalHandoffManifest = Files.readString(handoffManifestPath, StandardCharsets.UTF_8);
         JsonNode manifestWithStaleEvidence = JSON.readTree(originalHandoffManifest);

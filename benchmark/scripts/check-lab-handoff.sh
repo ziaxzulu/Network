@@ -237,6 +237,20 @@ check_readme_contains() {
   fi
 }
 
+check_file_contains() {
+  local path="$1"
+  local pattern="$2"
+  local component="$3"
+  local message="$4"
+  if [[ ! -s "$path" ]]; then
+    return
+  fi
+  if ! grep -Fq -- "$pattern" "$path"; then
+    append_issue "missing-helper-command" "$component" "$message" \
+      "$(jq -n --arg path "$path" --arg pattern "$pattern" '{path:$path,pattern:$pattern}')"
+  fi
+}
+
 manifest="$handoff_root/handoff-manifest.json"
 if [[ ! -s "$manifest" ]]; then
   append_issue "missing-handoff-manifest" "handoff" "handoff-manifest.json is missing or empty" "$(jq -n --arg path "$manifest" '{path:$path}')"
@@ -256,6 +270,9 @@ fi
 
 perfect_plan="$(jq -r '.perfectPlan // ""' "$manifest")"
 impairment_plan="$(jq -r '.impairmentPlan // ""' "$manifest")"
+perfect_artifacts="$(jq -r '.perfectArtifacts // ""' "$manifest")"
+impairment_artifacts="$(jq -r '.impairmentArtifacts // ""' "$manifest")"
+promote_script="$(jq -r '.promoteScript // ""' "$manifest")"
 curve_payloads_json="$(jq -c '.curvePayloadSizes // []' "$manifest")"
 curve_rates_json="$(jq -c '.curveRatesMbps // []' "$manifest")"
 profiles_json="$(jq -c '.profiles // []' "$manifest")"
@@ -467,7 +484,15 @@ if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenario
 fi
 
 check_path "$handoff_root/README.md" "handoff"
-check_path "$handoff_root/promote-and-check.sh" "handoff" true
+if [[ -z "$promote_script" ]]; then
+  append_issue "handoff-missing-promote-script" "handoff" "handoff manifest does not record promote-and-check.sh" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
+  promote_script="$handoff_root/promote-and-check.sh"
+elif [[ "$promote_script" != "$handoff_root/promote-and-check.sh" ]]; then
+  append_issue "handoff-promote-script-mismatch" "handoff" "handoff manifest promote script path does not match the handoff directory" \
+    "$(jq -n --arg expected "$handoff_root/promote-and-check.sh" --arg actual "$promote_script" '{expected:$expected,actual:$actual}')"
+fi
+check_path "$promote_script" "handoff" true
 check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
 check_readme_contains "benchmark/scripts/check-lab-host-prereqs.sh" "handoff README does not show the host prerequisite check"
 if [[ -n "$expected_mtu" ]]; then
@@ -507,6 +532,30 @@ check_readme_contains "--required-batch-intervals-ms \"$batch_intervals\"" "hand
 check_readme_contains "--required-resource-pack-chunk-sizes \"$resource_pack_chunk_sizes\"" "handoff README readiness command does not enforce the handoff resource-pack chunk sizes"
 check_readme_contains "--required-resource-pack-intervals-ms \"$resource_pack_interval\"" "handoff README readiness command does not enforce the handoff resource-pack interval"
 check_readme_contains "--required-disappearance-modes \"$required_disappearance_modes\"" "handoff README readiness command does not enforce required disappearance modes"
+check_file_contains "$promote_script" "benchmark/scripts/check-lab-handoff.sh" "promotion-helper" "promotion helper does not rerun handoff preflight"
+check_file_contains "$promote_script" "--handoff \"$handoff_root\"" "promotion-helper" "promotion helper preflight does not use this handoff directory"
+check_file_contains "$promote_script" "--out \"\$PREFLIGHT_OUT\"" "promotion-helper" "promotion helper preflight does not write to the configured preflight output"
+if [[ -n "$source_audit_doc" ]]; then
+  check_file_contains "$promote_script" "--require-source-audit" "promotion-helper" "promotion helper preflight does not require the source audit"
+  check_file_contains "$promote_script" "--require-current-revision" "promotion-helper" "promotion helper preflight does not require the current source-audit revision"
+fi
+check_file_contains "$promote_script" "benchmark/scripts/promote-lab-baseline.sh" "promotion-helper" "promotion helper does not promote the perfect-network baseline"
+check_file_contains "$promote_script" "--input \"$perfect_artifacts/combined\"" "promotion-helper" "promotion helper perfect-network promotion does not use the handoff artifact root"
+check_file_contains "$promote_script" "--handoff-manifest \"$manifest\"" "promotion-helper" "promotion helper perfect-network promotion does not pass the handoff manifest"
+check_file_contains "$promote_script" "--manifest \"$perfect_plan/curve-plan/manifest.jsonl\"" "promotion-helper" "promotion helper perfect-network promotion does not pass the curve manifest"
+check_file_contains "$promote_script" "--manifest \"$perfect_plan/curve-raised-plan/manifest.jsonl\"" "promotion-helper" "promotion helper perfect-network promotion does not pass the raised-curve manifest"
+check_file_contains "$promote_script" "--manifest \"$perfect_plan/contention-plan/manifest.jsonl\"" "promotion-helper" "promotion helper perfect-network promotion does not pass the contention manifest"
+check_file_contains "$promote_script" "--min-contention-clients \"$expected_contention_clients\"" "promotion-helper" "promotion helper perfect-network promotion does not enforce the handoff contention client count"
+check_file_contains "$promote_script" "--min-contention-target-client-mbps \"$expected_per_client_mbps\"" "promotion-helper" "promotion helper perfect-network promotion does not enforce the handoff per-client Mbps target"
+check_file_contains "$promote_script" "benchmark/scripts/promote-lab-impairment.sh" "promotion-helper" "promotion helper does not promote the impairment baseline"
+check_file_contains "$promote_script" "--input \"$impairment_artifacts/campaign-summary\"" "promotion-helper" "promotion helper impairment promotion does not use the handoff artifact root"
+check_file_contains "$promote_script" "benchmark/scripts/check-baseline-readiness.sh" "promotion-helper" "promotion helper does not run the final readiness gate"
+check_file_contains "$promote_script" "--required-min-contention-clients \"$expected_contention_clients\"" "promotion-helper" "promotion helper readiness check does not enforce the handoff contention client count"
+check_file_contains "$promote_script" "--required-min-contention-target-client-mbps \"$expected_per_client_mbps\"" "promotion-helper" "promotion helper readiness check does not enforce the handoff per-client Mbps target"
+check_file_contains "$promote_script" "--required-batch-intervals-ms \"$batch_intervals\"" "promotion-helper" "promotion helper readiness check does not enforce handoff batch intervals"
+check_file_contains "$promote_script" "--required-resource-pack-chunk-sizes \"$resource_pack_chunk_sizes\"" "promotion-helper" "promotion helper readiness check does not enforce handoff resource-pack chunk sizes"
+check_file_contains "$promote_script" "--required-resource-pack-intervals-ms \"$resource_pack_interval\"" "promotion-helper" "promotion helper readiness check does not enforce handoff resource-pack interval"
+check_file_contains "$promote_script" "--required-disappearance-modes \"$required_disappearance_modes\"" "promotion-helper" "promotion helper readiness check does not enforce required disappearance modes"
 check_path "$perfect_plan/check-plan-freshness.sh" "perfect-plan" true
 check_path "$perfect_plan/host-capture-commands.sh" "perfect-plan" true
 check_path "$perfect_plan/merge-all.sh" "perfect-plan" true
