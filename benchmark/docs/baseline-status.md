@@ -187,6 +187,7 @@ benchmark/scripts/check-baseline-readiness.sh \
 
 The baseline is not accepted as the comparison baseline until this readiness check passes.
 Readiness also checks that the promoted artifacts have no validation bypass markers and that the perfect-network validation enforced the requested contention scale and per-client Mbps target. The recommended handoff uses `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
+It also requires the production-shape contention rows from the source audit: `10ms`, `20ms`, and `50ms` batched-game-traffic rows, plus `8192` and `262144` byte resource-pack rows at `200ms`.
 
 Current readiness audit in this worktree:
 

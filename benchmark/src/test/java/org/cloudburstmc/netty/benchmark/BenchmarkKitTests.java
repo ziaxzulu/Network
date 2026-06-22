@@ -1374,6 +1374,66 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresBatchAndResourceShapes() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-shape-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        List<String> labRows = new ArrayList<>(Files.readAllLines(labBaseline.resolve("suite-aggregate.jsonl"),
+                StandardCharsets.UTF_8));
+        labRows.removeIf(row -> row.contains("\"case\":\"batch-50ms\"")
+                || row.contains("\"case\":\"resource-pack-262144\""));
+        Files.write(labBaseline.resolve("suite-aggregate.jsonl"), labRows, StandardCharsets.UTF_8);
+
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        String impairmentSummary = Files.readString(impairmentBaseline.resolve("impairment-summary.json"),
+                StandardCharsets.UTF_8)
+                .replace(",{\"benchmarkName\":\"batched-game-traffic\",\"batchIntervalMillis\":50,"
+                        + "\"logicalPacketsPerBatch\":8,\"batchGroups\":4}", "")
+                .replace(",{\"benchmarkName\":\"resource-pack-transfer\",\"payloadSize\":262144,"
+                        + "\"batchIntervalMillis\":200}", "");
+        Files.writeString(impairmentBaseline.resolve("impairment-summary.json"), impairmentSummary,
+                StandardCharsets.UTF_8);
+
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode missingReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingReadiness.path("ready").asBoolean());
+        Assertions.assertEquals(3, missingReadiness.path("requiredBatchIntervalsMillis").size());
+        Assertions.assertEquals(2, missingReadiness.path("requiredResourcePackChunkSizes").size());
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("lab-missing-batch-interval"));
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("lab-missing-resource-pack-shape"));
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("impairment-missing-batch-interval"));
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("impairment-missing-resource-pack-shape"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+    }
+
+    @Test
     public void testBaselineReadinessRequiresConcreteSelectedCapacityCandidates() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1791,7 +1851,7 @@ public class BenchmarkKitTests {
                         + ",\"minContentionTargetClientMbps\":" + minContentionTargetClientMbps
                         + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length
                         + ",\"multi-client-fanout\":1,\"fairness\":1,\"disappearing-clients\":1,"
-                        + "\"batched-game-traffic\":1,\"resource-pack-transfer\":1}}\n",
+                        + "\"batched-game-traffic\":3,\"resource-pack-transfer\":2}}\n",
                 StandardCharsets.UTF_8);
 
         StringBuilder aggregate = new StringBuilder();
@@ -1812,8 +1872,21 @@ public class BenchmarkKitTests {
         aggregate.append("{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"fairness\",\"benchmarkName\":\"fairness\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"disappear\",\"benchmarkName\":\"disappearing-clients\",\"payloadSize\":512}\n");
-        aggregate.append("{\"case\":\"batch\",\"benchmarkName\":\"batched-game-traffic\",\"payloadSize\":512}\n");
-        aggregate.append("{\"case\":\"resource-pack\",\"benchmarkName\":\"resource-pack-transfer\",\"payloadSize\":8192}\n");
+        for (int batchIntervalMillis : new int[]{10, 20, 50}) {
+            aggregate.append("{\"case\":\"batch-")
+                    .append(batchIntervalMillis)
+                    .append("ms\",\"benchmarkName\":\"batched-game-traffic\",\"payloadSize\":512,")
+                    .append("\"batchIntervalMillis\":")
+                    .append(batchIntervalMillis)
+                    .append(",\"logicalPacketsPerBatch\":8,\"batchGroups\":4}\n");
+        }
+        for (int chunkSize : new int[]{8192, 262144}) {
+            aggregate.append("{\"case\":\"resource-pack-")
+                    .append(chunkSize)
+                    .append("\",\"benchmarkName\":\"resource-pack-transfer\",\"payloadSize\":")
+                    .append(chunkSize)
+                    .append(",\"batchIntervalMillis\":200}\n");
+        }
         Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("bandwidth-capacity.jsonl"), capacity.toString(), StandardCharsets.UTF_8);
     }
@@ -2040,8 +2113,18 @@ public class BenchmarkKitTests {
             if (includeDisappearingContention) {
                 profiles.append(",{\"benchmarkName\":\"disappearing-clients\"}");
             }
-            profiles.append(",{\"benchmarkName\":\"batched-game-traffic\"}");
-            profiles.append(",{\"benchmarkName\":\"resource-pack-transfer\"}");
+            for (int batchIntervalMillis : new int[]{10, 20, 50}) {
+                profiles.append(",{\"benchmarkName\":\"batched-game-traffic\",")
+                        .append("\"batchIntervalMillis\":")
+                        .append(batchIntervalMillis)
+                        .append(",\"logicalPacketsPerBatch\":8,\"batchGroups\":4}");
+            }
+            for (int chunkSize : new int[]{8192, 262144}) {
+                profiles.append(",{\"benchmarkName\":\"resource-pack-transfer\",")
+                        .append("\"payloadSize\":")
+                        .append(chunkSize)
+                        .append(",\"batchIntervalMillis\":200}");
+            }
             profiles.append("]},\"capacity\":{\"rowCount\":").append(payloadSizes.length)
                     .append(",\"selectedCount\":").append(payloadSizes.length)
                     .append(",\"rows\":[");

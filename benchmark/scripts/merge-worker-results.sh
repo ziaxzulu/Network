@@ -269,6 +269,9 @@ jq -s \
       payloadSize: ($server_iterations[0].payloadSize // 0),
       reliability: ($server_iterations[0].reliability // "unknown"),
       batched: ($server_iterations[0].batched // false),
+      batchIntervalMillis: ($server_iterations[0].batchIntervalMillis // $server.batchIntervalMillis // 0),
+      logicalPacketsPerBatch: ($server_iterations[0].logicalPacketsPerBatch // $server.logicalPacketsPerBatch // 1),
+      batchGroups: ($server_iterations[0].batchGroups // $server.batchGroups // 1),
       packetLimit: ($server.packetLimit // null),
       globalPacketLimit: ($server.globalPacketLimit // null),
       configuredMaxQueuedBytes: ($server.configuredMaxQueuedBytes // null),
@@ -373,7 +376,7 @@ jq -s \
 jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
 
 {
-  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,target_mbps,target_client_mbps,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
+  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
   jq -r '
     .aggregate as $a |
     [
@@ -385,6 +388,10 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.receiverClients,
       $a.payloadSize,
       $a.reliability,
+      $a.batched,
+      $a.batchIntervalMillis,
+      $a.logicalPacketsPerBatch,
+      $a.batchGroups,
       $a.targetMbps,
       $a.targetClientMbps,
       $a.startAtEpochMillis,

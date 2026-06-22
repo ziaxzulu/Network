@@ -197,7 +197,9 @@ while IFS=$'\t' read -r profile latency jitter loss artifact_root netem_evidence
     def contention($row):
       (scenario($row) == "multi-client-fanout")
       or (scenario($row) == "fairness")
-      or (scenario($row) == "disappearing-clients");
+      or (scenario($row) == "disappearing-clients")
+      or (scenario($row) == "batched-game-traffic")
+      or (scenario($row) == "resource-pack-transfer");
     def stable_capacity($row):
       {
         case: ($row.case // null),
@@ -271,6 +273,10 @@ while IFS=$'\t' read -r profile latency jitter loss artifact_root netem_evidence
               clients: (.clients // null),
               payloadSize: (.payloadSize // null),
               reliability: (.reliability // null),
+              batched: (.batched // false),
+              batchIntervalMillis: (.batchIntervalMillis // null),
+              logicalPacketsPerBatch: (.logicalPacketsPerBatch // null),
+              batchGroups: (.batchGroups // null),
               packetLimit: (.packetLimit // null),
               globalPacketLimit: (.globalPacketLimit // null),
               configuredMaxQueuedBytes: (.configuredMaxQueuedBytes // null),

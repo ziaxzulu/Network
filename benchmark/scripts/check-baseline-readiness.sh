@@ -7,6 +7,9 @@ out_dir=""
 expected_impairment_profiles="perfect,near-loss,regional-loss,poor,severe"
 required_curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 required_impairment_contention_scenarios="multi-client-fanout,fairness,disappearing-clients,batched-game-traffic,resource-pack-transfer"
+required_batch_intervals_ms="10,20,50"
+required_resource_pack_chunk_sizes="8192,262144"
+required_resource_pack_intervals_ms="200"
 required_min_contention_clients="500"
 required_min_contention_target_client_mbps="5"
 required_min_prereq_reports="2"
@@ -27,6 +30,9 @@ Options:
   --expected-impairment-profiles CSV Required impairment profiles. Default: perfect,near-loss,regional-loss,poor,severe.
   --required-curve-payload-sizes CSV Required perfect-network curve payload sizes. Default: 64,256,512,1200,1340,1400,262144.
   --required-impairment-contention-scenarios CSV Required contention scenarios per impairment profile. Default: multi-client-fanout,fairness,disappearing-clients,batched-game-traffic,resource-pack-transfer.
+  --required-batch-intervals-ms CSV Required batched-game-traffic intervals in milliseconds. Default: 10,20,50.
+  --required-resource-pack-chunk-sizes CSV Required resource-pack chunk payload sizes. Default: 8192,262144.
+  --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
   --required-min-contention-clients N Required lab validation contention-client gate. Default: 500.
   --required-min-contention-target-client-mbps N Required lab validation per-client Mbps gate. Default: 5.
   --required-min-prereq-reports N Required lab prereq reports. Default: 2.
@@ -61,6 +67,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --required-impairment-contention-scenarios)
       required_impairment_contention_scenarios="$2"
+      shift 2
+      ;;
+    --required-batch-intervals-ms)
+      required_batch_intervals_ms="$2"
+      shift 2
+      ;;
+    --required-resource-pack-chunk-sizes)
+      required_resource_pack_chunk_sizes="$2"
+      shift 2
+      ;;
+    --required-resource-pack-intervals-ms)
+      required_resource_pack_intervals_ms="$2"
       shift 2
       ;;
     --required-min-contention-clients)
@@ -179,12 +197,42 @@ csv_json_number_array() {
   printf '%s\n' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R -s 'split("\n") | map(select(length > 0) | tonumber)'
 }
 
+duration_millis() {
+  local value="${1,,}"
+  if [[ "$value" =~ ^([0-9]+)ms$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "$value" =~ ^([0-9]+)s$ ]]; then
+    echo "$((BASH_REMATCH[1] * 1000))"
+  elif [[ "$value" =~ ^([0-9]+)m$ ]]; then
+    echo "$((BASH_REMATCH[1] * 60000))"
+  elif [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "$value"
+  else
+    echo "Invalid duration: $1" >&2
+    exit 2
+  fi
+}
+
+csv_json_duration_millis_array() {
+  local value
+  local -a values=()
+  IFS=',' read -r -a values <<<"$1"
+  for value in "${values[@]}"; do
+    value="${value//[[:space:]]/}"
+    [[ -n "$value" ]] || continue
+    duration_millis "$value"
+  done | jq -R -s 'split("\n") | map(select(length > 0) | tonumber)'
+}
+
 lab_manifest="$lab_baseline/baseline-manifest.json"
 lab_validation="$lab_baseline/validation.json"
 lab_aggregate="$lab_baseline/suite-aggregate.jsonl"
 lab_capacity="$lab_baseline/bandwidth-capacity.jsonl"
 required_curve_payloads_json="$(csv_json_number_array "$required_curve_payload_sizes")"
 required_impairment_contention_json="$(csv_json_array "$required_impairment_contention_scenarios")"
+required_batch_intervals_json="$(csv_json_duration_millis_array "$required_batch_intervals_ms")"
+required_resource_pack_chunks_json="$(csv_json_number_array "$required_resource_pack_chunk_sizes")"
+required_resource_pack_intervals_json="$(csv_json_duration_millis_array "$required_resource_pack_intervals_ms")"
 
 if [[ ! -s "$lab_manifest" ]]; then
   append_issue "missing-lab-baseline-manifest" "lab-baseline" "promoted lab baseline manifest is missing" "{\"path\":\"$lab_manifest\"}"
@@ -305,6 +353,39 @@ if [[ -s "$lab_aggregate" ]]; then
     [[ -z "$missing_payload" ]] && continue
     append_issue "lab-missing-curve-payload" "lab-baseline" "lab baseline is missing a required bandwidth-curve payload size" "{\"payloadSize\":$missing_payload}"
   done <<<"$missing_curve_payloads"
+
+  missing_batch_intervals="$(jq -r -s --argjson expected "$required_batch_intervals_json" '
+    def is_batch:
+      ((.scenario // "") == "batched-game-traffic")
+      or ((.benchmarkName // "") == "batched-game-traffic");
+    ([.[] | select(is_batch) | (.batchIntervalMillis // empty | tonumber)] | unique) as $actual
+    | $expected[] as $interval
+    | select(($actual | index($interval)) == null)
+    | $interval
+  ' "$lab_aggregate")"
+  while IFS= read -r missing_interval; do
+    [[ -z "$missing_interval" ]] && continue
+    append_issue "lab-missing-batch-interval" "lab-baseline" "lab baseline is missing a required batched-game-traffic interval" "{\"batchIntervalMillis\":$missing_interval}"
+  done <<<"$missing_batch_intervals"
+
+  missing_resource_shapes="$(jq -r -s --argjson expectedChunks "$required_resource_pack_chunks_json" --argjson expectedIntervals "$required_resource_pack_intervals_json" '
+    def is_resource:
+      ((.scenario // "") == "resource-pack-transfer")
+      or ((.benchmarkName // "") == "resource-pack-transfer");
+    ([.[] | select(is_resource) | {
+      payloadSize: (.payloadSize // empty | tonumber),
+      batchIntervalMillis: (.batchIntervalMillis // empty | tonumber)
+    }]) as $actual
+    | $expectedChunks[] as $chunk
+    | $expectedIntervals[] as $interval
+    | select((any($actual[]; .payloadSize == $chunk and .batchIntervalMillis == $interval)) | not)
+    | [$chunk, $interval] | @tsv
+  ' "$lab_aggregate")"
+  while IFS=$'\t' read -r missing_chunk missing_interval; do
+    [[ -z "$missing_chunk" || -z "$missing_interval" ]] && continue
+    extra="$(jq -n --argjson payloadSize "$missing_chunk" --argjson batchIntervalMillis "$missing_interval" '{payloadSize:$payloadSize,batchIntervalMillis:$batchIntervalMillis}')"
+    append_issue "lab-missing-resource-pack-shape" "lab-baseline" "lab baseline is missing a required resource-pack chunk and interval shape" "$extra"
+  done <<<"$missing_resource_shapes"
 fi
 
 if [[ -s "$lab_capacity" ]]; then
@@ -445,6 +526,44 @@ if [[ -s "$impairment_summary" ]]; then
     extra="$(jq -n --arg profile "$profile" --arg scenario "$scenario" '{profile:$profile,scenario:$scenario}')"
     append_issue "impairment-missing-contention-scenario" "impairment-baseline" "impairment profile is missing a required contention scenario" "$extra"
   done <<<"$missing_impairment_contention"
+
+  missing_impairment_batch_intervals="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedIntervals "$required_batch_intervals_json" '
+    (.profiles // [])[]
+    | .profile as $profile
+    | select(($expectedProfiles | index($profile)) != null)
+    | ([.aggregate.contentionRows[]?
+        | select((.benchmarkName // "") == "batched-game-traffic")
+        | (.batchIntervalMillis // empty | tonumber)] | unique) as $actual
+    | $expectedIntervals[] as $interval
+    | select(($actual | index($interval)) == null)
+    | [$profile, $interval] | @tsv
+  ' "$impairment_summary")"
+  while IFS=$'\t' read -r profile missing_interval; do
+    [[ -z "$profile" || -z "$missing_interval" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --argjson batchIntervalMillis "$missing_interval" '{profile:$profile,batchIntervalMillis:$batchIntervalMillis}')"
+    append_issue "impairment-missing-batch-interval" "impairment-baseline" "impairment profile is missing a required batched-game-traffic interval" "$extra"
+  done <<<"$missing_impairment_batch_intervals"
+
+  missing_impairment_resource_shapes="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedChunks "$required_resource_pack_chunks_json" --argjson expectedIntervals "$required_resource_pack_intervals_json" '
+    (.profiles // [])[]
+    | .profile as $profile
+    | select(($expectedProfiles | index($profile)) != null)
+    | ([.aggregate.contentionRows[]?
+        | select((.benchmarkName // "") == "resource-pack-transfer")
+        | {
+            payloadSize: (.payloadSize // empty | tonumber),
+            batchIntervalMillis: (.batchIntervalMillis // empty | tonumber)
+          }]) as $actual
+    | $expectedChunks[] as $chunk
+    | $expectedIntervals[] as $interval
+    | select((any($actual[]; .payloadSize == $chunk and .batchIntervalMillis == $interval)) | not)
+    | [$profile, $chunk, $interval] | @tsv
+  ' "$impairment_summary")"
+  while IFS=$'\t' read -r profile missing_chunk missing_interval; do
+    [[ -z "$profile" || -z "$missing_chunk" || -z "$missing_interval" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --argjson payloadSize "$missing_chunk" --argjson batchIntervalMillis "$missing_interval" '{profile:$profile,payloadSize:$payloadSize,batchIntervalMillis:$batchIntervalMillis}')"
+    append_issue "impairment-missing-resource-pack-shape" "impairment-baseline" "impairment profile is missing a required resource-pack chunk and interval shape" "$extra"
+  done <<<"$missing_impairment_resource_shapes"
 fi
 
 issues_array="$(jq -s '.' "$issues_jsonl")"
@@ -520,6 +639,9 @@ jq -n \
   --argjson expectedImpairmentProfiles "$(csv_json_array "$expected_impairment_profiles")" \
   --argjson requiredCurvePayloadSizes "$required_curve_payloads_json" \
   --argjson requiredImpairmentContentionScenarios "$required_impairment_contention_json" \
+  --argjson requiredBatchIntervalsMillis "$required_batch_intervals_json" \
+  --argjson requiredResourcePackChunkSizes "$required_resource_pack_chunks_json" \
+  --argjson requiredResourcePackIntervalsMillis "$required_resource_pack_intervals_json" \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson requiredMinPrereqReports "$required_min_prereq_reports" \
@@ -544,6 +666,9 @@ jq -n \
     expectedImpairmentProfiles: $expectedImpairmentProfiles,
     requiredCurvePayloadSizes: $requiredCurvePayloadSizes,
     requiredImpairmentContentionScenarios: $requiredImpairmentContentionScenarios,
+    requiredBatchIntervalsMillis: $requiredBatchIntervalsMillis,
+    requiredResourcePackChunkSizes: $requiredResourcePackChunkSizes,
+    requiredResourcePackIntervalsMillis: $requiredResourcePackIntervalsMillis,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     requiredMinPrereqReports: $requiredMinPrereqReports,
@@ -563,6 +688,9 @@ jq -n \
   echo "- Impairment baseline: \`$impairment_baseline\`"
   echo "- Required curve payload sizes: \`$required_curve_payload_sizes\`"
   echo "- Required impairment contention scenarios: \`$required_impairment_contention_scenarios\`"
+  echo "- Required batch intervals ms: \`$required_batch_intervals_ms\`"
+  echo "- Required resource-pack chunk sizes: \`$required_resource_pack_chunk_sizes\`"
+  echo "- Required resource-pack intervals ms: \`$required_resource_pack_intervals_ms\`"
   echo "- Required minimum contention clients: \`$required_min_contention_clients\`"
   echo "- Required minimum contention target/client Mbps: \`$required_min_contention_target_client_mbps\`"
   echo "- Required prereq reports: \`$required_min_prereq_reports\`"
