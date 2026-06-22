@@ -946,6 +946,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(sourceAuditJson.path("networkShortRevision").asText(),
                 summaryJson.path("networkShortRevision").asText());
         Assertions.assertTrue(summaryJson.path("networkDirtyTrackedFiles").isBoolean());
+        Assertions.assertEquals(0, summaryJson.path("issueCount").asInt());
         Assertions.assertEquals(0, summaryJson.path("sourceAuditIssueCount").asInt());
         Assertions.assertEquals(0, summaryJson.path("handoffIssueCount").asInt());
         Assertions.assertEquals(56, summaryJson.path("plannedRows").path("perfectCurve").asInt());
@@ -958,6 +959,27 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, summaryJson.path("sourceAudit").path("issueCount").asInt());
         Assertions.assertEquals(2, summaryJson.path("sourceAudit").path("requiredSources").size());
         Assertions.assertTrue(summaryJson.path("sourceAudit").path("sourceCount").asInt() >= 2);
+        Assertions.assertEquals("reliable_ordered", summaryJson.path("requirements")
+                .path("expectedReliability").asText());
+        Assertions.assertEquals(7, summaryJson.path("requirements").path("expectedCurvePayloadSizes").size());
+        Assertions.assertEquals(500, summaryJson.path("requirements").path("expectedContentionClients").asInt());
+        Assertions.assertEquals(5.0D, summaryJson.path("requirements").path("expectedPerClientMbps").asDouble(),
+                0.001D);
+        Assertions.assertEquals(1.0D, summaryJson.path("requirements")
+                .path("expectedImmediatePerClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(500, summaryJson.path("requirements")
+                .path("requiredMinContentionClients").asInt());
+        Assertions.assertEquals(5.0D, summaryJson.path("requirements")
+                .path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(3, summaryJson.path("requirements").path("requiredBatchIntervalsMillis").size());
+        Assertions.assertEquals(2, summaryJson.path("requirements")
+                .path("requiredResourcePackPayloadSizes").size());
+        Assertions.assertEquals(1, summaryJson.path("requirements")
+                .path("requiredResourcePackIntervalsMillis").size());
+        Assertions.assertEquals("blackhole", summaryJson.path("requirements")
+                .path("requiredDisappearanceModes").get(0).asText());
+        Assertions.assertTrue(summaryJson.path("requirements").path("requireSourceAudit").asBoolean());
+        Assertions.assertTrue(summaryJson.path("requirements").path("requireCurrentRevision").asBoolean());
         Assertions.assertTrue(summaryJson.path("preflight").path("ready").asBoolean());
         Assertions.assertEquals(0, summaryJson.path("preflight").path("issueCount").asInt());
         Assertions.assertTrue(summaryJson.path("preflight").path("issues").isArray());
