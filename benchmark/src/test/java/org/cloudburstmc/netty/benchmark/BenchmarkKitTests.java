@@ -2578,6 +2578,19 @@ public class BenchmarkKitTests {
 
         String report = Files.readString(readiness.resolve("readiness.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(report.contains("Fresh handoff ready: `true`"));
+        Assertions.assertTrue(report.contains("Fresh handoff README: `" + handoff.resolve("README.md") + "`"));
+        Assertions.assertTrue(report.contains("Fresh handoff artifact collection JSON: `"
+                + handoff.resolve("artifact-collection.json") + "`"));
+        Assertions.assertTrue(report.contains("Fresh handoff artifact collection checklist: `"
+                + handoff.resolve("artifact-collection.md") + "`"));
+        Assertions.assertTrue(report.contains("Fresh handoff perfect-network plan: `" + perfectPlan + "`"));
+        Assertions.assertTrue(report.contains("Fresh handoff impairment plan: `" + impairmentPlan + "`"));
+        Assertions.assertTrue(report.contains("Fresh handoff promotion helper: `"
+                + handoff.resolve("promote-and-check.sh") + "`"));
+        Assertions.assertTrue(report.contains("Fresh perfect artifact root: `"
+                + handoff.resolve("perfect-artifacts") + "`"));
+        Assertions.assertTrue(report.contains("Fresh impairment artifact root: `"
+                + handoff.resolve("impairment-artifacts") + "`"));
     }
 
     @Test
