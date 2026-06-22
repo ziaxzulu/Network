@@ -322,6 +322,29 @@ receiver_client_count() {
   printf '%s\n' "$clients"
 }
 
+receiver_role_name() {
+  local spec="$1"
+  if [[ "$spec" == *"="* ]]; then
+    printf '%s\n' "${spec%%=*}"
+  elif [[ "$spec" == *":"* ]]; then
+    printf '%s\n' "${spec%%:*}"
+  else
+    return 1
+  fi
+}
+
+append_unique_role() {
+  local role="$1"
+  local existing
+  [[ -n "$role" ]] || return
+  for existing in "${prereq_roles[@]}"; do
+    if [[ "$existing" == "$role" ]]; then
+      return
+    fi
+  done
+  prereq_roles+=("$role")
+}
+
 non_empty_csv() {
   [[ -n "$1" && "$1" != *, && "$1" != ,* ]]
 }
@@ -406,13 +429,27 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 contention_client_total=0
+prereq_roles=("server")
+for receiver in "${curve_receivers[@]}"; do
+  receiver_role="$(receiver_role_name "$receiver")" || {
+    echo "--curve-receiver must be NAME=CLIENTS or NAME:CLIENTS with a positive integer client count: $receiver" >&2
+    exit 2
+  }
+  append_unique_role "$receiver_role"
+done
 for receiver in "${contention_receivers[@]}"; do
+  receiver_role="$(receiver_role_name "$receiver")" || {
+    echo "--contention-receiver must be NAME=CLIENTS or NAME:CLIENTS with a positive integer client count: $receiver" >&2
+    exit 2
+  }
+  append_unique_role "$receiver_role"
   receiver_clients="$(receiver_client_count "$receiver")" || {
     echo "--contention-receiver must be NAME=CLIENTS or NAME:CLIENTS with a positive integer client count: $receiver" >&2
     exit 2
   }
   contention_client_total=$((contention_client_total + receiver_clients))
 done
+append_unique_role "$target_host_role"
 
 if [[ -z "$output_root" ]]; then
   output_root="$repo_root/benchmark/build/benchmark-results/lab-handoff-$timestamp"
@@ -434,6 +471,7 @@ impairment_artifacts="$artifact_root/impairment"
 readme="$output_root/README.md"
 handoff_manifest="$output_root/handoff-manifest.json"
 promote_script="$output_root/promote-and-check.sh"
+prereq_script="$output_root/prereq-commands.sh"
 production_evidence_doc_rel="benchmark/docs/production-usage-evidence.md"
 production_evidence_doc="$repo_root/$production_evidence_doc_rel"
 production_evidence_exists=false
@@ -596,6 +634,7 @@ fi
 git_revision="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 curve_receivers_json="$(json_array_from_args "${curve_receivers[@]}")"
 contention_receivers_json="$(json_array_from_args "${contention_receivers[@]}")"
+prereq_roles_json="$(json_array_from_args "${prereq_roles[@]}")"
 profiles_json="$(json_array_from_csv "$profiles")"
 curve_payload_sizes_json="$(json_number_array_from_csv "$curve_payload_sizes")"
 curve_rates_mbps_json="$(json_array_from_csv "$curve_rates_mbps")"
@@ -609,6 +648,8 @@ if "$require_cpu_performance"; then
 fi
 strict_prereq_flags="$(printf ' %q' "${strict_prereq_args[@]}")"
 strict_prereq_flags="${strict_prereq_flags# }"
+prereq_role_flags="$(printf ' %q' "${prereq_roles[@]}")"
+prereq_role_flags="${prereq_role_flags# }"
 preflight_flags=""
 if [[ -n "$source_audit_path" ]]; then
   preflight_flags=" --require-source-audit --require-current-revision"
@@ -629,6 +670,7 @@ jq -n \
   --arg productionEvidenceSha256 "$production_evidence_sha256" \
   --arg readme "$readme" \
   --arg promoteScript "$promote_script" \
+  --arg prereqScript "$prereq_script" \
   --arg serverHost "$server_host" \
   --arg bindHost "$bind_host" \
   --arg port "$port" \
@@ -657,6 +699,7 @@ jq -n \
   --arg commonArgs "$common_args" \
   --argjson curveReceivers "$curve_receivers_json" \
   --argjson contentionReceivers "$contention_receivers_json" \
+  --argjson prereqRoles "$prereq_roles_json" \
   --argjson profiles "$profiles_json" \
   --argjson curvePayloadSizesList "$curve_payload_sizes_json" \
   --argjson curveRatesMbpsList "$curve_rates_mbps_json" \
@@ -677,6 +720,7 @@ jq -n \
     artifactRoot: $artifactRoot,
     readme: $readme,
     promoteScript: $promoteScript,
+    prereqScript: $prereqScript,
     perfectPlan: $perfectPlan,
     impairmentPlan: $impairmentPlan,
     perfectArtifacts: $perfectArtifacts,
@@ -693,6 +737,7 @@ jq -n \
     interface: $interface,
     profiles: $profiles,
     targetHostRole: $targetHostRole,
+    prereqRoles: $prereqRoles,
     curveReceivers: $curveReceivers,
     curvePayloadSizes: $curvePayloadSizesList,
     curveRatesMbps: $curveRatesMbpsList,
@@ -725,6 +770,135 @@ jq -n \
     requireCpuPerformance: $requireCpuPerformance,
     commonArgs: $commonArgs
   }' >"$handoff_manifest"
+
+cat >"$prereq_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="\${REPO_ROOT:-$repo_root}"
+ARTIFACT_ROOT="\${ARTIFACT_ROOT:-$perfect_artifacts}"
+INTERFACE="\${INTERFACE:-$interface}"
+HOST_ROLE="\${HOST_ROLE:-}"
+OUT="\${OUT:-}"
+PRINT_COMMAND=false
+VALID_ROLES=($prereq_role_flags)
+TARGET_HOST_ROLE="$target_host_role"
+SUDO_NETEM="$sudo_netem"
+REQUIRE_CPU_PERFORMANCE="$require_cpu_performance"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  HOST_ROLE=<role> ./prereq-commands.sh [options]
+
+Runs the strict host prerequisite check with the same MTU, CPU, clock-sync, and
+no-netem gates required by this handoff.
+
+Options:
+  --role ROLE          Host role. Overrides HOST_ROLE.
+  --interface NIC      Lab interface. Overrides INTERFACE.
+  --artifact-root DIR  Artifact root for prereq output. Overrides ARTIFACT_ROOT.
+  --out DIR            Exact output directory for prereq.json and prereq.md.
+  --print-command      Print the resolved command instead of executing it.
+  --list-roles         Print valid roles for this handoff.
+  --help               Show this help.
+USAGE
+}
+
+print_command() {
+  printf '+'
+  for arg in "\$@"; do
+    printf ' %q' "\$arg"
+  done
+  printf '\n'
+}
+
+role_is_valid() {
+  local role="\$1"
+  local valid
+  for valid in "\${VALID_ROLES[@]}"; do
+    if [[ "\$valid" == "\$role" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    --role)
+      HOST_ROLE="\$2"
+      shift 2
+      ;;
+    --interface)
+      INTERFACE="\$2"
+      shift 2
+      ;;
+    --artifact-root)
+      ARTIFACT_ROOT="\$2"
+      shift 2
+      ;;
+    --out)
+      OUT="\$2"
+      shift 2
+      ;;
+    --print-command)
+      PRINT_COMMAND=true
+      shift
+      ;;
+    --list-roles)
+      printf '%s\n' "\${VALID_ROLES[@]}"
+      exit 0
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: \$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "\$HOST_ROLE" ]]; then
+  echo "HOST_ROLE or --role is required. Valid roles: \${VALID_ROLES[*]}" >&2
+  exit 2
+fi
+if ! role_is_valid "\$HOST_ROLE"; then
+  echo "Invalid HOST_ROLE: \$HOST_ROLE. Valid roles: \${VALID_ROLES[*]}" >&2
+  exit 2
+fi
+if [[ -z "\$OUT" ]]; then
+  OUT="\$ARTIFACT_ROOT/prereq-\$HOST_ROLE-\$(hostname)"
+fi
+
+cmd=(
+  benchmark/scripts/check-lab-host-prereqs.sh
+  --interface "\$INTERFACE"
+  --out "\$OUT"
+  --host-role "\$HOST_ROLE"
+  --expect-mtu "$expect_mtu"
+  --expect-min-cpus "$expect_min_cpus"
+  --require-clock-sync
+  --require-no-netem
+)
+if [[ "\$REQUIRE_CPU_PERFORMANCE" == "true" ]]; then
+  cmd+=(--require-cpu-performance)
+fi
+if [[ "\$SUDO_NETEM" == "true" && "\$HOST_ROLE" == "\$TARGET_HOST_ROLE" ]]; then
+  cmd+=(--require-sudo-netem)
+fi
+
+cd "\$REPO_ROOT"
+if "\$PRINT_COMMAND"; then
+  print_command "\${cmd[@]}"
+else
+  exec "\${cmd[@]}"
+fi
+EOF
+chmod +x "$prereq_script"
 
 cat >"$promote_script" <<EOF
 #!/usr/bin/env bash
@@ -794,6 +968,7 @@ cat >"$readme" <<EOF
 - Perfect-network plan: \`$perfect_plan\`
 - Impairment campaign plan: \`$impairment_plan\`
 - Handoff manifest: \`$handoff_manifest\`
+- Prereq helper: \`$prereq_script\`
 - Promotion/readiness helper: \`$promote_script\`
 - Production evidence document: \`$production_evidence_doc_rel\`
 - Production evidence SHA-256: \`$production_evidence_sha256\`
@@ -822,6 +997,7 @@ cat >"$readme" <<EOF
 - Expected MTU: \`$expect_mtu\`
 - Expected minimum CPUs: \`$expect_min_cpus\`
 - Require CPU performance governor: \`$require_cpu_performance\`
+- Prereq roles: \`$(IFS=,; echo "${prereq_roles[*]}")\`
 
 This handoff packages the current recommended established RakNet baseline plan.
 It does not run the benchmark. Review the generated commands, run the freshness
@@ -831,7 +1007,7 @@ checks shortly before execution, then follow each generated plan README.
 
 1. On the merge/control host, run \`benchmark/scripts/check-lab-handoff.sh --handoff "$output_root"$preflight_flags\`.
 2. Run \`perfect-plan/check-plan-freshness.sh\` shortly before execution.
-3. On each server and receiver host, run \`benchmark/scripts/check-lab-host-prereqs.sh --interface "$interface" --out "$artifact_root/prereq-\$HOST_ROLE-\$(hostname)" $strict_prereq_flags\` with the correct \`HOST_ROLE\`. Add \`--require-sudo-netem\` on hosts that will run sudo netem scripts.
+3. On each server and receiver host, run \`prereq-commands.sh\` with the correct role, for example \`HOST_ROLE=server "$prereq_script"\` or \`HOST_ROLE=$target_host_role "$prereq_script"\`. Valid roles for this handoff are \`$(IFS=,; echo "${prereq_roles[*]}")\`. The helper runs \`benchmark/scripts/check-lab-host-prereqs.sh\`, writes strict \`prereq.json\` and \`prereq.md\` reports under \`$perfect_artifacts\` by default using \`$strict_prereq_flags\`, and adds \`--require-sudo-netem\` automatically for \`$target_host_role\` when sudo netem is enabled.
 4. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
 5. Run \`perfect-plan/host-capture-commands.sh\` on the server and each receiver host with the correct \`HOST_ROLE\`.
 6. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.
@@ -839,7 +1015,7 @@ checks shortly before execution, then follow each generated plan README.
 8. Run \`perfect-plan/merge-all.sh\` from the repository root.
 9. Run \`impairment-plan/check-plan-freshness.sh\`.
 10. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
-11. Copy every profile's receiver artifacts, prereq reports, and \`netem/\` evidence back under \`$impairment_artifacts\`.
+11. Copy every profile's receiver artifacts, prereq reports, and \`netem/\` evidence back under \`$impairment_artifacts\`. For per-profile prereq checks, rerun \`prereq-commands.sh\` with \`ARTIFACT_ROOT\` set to the profile artifact root before validation.
 12. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
 13. Run \`promote-and-check.sh\` to promote the perfect-network and impairment baselines with this handoff's manifests, then run the final readiness gate.
 
@@ -915,5 +1091,6 @@ echo "Lab handoff: $output_root"
 echo "Perfect-network plan: $perfect_plan"
 echo "Impairment campaign plan: $impairment_plan"
 echo "Handoff manifest: $handoff_manifest"
+echo "Prereq helper: $prereq_script"
 echo "Promotion/readiness helper: $promote_script"
 echo "README: $readme"

@@ -287,6 +287,7 @@ impairment_plan="$(jq -r '.impairmentPlan // ""' "$manifest")"
 perfect_artifacts="$(jq -r '.perfectArtifacts // ""' "$manifest")"
 impairment_artifacts="$(jq -r '.impairmentArtifacts // ""' "$manifest")"
 promote_script="$(jq -r '.promoteScript // ""' "$manifest")"
+prereq_script="$(jq -r '.prereqScript // ""' "$manifest")"
 curve_payloads_json="$(jq -c '.curvePayloadSizes // []' "$manifest")"
 curve_rates_json="$(jq -c '.curveRatesMbps // []' "$manifest")"
 profiles_json="$(jq -c '.profiles // []' "$manifest")"
@@ -306,6 +307,11 @@ require_cpu_performance="$(jq -r '.requireCpuPerformance // false' "$manifest")"
 if [[ "$require_cpu_performance" != "true" ]]; then
   require_cpu_performance="false"
 fi
+sudo_netem="$(jq -r '.sudoNetem // false' "$manifest")"
+if [[ "$sudo_netem" != "true" ]]; then
+  sudo_netem="false"
+fi
+target_host_role="$(jq -r '.targetHostRole // ""' "$manifest")"
 expected_mtu_json="$expected_mtu"
 if ! [[ "$expected_mtu_json" =~ ^[0-9]+$ ]]; then
   expected_mtu_json="0"
@@ -513,6 +519,14 @@ if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenario
 fi
 
 check_path "$handoff_root/README.md" "handoff"
+if [[ -z "$prereq_script" ]]; then
+  append_issue "handoff-missing-prereq-script" "handoff" "handoff manifest does not record prereq-commands.sh" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
+  prereq_script="$handoff_root/prereq-commands.sh"
+elif [[ "$prereq_script" != "$handoff_root/prereq-commands.sh" ]]; then
+  append_issue "handoff-prereq-script-mismatch" "handoff" "handoff manifest prereq helper path does not match the handoff directory" \
+    "$(jq -n --arg expected "$handoff_root/prereq-commands.sh" --arg actual "$prereq_script" '{expected:$expected,actual:$actual}')"
+fi
 if [[ -z "$promote_script" ]]; then
   append_issue "handoff-missing-promote-script" "handoff" "handoff manifest does not record promote-and-check.sh" \
     "$(jq -n --arg path "$manifest" '{path:$path}')"
@@ -521,9 +535,11 @@ elif [[ "$promote_script" != "$handoff_root/promote-and-check.sh" ]]; then
   append_issue "handoff-promote-script-mismatch" "handoff" "handoff manifest promote script path does not match the handoff directory" \
     "$(jq -n --arg expected "$handoff_root/promote-and-check.sh" --arg actual "$promote_script" '{expected:$expected,actual:$actual}')"
 fi
+check_path "$prereq_script" "handoff" true
 check_path "$promote_script" "handoff" true
 check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
 check_readme_contains "benchmark/scripts/check-lab-host-prereqs.sh" "handoff README does not show the host prerequisite check"
+check_readme_contains "prereq-commands.sh" "handoff README does not show the generated prerequisite helper"
 if [[ -n "$expected_mtu" ]]; then
   check_readme_contains "--expect-mtu $expected_mtu" "handoff README host prerequisite command does not require the manifest expected MTU"
 fi
@@ -534,6 +550,9 @@ check_readme_contains "--require-clock-sync" "handoff README host prerequisite c
 check_readme_contains "--require-no-netem" "handoff README host prerequisite command does not require clean qdisc/no-netem evidence"
 if [[ "$require_cpu_performance" == "true" ]]; then
   check_readme_contains "--require-cpu-performance" "handoff README host prerequisite command does not require CPU performance-governor evidence"
+fi
+if [[ "$sudo_netem" == "true" ]]; then
+  check_readme_contains "--require-sudo-netem" "handoff README host prerequisite command does not require sudo netem evidence for the shaped host"
 fi
 if [[ -n "$production_evidence_doc" ]]; then
   check_readme_contains "Production evidence document: \`$production_evidence_doc\`" "handoff README does not record the production evidence document"
@@ -585,6 +604,22 @@ check_file_contains "$promote_script" "--required-batch-intervals-ms \"$batch_in
 check_file_contains "$promote_script" "--required-resource-pack-chunk-sizes \"$resource_pack_chunk_sizes\"" "promotion-helper" "promotion helper readiness check does not enforce handoff resource-pack chunk sizes"
 check_file_contains "$promote_script" "--required-resource-pack-intervals-ms \"$resource_pack_interval\"" "promotion-helper" "promotion helper readiness check does not enforce handoff resource-pack interval"
 check_file_contains "$promote_script" "--required-disappearance-modes \"$required_disappearance_modes\"" "promotion-helper" "promotion helper readiness check does not enforce required disappearance modes"
+check_file_contains "$prereq_script" "benchmark/scripts/check-lab-host-prereqs.sh" "prereq-helper" "prereq helper does not run the host prerequisite checker"
+if [[ -n "$expected_mtu" ]]; then
+  check_file_contains "$prereq_script" "--expect-mtu \"$expected_mtu\"" "prereq-helper" "prereq helper does not enforce the handoff expected MTU"
+fi
+if [[ -n "$expected_min_cpus" ]]; then
+  check_file_contains "$prereq_script" "--expect-min-cpus \"$expected_min_cpus\"" "prereq-helper" "prereq helper does not enforce the handoff minimum CPU count"
+fi
+check_file_contains "$prereq_script" "--require-clock-sync" "prereq-helper" "prereq helper does not require clock-sync evidence"
+check_file_contains "$prereq_script" "--require-no-netem" "prereq-helper" "prereq helper does not require a clean qdisc/no-netem state"
+if [[ "$require_cpu_performance" == "true" ]]; then
+  check_file_contains "$prereq_script" "--require-cpu-performance" "prereq-helper" "prereq helper does not require CPU performance-governor evidence"
+fi
+if [[ "$sudo_netem" == "true" && -n "$target_host_role" ]]; then
+  check_file_contains "$prereq_script" "--require-sudo-netem" "prereq-helper" "prereq helper does not require sudo netem capability for the shaped host"
+  check_file_contains "$prereq_script" "TARGET_HOST_ROLE=\"$target_host_role\"" "prereq-helper" "prereq helper does not record the handoff target host role"
+fi
 check_path "$perfect_plan/check-plan-freshness.sh" "perfect-plan" true
 check_path "$perfect_plan/host-capture-commands.sh" "perfect-plan" true
 check_path "$perfect_plan/merge-all.sh" "perfect-plan" true

@@ -131,10 +131,20 @@ benchmark/scripts/check-lab-handoff.sh \
   --require-current-revision
 ```
 
-The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, worker command arguments, production-evidence SHA-256 freshness, optional source-audit SHA-256/readiness, optional source-audit revision match against the current checkout, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, required `blackhole` disappearance mode, measured iteration count, and contention row client-count/per-client-rate consistency. Worker command scripts must still match the handoff warmup, duration, iterations, reliability, and max queued bytes, so stale or manually edited server/receiver commands fail before lab time is spent. The immediate small-packet row is checked against `immediatePerClientMbps`; it is intentionally lower-rate and does not satisfy the main contention-rate gate. By default the preflight requires at least `500` planned contention clients, at least `5Mbps` for the main contention target, and at least `3` measured iterations; use explicit lower `--required-min-*` overrides only for smoke handoffs that will not become the baseline of record. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
+The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, prereq helper, worker command arguments, production-evidence SHA-256 freshness, optional source-audit SHA-256/readiness, optional source-audit revision match against the current checkout, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, required `blackhole` disappearance mode, measured iteration count, and contention row client-count/per-client-rate consistency. Worker command scripts must still match the handoff warmup, duration, iterations, reliability, and max queued bytes, so stale or manually edited server/receiver commands fail before lab time is spent. The immediate small-packet row is checked against `immediatePerClientMbps`; it is intentionally lower-rate and does not satisfy the main contention-rate gate. By default the preflight requires at least `500` planned contention clients, at least `5Mbps` for the main contention target, and at least `3` measured iterations; use explicit lower `--required-min-*` overrides only for smoke handoffs that will not become the baseline of record. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
 It also rejects handoffs that omit the required production-shape batch intervals, resource-pack chunk/interval rows, or blackhole disappearing-client row, so these mistakes are caught before the lab run rather than at final readiness.
 
-Before host capture or worker startup, run the local prereq check on every server and receiver host:
+Before host capture or worker startup, run the generated prereq helper on every server and receiver host:
+
+```bash
+HOST_ROLE=server benchmark/build/benchmark-results/lab-handoff-<date>-<topology>/prereq-commands.sh
+HOST_ROLE=receiver-a benchmark/build/benchmark-results/lab-handoff-<date>-<topology>/prereq-commands.sh
+HOST_ROLE=receiver-b benchmark/build/benchmark-results/lab-handoff-<date>-<topology>/prereq-commands.sh
+```
+
+The helper writes strict `prereq.json` plus `prereq.md` reports under the perfect-network artifact root by default, applies the handoff's expected MTU/minimum CPU/clock-sync/no-netem gates, validates the role name, and adds `--require-sudo-netem` automatically for the shaped impairment host when the handoff was generated with sudo netem. Use `--list-roles` to see the exact roles and `--print-command` to inspect the resolved lower-level command. For per-profile impairment prereq checks, rerun the helper with `ARTIFACT_ROOT` set to that profile's artifact root before profile validation.
+
+The lower-level equivalent is:
 
 ```bash
 HOST_ROLE=server benchmark/scripts/check-lab-host-prereqs.sh \
@@ -146,7 +156,7 @@ HOST_ROLE=server benchmark/scripts/check-lab-host-prereqs.sh \
   --require-no-netem
 ```
 
-Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. Add `--require-cpu-performance` when the lab hosts have been pinned to the performance governor; leave it advisory on hosts where the governor is unavailable but document that in `topology.md`. The check is read-only and writes `prereq.json` plus `prereq.md`; it fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, qdisc inspection failures, strict clock/MTU/CPU-count/no-netem mismatches, or strict CPU-governor mismatches. Keep those directories under the lab artifact root. Baseline validation requires at least two ready strict `prereq.json` files from at least two distinct hostnames unless `--allow-missing-prereq-context` or `--allow-loose-prereq-gates` is used for a non-baseline smoke run.
+Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. Add `--require-cpu-performance` when the lab hosts have been pinned to the performance governor; leave it advisory on hosts where the governor is unavailable but document that in `topology.md`. The check is read-only and fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, qdisc inspection failures, strict clock/MTU/CPU-count/no-netem mismatches, or strict CPU-governor mismatches. Keep those directories under the lab artifact root. Baseline validation requires at least two ready strict `prereq.json` files from at least two distinct hostnames unless `--allow-missing-prereq-context` or `--allow-loose-prereq-gates` is used for a non-baseline smoke run.
 
 For a baseline-of-record campaign, prefer the top-level handoff above. If you need to use the lower-level lab planner directly, keep the same `500`-client contention shape. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
 

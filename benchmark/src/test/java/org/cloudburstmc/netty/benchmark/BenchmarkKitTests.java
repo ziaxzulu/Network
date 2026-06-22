@@ -524,9 +524,13 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/manifest.jsonl")));
         Assertions.assertTrue(Files.exists(handoff.resolve("handoff-manifest.json")));
         Path promoteScript = handoff.resolve("promote-and-check.sh");
+        Path prereqScript = handoff.resolve("prereq-commands.sh");
         Assertions.assertTrue(Files.exists(promoteScript));
         Assertions.assertTrue(Files.isExecutable(promoteScript));
+        Assertions.assertTrue(Files.exists(prereqScript));
+        Assertions.assertTrue(Files.isExecutable(prereqScript));
         Assertions.assertTrue(result.output.contains("Handoff manifest:"));
+        Assertions.assertTrue(result.output.contains("Prereq helper:"));
         Assertions.assertTrue(result.output.contains("Promotion/readiness helper:"));
 
         ProcessResult promoteSyntax = runProcess(root, Duration.ofSeconds(10),
@@ -535,12 +539,42 @@ public class BenchmarkKitTests {
                 promoteScript.toString()
         );
         Assertions.assertEquals(0, promoteSyntax.exitCode, promoteSyntax.output);
+        ProcessResult prereqSyntax = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                "-n",
+                prereqScript.toString()
+        );
+        Assertions.assertEquals(0, prereqSyntax.exitCode, prereqSyntax.output);
+        ProcessResult prereqRoles = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                prereqScript.toString(),
+                "--list-roles"
+        );
+        Assertions.assertEquals(0, prereqRoles.exitCode, prereqRoles.output);
+        Assertions.assertTrue(prereqRoles.output.contains("server"));
+        Assertions.assertTrue(prereqRoles.output.contains("receiver-a"));
+        ProcessResult prereqPrint = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                prereqScript.toString(),
+                "--role", "receiver-a",
+                "--print-command"
+        );
+        Assertions.assertEquals(0, prereqPrint.exitCode, prereqPrint.output);
+        Assertions.assertTrue(prereqPrint.output.contains("check-lab-host-prereqs.sh"));
+        Assertions.assertTrue(prereqPrint.output.contains("--host-role receiver-a"));
+        Assertions.assertTrue(prereqPrint.output.contains("--expect-mtu 1500"));
+        Assertions.assertTrue(prereqPrint.output.contains("--expect-min-cpus 2"));
+        Assertions.assertTrue(prereqPrint.output.contains("--require-clock-sync"));
+        Assertions.assertTrue(prereqPrint.output.contains("--require-no-netem"));
 
         String readme = Files.readString(handoff.resolve("README.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(readme.contains("RakNet Lab Baseline Handoff"));
         Assertions.assertTrue(readme.contains("check-lab-handoff.sh"));
         Assertions.assertTrue(readme.contains("handoff-manifest.json"));
+        Assertions.assertTrue(readme.contains("Prereq helper: `" + prereqScript + "`"));
         Assertions.assertTrue(readme.contains("Promotion/readiness helper: `" + promoteScript + "`"));
+        Assertions.assertTrue(readme.contains("prereq-commands.sh"));
+        Assertions.assertTrue(readme.contains("Valid roles for this handoff are `server,receiver-a`"));
         Assertions.assertTrue(readme.contains("promote-and-check.sh"));
         Assertions.assertTrue(readme.contains("promote-lab-baseline.sh"));
         Assertions.assertTrue(readme.contains("--min-contention-clients \"2\""));
@@ -582,6 +616,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(handoff.toString(), handoffManifest.path("outputRoot").asText());
         Assertions.assertEquals(artifacts.toString(), handoffManifest.path("artifactRoot").asText());
         Assertions.assertEquals(promoteScript.toString(), handoffManifest.path("promoteScript").asText());
+        Assertions.assertEquals(prereqScript.toString(), handoffManifest.path("prereqScript").asText());
         Assertions.assertEquals(handoff.resolve("perfect-plan").toString(), handoffManifest.path("perfectPlan").asText());
         Assertions.assertEquals(handoff.resolve("impairment-plan").toString(),
                 handoffManifest.path("impairmentPlan").asText());
@@ -610,6 +645,9 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(2, handoffManifest.path("expectedMinCpus").asInt());
         Assertions.assertFalse(handoffManifest.path("requireCpuPerformance").asBoolean());
         Assertions.assertEquals("receiver-a", handoffManifest.path("targetHostRole").asText());
+        Assertions.assertEquals(2, handoffManifest.path("prereqRoles").size());
+        Assertions.assertEquals("server", handoffManifest.path("prereqRoles").get(0).asText());
+        Assertions.assertEquals("receiver-a", handoffManifest.path("prereqRoles").get(1).asText());
         Assertions.assertEquals(2, handoffManifest.path("profiles").size());
         Assertions.assertEquals("perfect", handoffManifest.path("profiles").get(0).asText());
         Assertions.assertEquals("near-loss", handoffManifest.path("profiles").get(1).asText());
