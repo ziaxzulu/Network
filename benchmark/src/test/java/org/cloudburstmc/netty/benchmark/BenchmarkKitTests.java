@@ -306,6 +306,8 @@ public class BenchmarkKitTests {
                 "--artifact-root", artifacts.toString(),
                 "--server-host", "127.0.0.1",
                 "--interface", "lo",
+                "--expect-mtu", "1500",
+                "--expect-min-cpus", "2",
                 "--curve-receiver", "receiver-a=1",
                 "--contention-receiver", "receiver-a=2",
                 "--profiles", "perfect,near-loss",
@@ -340,8 +342,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("--min-contention-clients \"2\""));
         Assertions.assertTrue(readme.contains("--min-contention-target-client-mbps \"1\""));
         Assertions.assertTrue(readme.contains("check-lab-host-prereqs.sh"));
-        Assertions.assertTrue(readme.contains("--expect-mtu <mtu>"));
-        Assertions.assertTrue(readme.contains("--expect-min-cpus <min-cpus>"));
+        Assertions.assertTrue(readme.contains("--expect-mtu 1500"));
+        Assertions.assertTrue(readme.contains("--expect-min-cpus 2"));
         Assertions.assertTrue(readme.contains("--require-clock-sync"));
         Assertions.assertTrue(readme.contains("--require-no-netem"));
         Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
@@ -365,6 +367,9 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("0.0.0.0", handoffManifest.path("bindHost").asText());
         Assertions.assertEquals(19132, handoffManifest.path("port").asInt());
         Assertions.assertEquals("lo", handoffManifest.path("interface").asText());
+        Assertions.assertEquals(1500, handoffManifest.path("expectedMtu").asInt());
+        Assertions.assertEquals(2, handoffManifest.path("expectedMinCpus").asInt());
+        Assertions.assertFalse(handoffManifest.path("requireCpuPerformance").asBoolean());
         Assertions.assertEquals("receiver-a", handoffManifest.path("targetHostRole").asText());
         Assertions.assertEquals(2, handoffManifest.path("profiles").size());
         Assertions.assertEquals("perfect", handoffManifest.path("profiles").get(0).asText());
@@ -448,6 +453,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(2, handoffCheckJson.path("expectedProfiles").size());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedContentionClients").asInt());
         Assertions.assertEquals(1.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(1500, handoffCheckJson.path("expectedMtu").asInt());
+        Assertions.assertEquals(2, handoffCheckJson.path("expectedMinCpus").asInt());
 
         Path handoffReadme = handoff.resolve("README.md");
         Files.writeString(handoffReadme,
@@ -527,6 +534,8 @@ public class BenchmarkKitTests {
                 "--artifact-root", artifacts.toString(),
                 "--server-host", "127.0.0.1",
                 "--interface", "lo",
+                "--expect-mtu", "1500",
+                "--expect-min-cpus", "2",
                 "--profiles", "perfect",
                 "--warmup", "1s",
                 "--duration", "1s",

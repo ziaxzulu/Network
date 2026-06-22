@@ -74,6 +74,8 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
   --artifact-root benchmark/build/benchmark-results/lab-run-current \
   --server-host <server-ip> \
   --interface <nic> \
+  --expect-mtu <mtu> \
+  --expect-min-cpus <min-cpus> \
   --curve-receiver receiver-a=1 \
   --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --contention-receiver receiver-a=250 \

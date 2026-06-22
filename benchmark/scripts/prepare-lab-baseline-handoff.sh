@@ -26,12 +26,15 @@ iterations="3"
 start_delay="90s"
 start_offset="180s"
 sudo_netem=false
+expect_mtu=""
+expect_min_cpus=""
+require_cpu_performance=false
 common_args=""
 
 usage() {
   cat <<'USAGE'
 Usage:
-  benchmark/scripts/prepare-lab-baseline-handoff.sh --server-host HOST --interface NIC [options]
+  benchmark/scripts/prepare-lab-baseline-handoff.sh --server-host HOST --interface NIC --expect-mtu N --expect-min-cpus N [options]
 
 Generates a complete lab handoff directory for the established RakNet baseline:
   - perfect-network lab baseline plan
@@ -69,6 +72,9 @@ Options:
   --start-delay DURATION            Server connection wait. Default: 90s.
   --start-offset DURATION           First case start offset from planning time. Default: 180s.
   --sudo-netem                      Generate impairment netem scripts with sudo.
+  --expect-mtu N                    Expected lab interface MTU for strict prereq reports. Required.
+  --expect-min-cpus N               Expected minimum online CPU count for strict prereq reports. Required.
+  --require-cpu-performance         Include strict CPU performance-governor prereq gate.
   --common-args "..."               Extra benchmark args appended to worker commands.
   --help                            Show this help.
 
@@ -185,6 +191,18 @@ while [[ $# -gt 0 ]]; do
       sudo_netem=true
       shift
       ;;
+    --expect-mtu|--expected-mtu)
+      expect_mtu="$2"
+      shift 2
+      ;;
+    --expect-min-cpus|--expected-min-cpus)
+      expect_min_cpus="$2"
+      shift 2
+      ;;
+    --require-cpu-performance)
+      require_cpu_performance=true
+      shift
+      ;;
     --common-args)
       common_args="$2"
       shift 2
@@ -213,6 +231,14 @@ if [[ -z "$interface" || "$interface" == "<nic>" ]]; then
   echo "--interface is required and must not be a placeholder" >&2
   exit 2
 fi
+if [[ -z "$expect_mtu" || "$expect_mtu" == "<mtu>" ]]; then
+  echo "--expect-mtu is required and must not be a placeholder" >&2
+  exit 2
+fi
+if [[ -z "$expect_min_cpus" || "$expect_min_cpus" == "<min-cpus>" ]]; then
+  echo "--expect-min-cpus is required and must not be a placeholder" >&2
+  exit 2
+fi
 if [[ "${#contention_receivers[@]}" -eq 0 ]]; then
   contention_receivers=("receiver-a=250" "receiver-b=250")
 fi
@@ -239,7 +265,7 @@ non_empty_csv() {
   [[ -n "$1" && "$1" != *, && "$1" != ,* ]]
 }
 
-for value_name in port contention_payload_size iterations raised_packet_limit raised_global_packet_limit max_queued_bytes; do
+for value_name in port contention_payload_size iterations raised_packet_limit raised_global_packet_limit max_queued_bytes expect_mtu expect_min_cpus; do
   if ! positive_int "${!value_name}"; then
     echo "--${value_name//_/-} must be a positive integer: ${!value_name}" >&2
     exit 2
@@ -364,6 +390,12 @@ profiles_json="$(json_array_from_csv "$profiles")"
 curve_payload_sizes_json="$(json_number_array_from_csv "$curve_payload_sizes")"
 curve_rates_mbps_json="$(json_array_from_csv "$curve_rates_mbps")"
 contention_cases_json="$(json_array_from_csv "$contention_cases")"
+strict_prereq_args=(--expect-mtu "$expect_mtu" --expect-min-cpus "$expect_min_cpus" --require-clock-sync --require-no-netem)
+if "$require_cpu_performance"; then
+  strict_prereq_args+=(--require-cpu-performance)
+fi
+strict_prereq_flags="$(printf ' %q' "${strict_prereq_args[@]}")"
+strict_prereq_flags="${strict_prereq_flags# }"
 
 jq -n \
   --arg kind "raknet-lab-handoff" \
@@ -394,6 +426,8 @@ jq -n \
   --arg iterations "$iterations" \
   --arg startDelay "$start_delay" \
   --arg startOffset "$start_offset" \
+  --arg expectMtu "$expect_mtu" \
+  --arg expectMinCpus "$expect_min_cpus" \
   --arg commonArgs "$common_args" \
   --argjson curveReceivers "$curve_receivers_json" \
   --argjson contentionReceivers "$contention_receivers_json" \
@@ -402,6 +436,7 @@ jq -n \
   --argjson curveRatesMbpsList "$curve_rates_mbps_json" \
   --argjson contentionCases "$contention_cases_json" \
   --argjson sudoNetem "$sudo_netem" \
+  --argjson requireCpuPerformance "$require_cpu_performance" \
   '{
     kind: $kind,
     generatedAt: $generatedAt,
@@ -437,7 +472,10 @@ jq -n \
     iterations: ($iterations | tonumber),
     startDelay: $startDelay,
     startOffset: $startOffset,
+    expectedMtu: ($expectMtu | tonumber),
+    expectedMinCpus: ($expectMinCpus | tonumber),
     sudoNetem: $sudoNetem,
+    requireCpuPerformance: $requireCpuPerformance,
     commonArgs: $commonArgs
   }' >"$handoff_manifest"
 
@@ -464,6 +502,9 @@ cat >"$readme" <<EOF
 - Per-client Mbps: \`$per_client_mbps\`
 - Raised packet limits: \`$raised_packet_limit/$raised_global_packet_limit\`
 - Max queued bytes: \`$max_queued_bytes\`
+- Expected MTU: \`$expect_mtu\`
+- Expected minimum CPUs: \`$expect_min_cpus\`
+- Require CPU performance governor: \`$require_cpu_performance\`
 
 This handoff packages the current recommended established RakNet baseline plan.
 It does not run the benchmark. Review the generated commands, run the freshness
@@ -473,7 +514,7 @@ checks shortly before execution, then follow each generated plan README.
 
 1. On the merge/control host, run \`benchmark/scripts/check-lab-handoff.sh --handoff "$output_root"\`.
 2. Run \`perfect-plan/check-plan-freshness.sh\` shortly before execution.
-3. On each server and receiver host, run \`benchmark/scripts/check-lab-host-prereqs.sh --interface "$interface" --out "$artifact_root/prereq-\$HOST_ROLE-\$(hostname)" --expect-mtu <mtu> --expect-min-cpus <min-cpus> --require-clock-sync --require-no-netem\` with the correct \`HOST_ROLE\`. Add \`--require-sudo-netem\` on hosts that will run sudo netem scripts, and add \`--require-cpu-performance\` when the lab hosts have been pinned to the performance governor.
+3. On each server and receiver host, run \`benchmark/scripts/check-lab-host-prereqs.sh --interface "$interface" --out "$artifact_root/prereq-\$HOST_ROLE-\$(hostname)" $strict_prereq_flags\` with the correct \`HOST_ROLE\`. Add \`--require-sudo-netem\` on hosts that will run sudo netem scripts.
 4. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
 5. Run \`perfect-plan/host-capture-commands.sh\` on the server and each receiver host with the correct \`HOST_ROLE\`.
 6. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.

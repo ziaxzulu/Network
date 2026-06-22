@@ -433,7 +433,7 @@ next_actions_json="$(jq -s '
       code: "rerun-perfect-baseline",
       title: "Rerun or repromote the perfect-network baseline",
       detail: "The promoted baseline does not match the required matrix, capacity selection, or contention gate.",
-      command: "benchmark/scripts/prepare-lab-baseline-handoff.sh --server-host <server-ip> --interface <nic>"
+      command: "benchmark/scripts/prepare-lab-baseline-handoff.sh --server-host <server-ip> --interface <nic> --expect-mtu <mtu> --expect-min-cpus <min-cpus>"
     } else empty end,
     if has_any_code([
       "missing-impairment-baseline-manifest",

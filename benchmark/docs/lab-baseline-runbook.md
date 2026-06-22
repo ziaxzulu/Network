@@ -84,6 +84,8 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
   --artifact-root benchmark/build/benchmark-results/lab-run-<date>-<topology> \
   --server-host <server-ip> \
   --interface <nic> \
+  --expect-mtu <mtu> \
+  --expect-min-cpus <min-cpus> \
   --curve-receiver receiver-a=1 \
   --contention-receiver receiver-a=250 \
   --contention-receiver receiver-b=250 \

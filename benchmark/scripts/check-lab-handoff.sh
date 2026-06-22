@@ -167,6 +167,20 @@ curve_payloads_json="$(jq -c '.curvePayloadSizes // []' "$manifest")"
 curve_rates_json="$(jq -c '.curveRatesMbps // []' "$manifest")"
 profiles_json="$(jq -c '.profiles // []' "$manifest")"
 expected_curve_rows="$(jq -r '((.curvePayloadSizes // []) | length) * ((.curveRatesMbps // []) | length)' "$manifest")"
+expected_mtu="$(jq -r '.expectedMtu // empty' "$manifest")"
+expected_min_cpus="$(jq -r '.expectedMinCpus // empty' "$manifest")"
+require_cpu_performance="$(jq -r '.requireCpuPerformance // false' "$manifest")"
+if [[ "$require_cpu_performance" != "true" ]]; then
+  require_cpu_performance="false"
+fi
+expected_mtu_json="$expected_mtu"
+if ! [[ "$expected_mtu_json" =~ ^[0-9]+$ ]]; then
+  expected_mtu_json="0"
+fi
+expected_min_cpus_json="$expected_min_cpus"
+if ! [[ "$expected_min_cpus_json" =~ ^[0-9]+$ ]]; then
+  expected_min_cpus_json="0"
+fi
 expected_contention_clients="$(jq -r '
   def receiver_clients($spec):
     if ($spec | contains("=")) then ($spec | split("=")[-1] | tonumber)
@@ -199,6 +213,14 @@ if [[ "$expected_contention_clients" != "$computed_contention_clients" ]]; then
   append_issue "handoff-contention-client-total-mismatch" "handoff" "handoff contentionClientTotal does not match contention receiver distribution" \
     "$(jq -n --argjson expected "$computed_contention_clients" --argjson actual "$expected_contention_clients" '{expectedFromReceivers:$expected,actualContentionClientTotal:$actual}')"
 fi
+if ! [[ "$expected_mtu" =~ ^[0-9]+$ && "$expected_mtu" -gt 0 ]]; then
+  append_issue "handoff-missing-expected-mtu" "handoff" "handoff manifest does not include a concrete expected MTU" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
+fi
+if ! [[ "$expected_min_cpus" =~ ^[0-9]+$ && "$expected_min_cpus" -gt 0 ]]; then
+  append_issue "handoff-missing-expected-min-cpus" "handoff" "handoff manifest does not include a concrete expected minimum CPU count" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
+fi
 if (( expected_contention_clients < required_min_contention_clients )); then
   append_issue "handoff-contention-clients-below-threshold" "handoff" "handoff contention client count is below the required baseline threshold" \
     "$(jq -n --argjson required "$required_min_contention_clients" --argjson actual "$expected_contention_clients" '{requiredMinContentionClients:$required,actualContentionClients:$actual}')"
@@ -211,10 +233,17 @@ fi
 check_path "$handoff_root/README.md" "handoff"
 check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
 check_readme_contains "benchmark/scripts/check-lab-host-prereqs.sh" "handoff README does not show the host prerequisite check"
-check_readme_contains "--expect-mtu <mtu>" "handoff README host prerequisite command does not require expected MTU evidence"
-check_readme_contains "--expect-min-cpus <min-cpus>" "handoff README host prerequisite command does not require minimum CPU-count evidence"
+if [[ -n "$expected_mtu" ]]; then
+  check_readme_contains "--expect-mtu $expected_mtu" "handoff README host prerequisite command does not require the manifest expected MTU"
+fi
+if [[ -n "$expected_min_cpus" ]]; then
+  check_readme_contains "--expect-min-cpus $expected_min_cpus" "handoff README host prerequisite command does not require the manifest minimum CPU count"
+fi
 check_readme_contains "--require-clock-sync" "handoff README host prerequisite command does not require clock-sync evidence"
 check_readme_contains "--require-no-netem" "handoff README host prerequisite command does not require clean qdisc/no-netem evidence"
+if [[ "$require_cpu_performance" == "true" ]]; then
+  check_readme_contains "--require-cpu-performance" "handoff README host prerequisite command does not require CPU performance-governor evidence"
+fi
 check_readme_contains "benchmark/scripts/promote-lab-baseline.sh" "handoff README does not show the perfect-network promotion command"
 check_readme_contains "--min-contention-clients \"$expected_contention_clients\"" "handoff README promotion command does not enforce the handoff contention client count"
 check_readme_contains "--min-contention-target-client-mbps \"$expected_per_client_mbps\"" "handoff README promotion command does not enforce the handoff per-client Mbps target"
@@ -361,6 +390,9 @@ jq -n \
   --argjson expectedContentionScenarios "$expected_contention_scenarios_json" \
   --argjson expectedContentionClients "$expected_contention_clients" \
   --argjson expectedPerClientMbps "$expected_per_client_mbps" \
+  --argjson expectedMtu "$expected_mtu_json" \
+  --argjson expectedMinCpus "$expected_min_cpus_json" \
+  --argjson requireCpuPerformance "$require_cpu_performance" \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson expectedCurveRows "$expected_curve_rows" \
@@ -378,6 +410,9 @@ jq -n \
     expectedContentionScenarios: $expectedContentionScenarios,
     expectedContentionClients: $expectedContentionClients,
     expectedPerClientMbps: $expectedPerClientMbps,
+    expectedMtu: $expectedMtu,
+    expectedMinCpus: $expectedMinCpus,
+    requireCpuPerformance: $requireCpuPerformance,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     issues: $issues
@@ -393,6 +428,9 @@ jq -n \
   echo "- Expected curve rows per curve plan: \`$(jq -r '.expectedCurveRowsPerCurvePlan' "$check_json")\`"
   echo "- Expected contention clients: \`$(jq -r '.expectedContentionClients' "$check_json")\`"
   echo "- Expected per-client Mbps: \`$(jq -r '.expectedPerClientMbps' "$check_json")\`"
+  echo "- Expected MTU: \`$(jq -r '.expectedMtu' "$check_json")\`"
+  echo "- Expected minimum CPUs: \`$(jq -r '.expectedMinCpus' "$check_json")\`"
+  echo "- Require CPU performance governor: \`$(jq -r '.requireCpuPerformance' "$check_json")\`"
   echo "- Required minimum contention clients: \`$(jq -r '.requiredMinContentionClients' "$check_json")\`"
   echo "- Required minimum per-client Mbps: \`$(jq -r '.requiredMinContentionTargetClientMbps' "$check_json")\`"
   echo
