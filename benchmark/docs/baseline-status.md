@@ -69,6 +69,20 @@ The local 100-client rows delivered roughly the expected aggregate load, but eve
 The baseline of record is not complete until a separate-host lab run is captured, validated, and promoted. Generate the current recommended plan with:
 
 ```bash
+benchmark/scripts/prepare-lab-baseline-handoff.sh \
+  --out benchmark/build/benchmark-results/lab-handoff-current \
+  --artifact-root benchmark/build/benchmark-results/lab-run-current \
+  --server-host <server-ip> \
+  --interface <nic> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
+  --sudo-netem
+```
+
+The handoff writes the perfect-network plan, impairment campaign plan, top-level run order, promotion commands, and readiness-gate command. The underlying perfect-network baseline plan is equivalent to:
+
+```bash
 benchmark/scripts/plan-lab-baseline.sh \
   --out benchmark/build/benchmark-results/lab-baseline-plan-current \
   --artifact-root benchmark/build/benchmark-results/lab-baseline-current \

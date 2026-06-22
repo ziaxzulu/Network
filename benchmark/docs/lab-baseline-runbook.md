@@ -76,6 +76,22 @@ The comparison script uses `suite-aggregate.jsonl` automatically when comparing 
 
 For line-rate validation, prefer explicit server and receiver workers instead of single-process local mode.
 
+For the baseline-of-record run, generate the complete handoff package first. It creates the perfect-network plan, the host/NIC impairment campaign plan, and a top-level README with promotion and readiness commands:
+
+```bash
+benchmark/scripts/prepare-lab-baseline-handoff.sh \
+  --out benchmark/build/benchmark-results/lab-handoff-<date>-<topology> \
+  --artifact-root benchmark/build/benchmark-results/lab-run-<date>-<topology> \
+  --server-host <server-ip> \
+  --interface <nic> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
+  --sudo-netem
+```
+
+Use the generated handoff README as the operator run order. The lower-level commands below are still useful when diagnosing or building a custom campaign.
+
 For a baseline-of-record campaign, start with the lab planner. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
 
 ```bash

@@ -143,6 +143,20 @@ The promotion script reruns validation, then writes `BASELINE.md`, `baseline-man
 For remote lab campaigns where the impairment must happen outside the JVM, generate one coordinated lab baseline plan per host-level profile:
 
 ```bash
+benchmark/scripts/prepare-lab-baseline-handoff.sh \
+  --out benchmark/build/benchmark-results/lab-handoff \
+  --artifact-root benchmark/build/benchmark-results/lab-run \
+  --server-host <server-ip> \
+  --interface <nic> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
+  --sudo-netem
+```
+
+That top-level handoff command creates both the perfect-network baseline plan and the host/NIC-level impairment campaign plan. Use it for baseline-of-record prep; use the lower-level impairment planner directly when you need a custom profile set or are debugging one campaign layer.
+
+```bash
 benchmark/scripts/plan-lab-impairment.sh \
   --out benchmark/build/benchmark-results/lab-impairment-plan \
   --artifact-root benchmark/build/benchmark-results/lab-impairment \
