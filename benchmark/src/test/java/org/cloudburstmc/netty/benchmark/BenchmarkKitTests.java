@@ -314,6 +314,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("promote-lab-baseline.sh"));
         Assertions.assertTrue(readme.contains("--min-contention-clients \"2\""));
         Assertions.assertTrue(readme.contains("--min-contention-target-client-mbps \"1\""));
+        Assertions.assertTrue(readme.contains("check-lab-host-prereqs.sh"));
         Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
 
         JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
@@ -501,6 +502,47 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(5.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(100, handoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+    }
+
+    @Test
+    public void testLabHostPrereqCheckProducesReports() throws Exception {
+        assumeShellTooling();
+        Assumptions.assumeTrue(commandAvailable("ip"), "ip is required for host prereq script tests");
+        Assumptions.assumeTrue(commandAvailable("tc"), "tc is required for host prereq script tests");
+        Assumptions.assumeTrue(commandAvailable("java"), "java is required for host prereq script tests");
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-host-prereq-test");
+
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-host-prereqs.sh").toString(),
+                "--out", output.resolve("ready").toString(),
+                "--interface", "lo",
+                "--host-role", "server"
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+        JsonNode readyJson = JSON.readTree(Files.readString(output.resolve("ready/prereq.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(readyJson.path("ready").asBoolean());
+        Assertions.assertEquals("server", readyJson.path("hostRole").asText());
+        Assertions.assertEquals("lo", readyJson.path("interface").asText());
+        Assertions.assertEquals(0, readyJson.path("errorCount").asInt());
+        Assertions.assertTrue(readyJson.findValuesAsText("name").contains("java-version"));
+        Assertions.assertTrue(Files.readString(output.resolve("ready/prereq.md"), StandardCharsets.UTF_8)
+                .contains("Lab Host Prerequisites"));
+
+        ProcessResult missingInterface = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-host-prereqs.sh").toString(),
+                "--out", output.resolve("missing").toString(),
+                "--interface", "raknet-missing0",
+                "--host-role", "receiver-a"
+        );
+        Assertions.assertEquals(1, missingInterface.exitCode, missingInterface.output);
+        JsonNode missingJson = JSON.readTree(Files.readString(output.resolve("missing/prereq.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingJson.path("ready").asBoolean());
+        Assertions.assertTrue(missingJson.findValuesAsText("code").contains("missing-interface"));
     }
 
     @Test

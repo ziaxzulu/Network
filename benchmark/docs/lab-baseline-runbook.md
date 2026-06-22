@@ -101,6 +101,16 @@ benchmark/scripts/check-lab-handoff.sh \
 
 The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, and contention row client-count/per-client-rate consistency. By default it also requires at least `100` planned contention clients and at least `5Mbps` per client; use explicit `--required-min-contention-*` overrides only for smoke handoffs that will not become the baseline of record. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
 
+Before host capture or worker startup, run the local prereq check on every server and receiver host:
+
+```bash
+HOST_ROLE=server benchmark/scripts/check-lab-host-prereqs.sh \
+  --interface <nic> \
+  --out benchmark/build/benchmark-results/lab-<date>-<topology>/prereq-server-$(hostname)
+```
+
+Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. The check is read-only and writes `prereq.json` plus `prereq.md`; it fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, or qdisc inspection failures.
+
 For a baseline-of-record campaign, start with the lab planner. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
 
 ```bash

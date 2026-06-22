@@ -473,15 +473,16 @@ checks shortly before execution, then follow each generated plan README.
 
 1. On the merge/control host, run \`benchmark/scripts/check-lab-handoff.sh --handoff "$output_root"\`.
 2. Run \`perfect-plan/check-plan-freshness.sh\` shortly before execution.
-3. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
-4. Run \`perfect-plan/host-capture-commands.sh\` on the server and each receiver host with the correct \`HOST_ROLE\`.
-5. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.
-6. Copy receiver artifacts and host captures back under \`$perfect_artifacts\`.
-7. Run \`perfect-plan/merge-all.sh\` from the repository root.
-8. Run \`impairment-plan/check-plan-freshness.sh\`.
-9. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
-10. Copy every profile's receiver artifacts and \`netem/\` evidence back under \`$impairment_artifacts\`.
-11. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
+3. On each server and receiver host, run \`benchmark/scripts/check-lab-host-prereqs.sh --interface "$interface" --out "$artifact_root/prereq-\$HOST_ROLE-\$(hostname)"\` with the correct \`HOST_ROLE\`. Add \`--require-sudo-netem\` on hosts that will run sudo netem scripts.
+4. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
+5. Run \`perfect-plan/host-capture-commands.sh\` on the server and each receiver host with the correct \`HOST_ROLE\`.
+6. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.
+7. Copy receiver artifacts, prereq reports, and host captures back under \`$perfect_artifacts\`.
+8. Run \`perfect-plan/merge-all.sh\` from the repository root.
+9. Run \`impairment-plan/check-plan-freshness.sh\`.
+10. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
+11. Copy every profile's receiver artifacts, prereq reports, and \`netem/\` evidence back under \`$impairment_artifacts\`.
+12. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
 
 ## Promote Baselines
 
