@@ -102,7 +102,7 @@ benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/ben
 
 `smoke` is short and intended for local regression. Because smoke cases use one measured iteration, aggregate rows are marked `insufficient-iterations`; use them to verify execution and artifact shape, not baseline stability. `pilot` is a short three-iteration local subset with one bandwidth curve, 100-client fanout, fairness, blackhole disappearance, and batched traffic at `5Mbps` per client. Use it for quick development comparisons when full `local` is too expensive. `local` is longer but still loopback-only. `lab` matches the recurring baseline matrix and should be used on controlled hosts/NICs, optionally with `tc netem` applied outside the JVM.
 
-For baseline-of-record runs, follow [`lab-baseline-runbook.md`](lab-baseline-runbook.md), run `benchmark/scripts/check-lab-host-prereqs.sh`, and capture host reports with `benchmark/scripts/capture-lab-host.sh` before running the suite.
+For baseline-of-record runs, follow [`lab-baseline-runbook.md`](lab-baseline-runbook.md), run `benchmark/scripts/check-lab-host-prereqs.sh` with strict clock, MTU, CPU-count, and no-netem gates, and capture host reports with `benchmark/scripts/capture-lab-host.sh` before running the suite.
 
 The suite runner writes a stable bandwidth capacity report automatically after aggregate generation. The selector requires at least three measured iterations and rejects aggregate rows already marked unstable, rows with zero delivered throughput, rows with disconnects, and any rows that exceed optional gates:
 

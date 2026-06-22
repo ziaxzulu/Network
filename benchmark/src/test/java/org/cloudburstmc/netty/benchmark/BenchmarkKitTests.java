@@ -565,13 +565,24 @@ public class BenchmarkKitTests {
         Assumptions.assumeTrue(commandAvailable("java"), "java is required for host prereq script tests");
         Path root = repoRoot();
         Path output = Files.createTempDirectory("raknet-host-prereq-test");
+        ProcessResult mtuProbe = runProcess(root, Duration.ofSeconds(5),
+                "bash",
+                "-lc",
+                "ip -o link show dev lo | sed -n 's/.* mtu \\([0-9][0-9]*\\).*/\\1/p' | head -n 1"
+        );
+        Assertions.assertEquals(0, mtuProbe.exitCode, mtuProbe.output);
+        String loopbackMtu = mtuProbe.output.trim();
+        Assumptions.assumeFalse(loopbackMtu.isEmpty(), "loopback MTU must be parseable for host prereq script tests");
 
         ProcessResult ready = runProcess(root, Duration.ofSeconds(20),
                 "bash",
                 root.resolve("benchmark/scripts/check-lab-host-prereqs.sh").toString(),
                 "--out", output.resolve("ready").toString(),
                 "--interface", "lo",
-                "--host-role", "server"
+                "--host-role", "server",
+                "--expect-mtu", loopbackMtu,
+                "--expect-min-cpus", "1",
+                "--require-no-netem"
         );
         Assertions.assertEquals(0, ready.exitCode, ready.output);
         JsonNode readyJson = JSON.readTree(Files.readString(output.resolve("ready/prereq.json"),
@@ -579,8 +590,16 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readyJson.path("ready").asBoolean());
         Assertions.assertEquals("server", readyJson.path("hostRole").asText());
         Assertions.assertEquals("lo", readyJson.path("interface").asText());
+        Assertions.assertEquals(Integer.parseInt(loopbackMtu), readyJson.path("interfaceMtu").asInt());
+        Assertions.assertEquals(Integer.parseInt(loopbackMtu), readyJson.path("expectedMtu").asInt());
+        Assertions.assertTrue(readyJson.path("cpuCount").asInt() >= 1);
+        Assertions.assertEquals(1, readyJson.path("expectedMinCpus").asInt());
+        Assertions.assertTrue(readyJson.path("requireNoNetem").asBoolean());
         Assertions.assertEquals(0, readyJson.path("errorCount").asInt());
         Assertions.assertTrue(readyJson.findValuesAsText("name").contains("java-version"));
+        Assertions.assertTrue(readyJson.findValuesAsText("name").contains("interface-mtu"));
+        Assertions.assertTrue(readyJson.findValuesAsText("name").contains("tc-netem"));
+        Assertions.assertTrue(readyJson.findValuesAsText("name").contains("cpu-count-minimum"));
         Assertions.assertTrue(Files.readString(output.resolve("ready/prereq.md"), StandardCharsets.UTF_8)
                 .contains("Lab Host Prerequisites"));
 

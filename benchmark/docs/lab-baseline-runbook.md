@@ -106,10 +106,14 @@ Before host capture or worker startup, run the local prereq check on every serve
 ```bash
 HOST_ROLE=server benchmark/scripts/check-lab-host-prereqs.sh \
   --interface <nic> \
-  --out benchmark/build/benchmark-results/lab-<date>-<topology>/prereq-server-$(hostname)
+  --out benchmark/build/benchmark-results/lab-<date>-<topology>/prereq-server-$(hostname) \
+  --expect-mtu <mtu> \
+  --expect-min-cpus <min-cpus> \
+  --require-clock-sync \
+  --require-no-netem
 ```
 
-Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. The check is read-only and writes `prereq.json` plus `prereq.md`; it fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, or qdisc inspection failures. Keep those directories under the lab artifact root. Baseline validation requires at least two ready `prereq.json` files from at least two distinct hostnames unless `--allow-missing-prereq-context` is used for a non-baseline smoke run.
+Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. Add `--require-cpu-performance` when the lab hosts have been pinned to the performance governor; leave it advisory on hosts where the governor is unavailable but document that in `topology.md`. The check is read-only and writes `prereq.json` plus `prereq.md`; it fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, qdisc inspection failures, strict clock/MTU/CPU-count/no-netem mismatches, or strict CPU-governor mismatches. Keep those directories under the lab artifact root. Baseline validation requires at least two ready `prereq.json` files from at least two distinct hostnames unless `--allow-missing-prereq-context` is used for a non-baseline smoke run.
 
 For a baseline-of-record campaign, start with the lab planner. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
 

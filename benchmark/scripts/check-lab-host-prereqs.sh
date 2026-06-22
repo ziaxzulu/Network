@@ -5,6 +5,11 @@ out_dir=""
 interface=""
 host_role="${HOST_ROLE:-host}"
 require_sudo_netem=false
+require_clock_sync=false
+require_cpu_performance=false
+require_no_netem=false
+expect_mtu=""
+expect_min_cpus=""
 
 usage() {
   cat <<'USAGE'
@@ -19,6 +24,11 @@ Options:
   --interface NIC           Lab NIC/interface used by benchmark traffic and netem. Required.
   --host-role ROLE          Host role label written into reports. Default: HOST_ROLE or host.
   --require-sudo-netem      Require sudo to be installed for generated sudo netem scripts.
+  --require-clock-sync      Fail when clock synchronization cannot be verified.
+  --require-cpu-performance Fail unless all visible CPU governors are performance.
+  --require-no-netem        Fail when the selected interface already has a netem qdisc.
+  --expect-mtu N            Fail when the selected interface MTU differs from N.
+  --expect-min-cpus N       Fail when the host has fewer than N online CPUs.
   --help                    Show this help.
 
 Outputs:
@@ -45,6 +55,26 @@ while [[ $# -gt 0 ]]; do
       require_sudo_netem=true
       shift
       ;;
+    --require-clock-sync)
+      require_clock_sync=true
+      shift
+      ;;
+    --require-cpu-performance)
+      require_cpu_performance=true
+      shift
+      ;;
+    --require-no-netem)
+      require_no_netem=true
+      shift
+      ;;
+    --expect-mtu)
+      expect_mtu="$2"
+      shift 2
+      ;;
+    --expect-min-cpus)
+      expect_min_cpus="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -63,6 +93,14 @@ if [[ -z "$out_dir" || -z "$interface" ]]; then
 fi
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required to write lab host prerequisite reports" >&2
+  exit 2
+fi
+if [[ -n "$expect_mtu" && ! "$expect_mtu" =~ ^[0-9]+$ ]]; then
+  echo "--expect-mtu must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ -n "$expect_min_cpus" && ! "$expect_min_cpus" =~ ^[0-9]+$ ]]; then
+  echo "--expect-min-cpus must be a non-negative integer" >&2
   exit 2
 fi
 
@@ -176,7 +214,20 @@ fi
 
 if command -v ip >/dev/null 2>&1; then
   if ip link show dev "$interface" >/dev/null 2>&1; then
+    interface_link="$(ip -o link show dev "$interface" 2>/dev/null || true)"
+    interface_mtu="$(printf '%s\n' "$interface_link" | sed -n 's/.* mtu \([0-9][0-9]*\).*/\1/p' | head -n 1)"
     append_check "interface" "pass" "Interface exists" "$(jq -n --arg interface "$interface" '{interface:$interface}')"
+    if [[ -n "$interface_mtu" ]]; then
+      if [[ -n "$expect_mtu" && "$interface_mtu" != "$expect_mtu" ]]; then
+        append_check "interface-mtu" "fail" "Interface MTU does not match expected value" "$(jq -n --arg interface "$interface" --argjson actual "$interface_mtu" --argjson expected "$expect_mtu" '{interface:$interface,actualMtu:$actual,expectedMtu:$expected}')"
+        append_issue "interface-mtu-mismatch" "error" "Selected lab interface MTU differs from the expected value" "$(jq -n --arg interface "$interface" --argjson actual "$interface_mtu" --argjson expected "$expect_mtu" '{interface:$interface,actualMtu:$actual,expectedMtu:$expected}')"
+      else
+        append_check "interface-mtu" "pass" "Interface MTU recorded" "$(jq -n --arg interface "$interface" --argjson actual "$interface_mtu" --argjson expected "${expect_mtu:-0}" '{interface:$interface,actualMtu:$actual,expectedMtu:(if $expected == 0 then null else $expected end)}')"
+      fi
+    else
+      append_check "interface-mtu" "warn" "Interface MTU could not be parsed" "$(jq -n --arg interface "$interface" '{interface:$interface}')"
+      append_issue "interface-mtu-unparsed" "warning" "Selected lab interface MTU could not be parsed" "$(jq -n --arg interface "$interface" '{interface:$interface}')"
+    fi
   else
     append_check "interface" "fail" "Interface does not exist" "$(jq -n --arg interface "$interface" '{interface:$interface}')"
     append_issue "missing-interface" "error" "Selected lab interface does not exist on this host" "$(jq -n --arg interface "$interface" '{interface:$interface}')"
@@ -184,11 +235,66 @@ if command -v ip >/dev/null 2>&1; then
 fi
 
 if command -v tc >/dev/null 2>&1; then
-  if tc qdisc show dev "$interface" >/dev/null 2>&1; then
-    append_check "tc-qdisc" "pass" "tc can inspect the selected interface" "$(jq -n --arg interface "$interface" '{interface:$interface}')"
+  if tc_qdisc_output="$(tc qdisc show dev "$interface" 2>&1)"; then
+    append_check "tc-qdisc" "pass" "tc can inspect the selected interface" "$(jq -n --arg interface "$interface" --arg qdisc "$tc_qdisc_output" '{interface:$interface,qdisc:$qdisc}')"
+    if printf '%s\n' "$tc_qdisc_output" | grep -Eq '(^|[[:space:]])netem($|[[:space:]])'; then
+      if "$require_no_netem"; then
+        append_check "tc-netem" "fail" "Selected interface already has a netem qdisc" "$(jq -n --arg interface "$interface" --arg qdisc "$tc_qdisc_output" '{interface:$interface,qdisc:$qdisc}')"
+        append_issue "interface-netem-active" "error" "Selected lab interface already has netem active before the run" "$(jq -n --arg interface "$interface" --arg qdisc "$tc_qdisc_output" '{interface:$interface,qdisc:$qdisc}')"
+      else
+        append_check "tc-netem" "warn" "Selected interface already has a netem qdisc" "$(jq -n --arg interface "$interface" --arg qdisc "$tc_qdisc_output" '{interface:$interface,qdisc:$qdisc}')"
+        append_issue "interface-netem-active" "warning" "Selected lab interface already has netem active before the run" "$(jq -n --arg interface "$interface" --arg qdisc "$tc_qdisc_output" '{interface:$interface,qdisc:$qdisc}')"
+      fi
+    else
+      append_check "tc-netem" "pass" "No netem qdisc is active on the selected interface" "$(jq -n --arg interface "$interface" --arg qdisc "$tc_qdisc_output" '{interface:$interface,qdisc:$qdisc}')"
+    fi
   else
-    append_check "tc-qdisc" "fail" "tc cannot inspect the selected interface" "$(jq -n --arg interface "$interface" '{interface:$interface}')"
-    append_issue "tc-qdisc-unavailable" "error" "tc qdisc inspection must work for host-level impairment evidence" "$(jq -n --arg interface "$interface" '{interface:$interface}')"
+    append_check "tc-qdisc" "fail" "tc cannot inspect the selected interface" "$(jq -n --arg interface "$interface" --arg output "$tc_qdisc_output" '{interface:$interface,output:$output}')"
+    append_issue "tc-qdisc-unavailable" "error" "tc qdisc inspection must work for host-level impairment evidence" "$(jq -n --arg interface "$interface" --arg output "$tc_qdisc_output" '{interface:$interface,output:$output}')"
+  fi
+fi
+
+cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf 0)"
+append_check "cpu-count" "pass" "Online CPU count recorded" "$(jq -n --argjson cpuCount "$cpu_count" --argjson expectedMin "${expect_min_cpus:-0}" '{cpuCount:$cpuCount,expectedMinCpus:(if $expectedMin == 0 then null else $expectedMin end)}')"
+if [[ -n "$expect_min_cpus" && "$cpu_count" -lt "$expect_min_cpus" ]]; then
+  append_check "cpu-count-minimum" "fail" "Online CPU count is below expected minimum" "$(jq -n --argjson cpuCount "$cpu_count" --argjson expectedMin "$expect_min_cpus" '{cpuCount:$cpuCount,expectedMinCpus:$expectedMin}')"
+  append_issue "cpu-count-below-minimum" "error" "Host has fewer online CPUs than expected for this lab topology" "$(jq -n --argjson cpuCount "$cpu_count" --argjson expectedMin "$expect_min_cpus" '{cpuCount:$cpuCount,expectedMinCpus:$expectedMin}')"
+elif [[ -n "$expect_min_cpus" ]]; then
+  append_check "cpu-count-minimum" "pass" "Online CPU count meets expected minimum" "$(jq -n --argjson cpuCount "$cpu_count" --argjson expectedMin "$expect_min_cpus" '{cpuCount:$cpuCount,expectedMinCpus:$expectedMin}')"
+fi
+
+governor_files=()
+while IFS= read -r -d '' governor_file; do
+  governor_files+=("$governor_file")
+done < <(find /sys/devices/system/cpu -path '*/cpufreq/scaling_governor' -print0 2>/dev/null | sort -z)
+if [[ "${#governor_files[@]}" -eq 0 ]]; then
+  if "$require_cpu_performance"; then
+    append_check "cpu-governor" "fail" "CPU governor files were not found"
+    append_issue "cpu-governor-unavailable" "error" "CPU performance governor cannot be verified on this host"
+  else
+    append_check "cpu-governor" "warn" "CPU governor files were not found"
+    append_issue "cpu-governor-unavailable" "warning" "CPU performance governor cannot be verified on this host"
+  fi
+else
+  governors=()
+  non_performance_count=0
+  for governor_file in "${governor_files[@]}"; do
+    governor_value="$(tr -d '\n' <"$governor_file" 2>/dev/null || printf unknown)"
+    governors+=("$governor_value")
+    if [[ "$governor_value" != "performance" ]]; then
+      non_performance_count=$((non_performance_count + 1))
+    fi
+  done
+  governors_json="$(printf '%s\n' "${governors[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+  governor_extra="$(jq -n --argjson governorCount "${#governor_files[@]}" --argjson nonPerformanceCount "$non_performance_count" --argjson governors "$governors_json" '{governorCount:$governorCount,nonPerformanceCount:$nonPerformanceCount,governors:$governors}')"
+  if [[ "$non_performance_count" -eq 0 ]]; then
+    append_check "cpu-governor" "pass" "All visible CPU governors are performance" "$governor_extra"
+  elif "$require_cpu_performance"; then
+    append_check "cpu-governor" "fail" "One or more visible CPU governors is not performance" "$governor_extra"
+    append_issue "cpu-governor-not-performance" "error" "CPU governors are not fixed to performance for a repeatable lab run" "$governor_extra"
+  else
+    append_check "cpu-governor" "warn" "One or more visible CPU governors is not performance" "$governor_extra"
+    append_issue "cpu-governor-not-performance" "warning" "CPU governors are not fixed to performance for a repeatable lab run" "$governor_extra"
   fi
 fi
 
@@ -206,14 +312,32 @@ if command -v timedatectl >/dev/null 2>&1; then
   ntp_sync="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || printf unknown)"
   if [[ "$ntp_sync" == "yes" ]]; then
     append_check "clock-sync" "pass" "timedatectl reports synchronized clock" "$(jq -n --arg ntpSynchronized "$ntp_sync" '{ntpSynchronized:$ntpSynchronized}')"
+  elif "$require_clock_sync"; then
+    append_check "clock-sync" "fail" "timedatectl does not report synchronized clock" "$(jq -n --arg ntpSynchronized "$ntp_sync" '{ntpSynchronized:$ntpSynchronized}')"
+    append_issue "clock-sync-unknown" "error" "NTP synchronization must be verified before coordinated start timestamps" "$(jq -n --arg ntpSynchronized "$ntp_sync" '{ntpSynchronized:$ntpSynchronized}')"
   else
     append_check "clock-sync" "warn" "timedatectl does not report synchronized clock" "$(jq -n --arg ntpSynchronized "$ntp_sync" '{ntpSynchronized:$ntpSynchronized}')"
     append_issue "clock-sync-unknown" "warning" "NTP synchronization should be verified before coordinated start timestamps" "$(jq -n --arg ntpSynchronized "$ntp_sync" '{ntpSynchronized:$ntpSynchronized}')"
   fi
+elif "$require_clock_sync"; then
+  append_check "clock-sync" "fail" "timedatectl is missing"
+  append_issue "clock-sync-unverified" "error" "Clock synchronization cannot be verified because timedatectl is missing"
 fi
 
 checks_array="$(jq -s '.' "$checks_jsonl")"
 issues_array="$(jq -s '.' "$issues_jsonl")"
+expected_mtu_json="null"
+if [[ -n "$expect_mtu" ]]; then
+  expected_mtu_json="$expect_mtu"
+fi
+expected_min_cpus_json="null"
+if [[ -n "$expect_min_cpus" ]]; then
+  expected_min_cpus_json="$expect_min_cpus"
+fi
+interface_mtu_json="null"
+if [[ -n "${interface_mtu:-}" ]]; then
+  interface_mtu_json="$interface_mtu"
+fi
 
 jq -n \
   --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -222,8 +346,14 @@ jq -n \
   --arg repoRoot "$repo_root" \
   --arg interface "$interface" \
   --arg gitRevision "$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || printf unknown)" \
-  --argjson cpuCount "$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf 0)" \
+  --argjson cpuCount "$cpu_count" \
   --argjson requireSudoNetem "$require_sudo_netem" \
+  --argjson requireClockSync "$require_clock_sync" \
+  --argjson requireCpuPerformance "$require_cpu_performance" \
+  --argjson requireNoNetem "$require_no_netem" \
+  --argjson expectedMtu "$expected_mtu_json" \
+  --argjson expectedMinCpus "$expected_min_cpus_json" \
+  --argjson interfaceMtu "$interface_mtu_json" \
   --argjson checks "$checks_array" \
   --argjson issues "$issues_array" \
   '{
@@ -235,9 +365,15 @@ jq -n \
     hostname: $hostname,
     repoRoot: $repoRoot,
     interface: $interface,
+    interfaceMtu: $interfaceMtu,
     gitRevision: $gitRevision,
     cpuCount: $cpuCount,
     requireSudoNetem: $requireSudoNetem,
+    requireClockSync: $requireClockSync,
+    requireCpuPerformance: $requireCpuPerformance,
+    requireNoNetem: $requireNoNetem,
+    expectedMtu: $expectedMtu,
+    expectedMinCpus: $expectedMinCpus,
     checks: $checks,
     issues: $issues
   }' >"$prereq_json"
@@ -250,8 +386,13 @@ jq -n \
   echo "- Host role: \`$host_role\`"
   echo "- Hostname: \`$(jq -r '.hostname' "$prereq_json")\`"
   echo "- Interface: \`$interface\`"
+  echo "- Interface MTU: \`$(jq -r '.interfaceMtu // "unknown"' "$prereq_json")\`"
+  echo "- Online CPUs: \`$(jq -r '.cpuCount' "$prereq_json")\`"
   echo "- Errors: \`$(jq -r '.errorCount' "$prereq_json")\`"
   echo "- Warnings: \`$(jq -r '.warningCount' "$prereq_json")\`"
+  echo "- Strict clock sync: \`$(jq -r '.requireClockSync' "$prereq_json")\`"
+  echo "- Strict CPU governor: \`$(jq -r '.requireCpuPerformance' "$prereq_json")\`"
+  echo "- Strict no-netem: \`$(jq -r '.requireNoNetem' "$prereq_json")\`"
   echo
   echo "## Checks"
   echo

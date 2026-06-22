@@ -473,7 +473,7 @@ checks shortly before execution, then follow each generated plan README.
 
 1. On the merge/control host, run \`benchmark/scripts/check-lab-handoff.sh --handoff "$output_root"\`.
 2. Run \`perfect-plan/check-plan-freshness.sh\` shortly before execution.
-3. On each server and receiver host, run \`benchmark/scripts/check-lab-host-prereqs.sh --interface "$interface" --out "$artifact_root/prereq-\$HOST_ROLE-\$(hostname)"\` with the correct \`HOST_ROLE\`. Add \`--require-sudo-netem\` on hosts that will run sudo netem scripts.
+3. On each server and receiver host, run \`benchmark/scripts/check-lab-host-prereqs.sh --interface "$interface" --out "$artifact_root/prereq-\$HOST_ROLE-\$(hostname)" --expect-mtu <mtu> --expect-min-cpus <min-cpus> --require-clock-sync --require-no-netem\` with the correct \`HOST_ROLE\`. Add \`--require-sudo-netem\` on hosts that will run sudo netem scripts, and add \`--require-cpu-performance\` when the lab hosts have been pinned to the performance governor.
 4. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
 5. Run \`perfect-plan/host-capture-commands.sh\` on the server and each receiver host with the correct \`HOST_ROLE\`.
 6. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.

@@ -103,6 +103,7 @@ append_command "Gradle" "$repo_root/gradlew" --version
 append_command "IP Addresses" ip addr
 append_command "IP Routes" ip route
 append_command "Queue Disciplines" tc qdisc show
+append_shell "CPU Governors" "grep -H . /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true"
 append_shell "Interrupt Affinity" "grep -H . /proc/irq/*/smp_affinity_list 2>/dev/null | head -200"
 append_shell "TCP/UDP Kernel Settings" "sysctl net.core.rmem_max net.core.wmem_max net.core.netdev_max_backlog net.ipv4.udp_mem net.ipv4.udp_rmem_min net.ipv4.udp_wmem_min 2>/dev/null"
 

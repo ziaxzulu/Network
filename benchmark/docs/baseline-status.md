@@ -119,6 +119,7 @@ The generated plan schedules:
 Before promotion, the lab output must include:
 
 - ready server and receiver prereq reports
+- strict prereq gates for clock sync, expected MTU, minimum CPU count, and no pre-existing netem qdisc
 - server and receiver host reports
 - at least two distinct captured hostnames
 - topology metadata
