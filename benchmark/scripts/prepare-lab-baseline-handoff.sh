@@ -16,6 +16,7 @@ curve_rates_mbps="100,250,500,750,1000,1500,2000,unlimited"
 contention_receivers=()
 contention_cases="fanout,immediate,fairness,disappear-blackhole,batched,resource-pack"
 contention_payload_size="512"
+reliability="reliable_ordered"
 per_client_mbps="5"
 immediate_payload_size="256"
 immediate_per_client_mbps="1"
@@ -71,6 +72,7 @@ Options:
   --case-prefix NAME                Case prefix. Default: lab.
   --contention-cases CSV            Contention cases. Default: fanout,immediate,fairness,disappear-blackhole,batched,resource-pack.
   --contention-payload-size N       Payload size for contention. Default: 512.
+  --reliability MODE                Reliability mode passed to benchmark workers. Default: reliable_ordered.
   --per-client-mbps N               Contention per-client offered rate. Default: 5.
   --immediate-payload-size N        Payload size for immediate small-packet fanout. Default: 256.
   --immediate-per-client-mbps N     Per-client offered rate for immediate small-packet fanout. Default: 1.
@@ -167,6 +169,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --contention-payload-size)
       contention_payload_size="$2"
+      shift 2
+      ;;
+    --reliability)
+      reliability="$2"
       shift 2
       ;;
     --per-client-mbps)
@@ -533,6 +539,7 @@ common_baseline_args=(
   --curve-rates-mbps "$curve_rates_mbps"
   --contention-cases "$contention_cases"
   --contention-payload-size "$contention_payload_size"
+  --reliability "$reliability"
   --per-client-mbps "$per_client_mbps"
   --immediate-payload-size "$immediate_payload_size"
   --immediate-per-client-mbps "$immediate_per_client_mbps"
@@ -627,6 +634,7 @@ jq -n \
   --arg casePrefix "$case_prefix" \
   --arg contentionPayloadSize "$contention_payload_size" \
   --arg contentionClientTotal "$contention_client_total" \
+  --arg reliability "$reliability" \
   --arg perClientMbps "$per_client_mbps" \
   --arg immediatePayloadSize "$immediate_payload_size" \
   --arg immediatePerClientMbps "$immediate_per_client_mbps" \
@@ -689,6 +697,7 @@ jq -n \
     casePrefix: $casePrefix,
     contentionPayloadSize: ($contentionPayloadSize | tonumber),
     contentionClientTotal: ($contentionClientTotal | tonumber),
+    reliability: $reliability,
     perClientMbps: ($perClientMbps | tonumber),
     immediatePayloadSize: ($immediatePayloadSize | tonumber),
     immediatePerClientMbps: ($immediatePerClientMbps | tonumber),
@@ -737,6 +746,7 @@ cat >"$readme" <<EOF
 - Contention receivers: \`$(IFS=,; echo "${contention_receivers[*]}")\`
 - Contention clients: \`$contention_client_total\`
 - Contention cases: \`$contention_cases\`
+- Reliability: \`$reliability\`
 - Per-client Mbps: \`$per_client_mbps\`
 - Immediate payload size: \`$immediate_payload_size\`
 - Immediate per-client Mbps: \`$immediate_per_client_mbps\`

@@ -263,6 +263,7 @@ batch_intervals="$(jq -r '(.batchIntervals // []) | join(",")' "$manifest")"
 contention_cases="$(jq -r '(.contentionCases // []) | join(",")' "$manifest")"
 resource_pack_chunk_sizes="$(jq -r '(.resourcePackChunkSizes // []) | join(",")' "$manifest")"
 resource_pack_interval="$(jq -r '.resourcePackInterval // ""' "$manifest")"
+expected_reliability="$(jq -r '.reliability // ""' "$manifest")"
 expected_curve_rows="$(jq -r '((.curvePayloadSizes // []) | length) * ((.curveRatesMbps // []) | length)' "$manifest")"
 expected_mtu="$(jq -r '.expectedMtu // empty' "$manifest")"
 expected_min_cpus="$(jq -r '.expectedMinCpus // empty' "$manifest")"
@@ -327,6 +328,10 @@ expected_resource_pack_intervals_millis_json="$(jq -r '.resourcePackInterval // 
 if [[ "$expected_contention_clients" != "$computed_contention_clients" ]]; then
   append_issue "handoff-contention-client-total-mismatch" "handoff" "handoff contentionClientTotal does not match contention receiver distribution" \
     "$(jq -n --argjson expected "$computed_contention_clients" --argjson actual "$expected_contention_clients" '{expectedFromReceivers:$expected,actualContentionClientTotal:$actual}')"
+fi
+if [[ -z "$expected_reliability" ]]; then
+  append_issue "handoff-missing-reliability" "handoff" "handoff manifest is missing the benchmark reliability mode" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
 fi
 if ! [[ "$expected_mtu" =~ ^[0-9]+$ && "$expected_mtu" -gt 0 ]]; then
   append_issue "handoff-missing-expected-mtu" "handoff" "handoff manifest does not include a concrete expected MTU" \
@@ -524,6 +529,20 @@ check_curve_manifest() {
       "$(jq -n --arg path "$path" --argjson expected "$expected_curve_rows" --argjson actual "$actual_rows" '{path:$path,expectedRows:$expected,actualRows:$actual}')"
   fi
 
+  if [[ -n "$expected_reliability" ]]; then
+    local reliability_mismatches
+    reliability_mismatches="$(jq -r -s --arg expected "$expected_reliability" '
+      .[]
+      | select((.reliability // "") != $expected)
+      | [(.case // ""), (.benchmarkName // ""), (.reliability // "")] | @tsv
+    ' "$path")"
+    while IFS=$'\t' read -r case_name benchmark_name actual_reliability; do
+      [[ -z "$case_name" && -z "$benchmark_name" ]] && continue
+      append_issue "curve-reliability-mismatch" "$label" "curve manifest row reliability does not match the handoff reliability" \
+        "$(jq -n --arg path "$path" --arg case "$case_name" --arg benchmarkName "$benchmark_name" --arg expected "$expected_reliability" --arg actual "$actual_reliability" '{path:$path,case:$case,benchmarkName:$benchmarkName,expectedReliability:$expected,actualReliability:$actual}')"
+    done <<<"$reliability_mismatches"
+  fi
+
   local missing_payloads
   missing_payloads="$(jq -r -s --argjson expected "$curve_payloads_json" '
     ([.[] | (.payloadSize // empty | tonumber)] | unique) as $actual
@@ -557,6 +576,20 @@ check_contention_manifest() {
   check_path "$path" "$label"
   if [[ ! -s "$path" ]]; then
     return
+  fi
+
+  if [[ -n "$expected_reliability" ]]; then
+    local reliability_mismatches
+    reliability_mismatches="$(jq -r -s --arg expected "$expected_reliability" '
+      .[]
+      | select((.reliability // "") != $expected)
+      | [(.case // ""), (.benchmarkName // ""), (.reliability // "")] | @tsv
+    ' "$path")"
+    while IFS=$'\t' read -r case_name benchmark_name actual_reliability; do
+      [[ -z "$case_name" && -z "$benchmark_name" ]] && continue
+      append_issue "contention-reliability-mismatch" "$label" "contention manifest row reliability does not match the handoff reliability" \
+        "$(jq -n --arg path "$path" --arg case "$case_name" --arg benchmarkName "$benchmark_name" --arg expected "$expected_reliability" --arg actual "$actual_reliability" '{path:$path,case:$case,benchmarkName:$benchmarkName,expectedReliability:$expected,actualReliability:$actual}')"
+    done <<<"$reliability_mismatches"
   fi
 
   local missing_scenarios
@@ -750,6 +783,7 @@ jq -n \
   --argjson requiredResourcePackIntervalsMillis "$required_resource_pack_intervals_millis_json" \
   --argjson requiredDisappearanceModes "$required_disappearance_modes_json" \
   --argjson expectedContentionClients "$expected_contention_clients" \
+  --arg expectedReliability "$expected_reliability" \
   --argjson expectedPerClientMbps "$expected_per_client_mbps" \
   --argjson expectedImmediatePerClientMbps "$expected_immediate_per_client_mbps" \
   --argjson expectedMtu "$expected_mtu_json" \
@@ -797,6 +831,7 @@ jq -n \
     requiredResourcePackIntervalsMillis: $requiredResourcePackIntervalsMillis,
     requiredDisappearanceModes: $requiredDisappearanceModes,
     expectedContentionClients: $expectedContentionClients,
+    expectedReliability: $expectedReliability,
     expectedPerClientMbps: $expectedPerClientMbps,
     expectedImmediatePerClientMbps: $expectedImmediatePerClientMbps,
     expectedMtu: $expectedMtu,
@@ -829,6 +864,7 @@ jq -n \
   echo "- Actual perfect curve rows: \`$(jq -r '.actualPerfectCurveRows' "$check_json")\`"
   echo "- Actual perfect raised curve rows: \`$(jq -r '.actualPerfectRaisedCurveRows' "$check_json")\`"
   echo "- Actual perfect contention rows: \`$(jq -r '.actualPerfectContentionRows' "$check_json")\`"
+  echo "- Expected reliability: \`$(jq -r '.expectedReliability' "$check_json")\`"
   echo "- Expected contention clients: \`$(jq -r '.expectedContentionClients' "$check_json")\`"
   echo "- Expected per-client Mbps: \`$(jq -r '.expectedPerClientMbps' "$check_json")\`"
   echo "- Required batch intervals ms: \`$required_batch_intervals_ms\`"

@@ -386,6 +386,7 @@ public class BenchmarkKitTests {
                 "--server-host", "127.0.0.1",
                 "--clients", "4",
                 "--cases", "resource-pack,batched,disappear-blackhole",
+                "--reliability", "reliable",
                 "--resource-pack-chunk-sizes", "8192,262144",
                 "--resource-pack-interval", "200ms",
                 "--batch-intervals", "20ms",
@@ -404,6 +405,7 @@ public class BenchmarkKitTests {
 
         List<String> manifest = Files.readAllLines(plan.resolve("manifest.jsonl"), StandardCharsets.UTF_8);
         Assertions.assertEquals(4, manifest.size());
+        Assertions.assertTrue(manifest.stream().allMatch(row -> row.contains("\"reliability\":\"reliable\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"benchmarkName\":\"batched-game-traffic\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"benchmarkName\":\"batched-game-traffic\"")
                 && row.contains("\"batchIntervalMillis\":20")
@@ -429,6 +431,7 @@ public class BenchmarkKitTests {
 
         String serverCommands = Files.readString(plan.resolve("server-commands.sh"), StandardCharsets.UTF_8);
         Assertions.assertTrue(serverCommands.contains("batched-game-traffic --role server"));
+        Assertions.assertTrue(serverCommands.contains("--reliability reliable"));
         Assertions.assertTrue(serverCommands.contains("--batch-interval 20ms --logical-packets-per-batch 8"));
         Assertions.assertTrue(serverCommands.contains("resource-pack-transfer --role server"));
         Assertions.assertTrue(serverCommands.contains("--chunk-size 8192 --chunk-interval 200ms"));
@@ -502,6 +505,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("Production evidence SHA-256: `"));
         Assertions.assertTrue(readme.contains("Production source audit: `" + sourceAudit + "`"));
         Assertions.assertTrue(readme.contains("Production source audit SHA-256: `"));
+        Assertions.assertTrue(readme.contains("Reliability: `reliable_ordered`"));
         Assertions.assertTrue(readme.contains("--handoff-manifest \"" + handoff.resolve("handoff-manifest.json") + "\""));
 
         JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
@@ -565,6 +569,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(262144, handoffManifest.path("resourcePackChunkSizes").get(1).asInt());
         Assertions.assertEquals("200ms", handoffManifest.path("resourcePackInterval").asText());
         Assertions.assertEquals(64, handoffManifest.path("contentionPayloadSize").asInt());
+        Assertions.assertEquals("reliable_ordered", handoffManifest.path("reliability").asText());
         Assertions.assertEquals(1.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(256, handoffManifest.path("immediatePayloadSize").asInt());
         Assertions.assertEquals(1.0D, handoffManifest.path("immediatePerClientMbps").asDouble(), 0.001D);
@@ -586,14 +591,20 @@ public class BenchmarkKitTests {
         List<String> defaultCurveRows = Files.readAllLines(handoff.resolve("perfect-plan/curve-plan/manifest.jsonl"),
                 StandardCharsets.UTF_8);
         Assertions.assertEquals(56, defaultCurveRows.size());
+        Assertions.assertTrue(defaultCurveRows.stream().allMatch(row -> row.contains("\"reliability\":\"reliable_ordered\"")));
         Assertions.assertTrue(defaultCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":64")));
         Assertions.assertTrue(defaultCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")));
 
         List<String> raisedCurveRows = Files.readAllLines(handoff.resolve("perfect-plan/curve-raised-plan/manifest.jsonl"),
                 StandardCharsets.UTF_8);
         Assertions.assertEquals(56, raisedCurveRows.size());
+        Assertions.assertTrue(raisedCurveRows.stream().allMatch(row -> row.contains("\"reliability\":\"reliable_ordered\"")));
         Assertions.assertTrue(raisedCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":64")));
         Assertions.assertTrue(raisedCurveRows.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")));
+
+        List<String> contentionRows = Files.readAllLines(handoff.resolve("perfect-plan/contention-plan/manifest.jsonl"),
+                StandardCharsets.UTF_8);
+        Assertions.assertTrue(contentionRows.stream().allMatch(row -> row.contains("\"reliability\":\"reliable_ordered\"")));
 
         Path defaultHandoffPreflight = output.resolve("handoff-preflight-default");
         ProcessResult defaultHandoffCheck = runProcess(root, Duration.ofSeconds(20),
@@ -609,6 +620,7 @@ public class BenchmarkKitTests {
         Assertions.assertFalse(defaultHandoffCheckJson.path("ready").asBoolean());
         Assertions.assertEquals(500, defaultHandoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, defaultHandoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals("reliable_ordered", defaultHandoffCheckJson.path("expectedReliability").asText());
         Assertions.assertTrue(defaultHandoffCheckJson.findValuesAsText("code")
                 .contains("handoff-contention-clients-below-threshold"));
         Assertions.assertTrue(defaultHandoffCheckJson.findValuesAsText("code")
@@ -635,6 +647,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(1, handoffCheckJson.path("actualPerfectContentionRows").asInt());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedProfiles").size());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedContentionClients").asInt());
+        Assertions.assertEquals("reliable_ordered", handoffCheckJson.path("expectedReliability").asText());
         Assertions.assertEquals(1.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(1500, handoffCheckJson.path("expectedMtu").asInt());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedMinCpus").asInt());
@@ -746,10 +759,52 @@ public class BenchmarkKitTests {
                 .contains("handoff-missing-production-evidence"));
         Files.writeString(handoffManifestPath, originalHandoffManifest, StandardCharsets.UTF_8);
 
+        Path curveManifest = handoff.resolve("perfect-plan/curve-plan/manifest.jsonl");
+        String originalCurveManifest = Files.readString(curveManifest, StandardCharsets.UTF_8);
+        Files.writeString(curveManifest,
+                originalCurveManifest.replaceFirst("\"reliability\":\"reliable_ordered\"",
+                        "\"reliability\":\"unreliable\""),
+                StandardCharsets.UTF_8);
+        ProcessResult curveReliabilityCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-curve-reliability-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
+        );
+        Assertions.assertEquals(1, curveReliabilityCheck.exitCode, curveReliabilityCheck.output);
+        JsonNode curveReliabilityCheckJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-curve-reliability-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(curveReliabilityCheckJson.findValuesAsText("code")
+                .contains("curve-reliability-mismatch"));
+        Files.writeString(curveManifest, originalCurveManifest, StandardCharsets.UTF_8);
+
         Path contentionManifest = handoff.resolve("perfect-plan/contention-plan/manifest.jsonl");
+        String originalContentionManifest = Files.readString(contentionManifest, StandardCharsets.UTF_8);
         Files.writeString(contentionManifest,
-                Files.readString(contentionManifest, StandardCharsets.UTF_8)
-                        .replaceFirst("\"clients\":2", "\"clients\":1"),
+                originalContentionManifest.replaceFirst("\"reliability\":\"reliable_ordered\"",
+                        "\"reliability\":\"unreliable\""),
+                StandardCharsets.UTF_8);
+        ProcessResult contentionReliabilityCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-contention-reliability-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
+        );
+        Assertions.assertEquals(1, contentionReliabilityCheck.exitCode, contentionReliabilityCheck.output);
+        JsonNode contentionReliabilityCheckJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-contention-reliability-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(contentionReliabilityCheckJson.findValuesAsText("code")
+                .contains("contention-reliability-mismatch"));
+        Files.writeString(contentionManifest, originalContentionManifest, StandardCharsets.UTF_8);
+
+        Files.writeString(contentionManifest,
+                originalContentionManifest.replaceFirst("\"clients\":2", "\"clients\":1"),
                 StandardCharsets.UTF_8);
         ProcessResult tamperedHandoffCheck = runProcess(root, Duration.ofSeconds(20),
                 "bash",
@@ -765,6 +820,7 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8));
         Assertions.assertTrue(tamperedHandoffCheckJson.findValuesAsText("code")
                 .contains("contention-client-count-mismatch"));
+        Files.writeString(contentionManifest, originalContentionManifest, StandardCharsets.UTF_8);
 
         ProcessResult freshness = runProcess(root, Duration.ofSeconds(10),
                 "bash",
@@ -837,6 +893,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(sourceAuditJson.path("networkDirtyTrackedFiles").asBoolean(),
                 handoffManifest.path("sourceAudit").path("networkDirtyTrackedFiles").asBoolean());
         Assertions.assertEquals(500, handoffManifest.path("contentionClientTotal").asInt());
+        Assertions.assertEquals("reliable_ordered", handoffManifest.path("reliability").asText());
         Assertions.assertEquals(5.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
 
         JsonNode preflightJson = JSON.readTree(Files.readString(preflight, StandardCharsets.UTF_8));
@@ -844,6 +901,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, preflightJson.path("issueCount").asInt());
         Assertions.assertTrue(preflightJson.path("requireSourceAudit").asBoolean());
         Assertions.assertTrue(preflightJson.path("requireCurrentRevision").asBoolean());
+        Assertions.assertEquals("reliable_ordered", preflightJson.path("expectedReliability").asText());
         Assertions.assertEquals(sourceAuditJson.path("networkRevision").asText(),
                 preflightJson.path("currentNetworkRevision").asText());
         Assertions.assertTrue(preflightJson.path("sourceAuditActualReady").asBoolean());
@@ -904,6 +962,7 @@ public class BenchmarkKitTests {
         JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
                 StandardCharsets.UTF_8));
         Assertions.assertEquals(500, handoffManifest.path("contentionClientTotal").asInt());
+        Assertions.assertEquals("reliable_ordered", handoffManifest.path("reliability").asText());
         Assertions.assertEquals(5.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(6, handoffManifest.path("contentionCases").size());
         Assertions.assertTrue(handoffManifest.path("contentionCases").toString().contains("\"immediate\""));
@@ -925,6 +984,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(handoffCheckJson.path("ready").asBoolean());
         Assertions.assertEquals(0, handoffCheckJson.path("issueCount").asInt());
         Assertions.assertEquals(500, handoffCheckJson.path("expectedContentionClients").asInt());
+        Assertions.assertEquals("reliable_ordered", handoffCheckJson.path("expectedReliability").asText());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(500, handoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);

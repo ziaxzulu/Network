@@ -488,10 +488,11 @@ for payload in "${payload_array[@]}"; do
     echo "benchmark/scripts/merge-worker-results.sh --server \"\$SERVER_OUT/$run_id\" ${merge_args[*]} --out \"\$MERGED_OUT/$run_id\" --case \"$case_group\" --benchmark-name \"$benchmark_name\"" >>"$merge_script"
     echo "cat \"\$MERGED_OUT/$run_id/suite-aggregate.jsonl\" >>\"\$MERGED_OUT/suite-aggregate.jsonl\"" >>"$merge_script"
 
-    printf '{"case":"%s","benchmarkName":"%s","runId":"%s","payloadSize":%s,"rateMbps":"%s","clients":%s,"configuredMaxQueuedBytes":%s,"startAtEpochMillis":%s,"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
+    printf '{"case":"%s","benchmarkName":"%s","runId":"%s","reliability":"%s","payloadSize":%s,"rateMbps":"%s","clients":%s,"configuredMaxQueuedBytes":%s,"startAtEpochMillis":%s,"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
       "$(json_escape "$case_group")" \
       "$(json_escape "$benchmark_name")" \
       "$(json_escape "$run_id")" \
+      "$(json_escape "$reliability")" \
       "$payload" \
       "$(json_escape "$rate")" \
       "$clients" \
@@ -521,6 +522,7 @@ chmod +x "$server_script" "$merge_script"
   echo "- Artifact root: \`$artifact_root\`"
   echo "- Server host for receiver scripts: \`$server_host\`"
   echo "- Clients: \`$clients\`"
+  echo "- Reliability: \`$reliability\`"
   echo "- Payload sizes: \`$payload_sizes\`"
   echo "- Rates Mbps: \`$rates_mbps\`"
   echo "- Warmup: \`$warmup\`"

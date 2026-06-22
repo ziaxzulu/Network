@@ -220,6 +220,7 @@ Before promotion, the lab output must include:
 - merged `suite-aggregate.jsonl`
 - selected `bandwidth-capacity.*` rows
 - passing `validation.json`
+- matching handoff and plan-manifest reliability metadata
 
 Promote only after validation passes:
 

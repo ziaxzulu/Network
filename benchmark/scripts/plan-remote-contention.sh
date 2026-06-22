@@ -823,10 +823,11 @@ for selected_case in "${case_array[@]}"; do
   echo "benchmark/scripts/merge-worker-results.sh --server \"\$SERVER_OUT/$run_id\" ${merge_args[*]} --out \"\$MERGED_OUT/$run_id\" --case \"$case_name\" --benchmark-name \"$benchmark_name\"" >>"$merge_script"
   echo "cat \"\$MERGED_OUT/$run_id/suite-aggregate.jsonl\" >>\"\$MERGED_OUT/suite-aggregate.jsonl\"" >>"$merge_script"
 
-  printf '{"case":"%s","benchmarkName":"%s","runId":"%s","clients":%s,"payloadSize":%s,"perClientMbps":%s,"batchIntervalMillis":%s,"logicalPacketsPerBatch":%s,"batchGroups":%s,"configuredMaxQueuedBytes":%s,"affectedKind":"%s","affectedClients":%s,"disappearanceMode":%s,"warmupMillis":%s,"durationMillis":%s,"disappearAfterMillis":%s,"startAtEpochMillis":%s,"blackholeAtEpochMillis":%s,"receiverDistribution":[%s],"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
+  printf '{"case":"%s","benchmarkName":"%s","runId":"%s","reliability":"%s","clients":%s,"payloadSize":%s,"perClientMbps":%s,"batchIntervalMillis":%s,"logicalPacketsPerBatch":%s,"batchGroups":%s,"configuredMaxQueuedBytes":%s,"affectedKind":"%s","affectedClients":%s,"disappearanceMode":%s,"warmupMillis":%s,"durationMillis":%s,"disappearAfterMillis":%s,"startAtEpochMillis":%s,"blackholeAtEpochMillis":%s,"receiverDistribution":[%s],"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
     "$(json_escape "$case_name")" \
     "$(json_escape "$benchmark_name")" \
     "$(json_escape "$run_id")" \
+    "$(json_escape "$reliability")" \
     "$clients" \
     "$manifest_payload_size" \
     "$manifest_per_client_mbps" \
@@ -857,6 +858,7 @@ chmod +x "$server_script" "$merge_script"
   echo "- Artifact root: \`$artifact_root\`"
   echo "- Server host for receiver scripts: \`$server_host\`"
   echo "- Clients: \`$clients\`"
+  echo "- Reliability: \`$reliability\`"
   echo "- Receivers: \`$(IFS=,; echo "${receivers[*]}")\`"
   echo "- Cases: \`$(IFS=,; echo "${case_array[*]}")\`"
   echo "- Payload size: \`$payload_size\`"
