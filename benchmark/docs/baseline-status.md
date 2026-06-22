@@ -247,6 +247,14 @@ The generated plan schedules:
 
 Fresh structural handoff audits should pass `check-lab-handoff.sh --require-source-audit --require-current-revision` with `ready=true` and `0` issues. The expected generated shape is `56` default-limiter curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, at least `3` measured iterations, and five impairment profiles (`perfect`, `near-loss`, `regional-loss`, `poor`, `severe`) each with the same `56/56/9` row shape. The perfect contention plan includes `lab-perfect-contention-immediate-500x1-p256` at payload `256` and `1Mbps` per client, plus the main `5Mbps` fanout, fairness, blackhole disappearance, batched, and resource-pack rows.
 
+Latest current-revision structural handoff artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-fresh-handoff-20260622T100153Z/
+```
+
+This was generated from Network revision `3e8cfeb8a7de` with placeholder local host values (`127.0.0.1`, `lo`) to prove the source-audit, planner, preflight, and freshness-check structure from the current checkout. `fresh-handoff-summary.json` reported `ready=true`, `issueCount=0`, `sourceAuditIssueCount=0`, `handoffIssueCount=0`, no dirty tracked Network files, and the expected `56` default curve, `56` raised-limiter curve, and `9` contention rows for the perfect-network plan. The impairment campaign contained `perfect`, `near-loss`, `regional-loss`, `poor`, and `severe` profiles, each with the same `56/56/9` row shape. The refreshed source audit was also `ready=true` with `0` issues and confirmed Geyser, Cloudburst Protocol, Cloudburst Nukkit, private CubeCraft, and TeamZiax eBPF checkouts were available.
+
 Older generated handoffs are intentionally not reusable after source or plan commits. Rerunning `check-lab-handoff.sh --require-source-audit --require-current-revision` against an older generated handoff can report `not-ready` with `handoff-source-audit-revision-mismatch` or `handoff-source-audit-sha-mismatch`, because the handoff embeds the source-audit revision and fingerprint from the checkout that created it. This is expected and useful. Before lab operators distribute commands, rerun `prepare-fresh-lab-handoff.sh` from the current checkout so source evidence, handoff generation, required preflight, freshness checks, and `fresh-handoff-summary.json` are produced together.
 
 Local placeholder host values (`127.0.0.1`, `lo`) prove planner/preflight structure only. They are not reusable lab execution handoffs, not separate-host line-rate evidence, and do not replace the lab baseline run.
