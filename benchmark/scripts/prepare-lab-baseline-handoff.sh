@@ -670,6 +670,18 @@ checks shortly before execution, then follow each generated plan README.
 11. Copy every profile's receiver artifacts, prereq reports, and \`netem/\` evidence back under \`$impairment_artifacts\`.
 12. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
 
+## Optional TeamZiax VM/eBPF Companion Evidence
+
+If packet captures were taken during the lab campaign and the private
+\`teamziax/bedrock-ebpf-filter\` repository is available, replay those captures
+through its VM harness after the RakNet baseline artifacts are complete. Store
+the output under \`$artifact_root/companion/teamziax-ebpf/\` and reference it
+from topology notes. This companion evidence validates eBPF packet-filter and
+capture-replay behavior; it does not replace the active established RakNet
+worker results used for baseline promotion. See
+\`benchmark/docs/teamziax-vm-bench.md\` for the artifact layout and replay
+commands.
+
 ## Promote Baselines
 
 \`\`\`bash

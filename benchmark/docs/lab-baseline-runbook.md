@@ -25,6 +25,8 @@ The TeamZiax Bedrock eBPF filter repository has a useful VM benchmark pattern fo
 
 Do not copy the eBPF benchmark workload directly into this baseline. Its PCAP/XDP replay path measures packet-filter behavior, while this benchmark baseline must use active established RakNet server and receiver workers so ACK/NACK, retransmit, queue, fairness, disappearance, and probe-latency behavior come from real connected sessions.
 
+When lab captures exist, use the TeamZiax VM/eBPF bench as optional companion evidence rather than as the baseline itself. The recommended artifact layout, replay commands, and evidence checklist are in [`teamziax-vm-bench.md`](teamziax-vm-bench.md).
+
 ## Host Capture
 
 Capture host state before each baseline or candidate suite. Run this on every server and receiver host:
