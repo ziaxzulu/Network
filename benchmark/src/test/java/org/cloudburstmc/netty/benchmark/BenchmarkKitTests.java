@@ -1322,6 +1322,12 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, summaryJson.path("issueCount").asInt());
         Assertions.assertEquals(0, summaryJson.path("sourceAuditIssueCount").asInt());
         Assertions.assertEquals(0, summaryJson.path("handoffIssueCount").asInt());
+        Assertions.assertEquals(sourceAuditJson.path("evidenceDocument").path("document").asText(),
+                summaryJson.path("productionEvidence").path("document").asText());
+        Assertions.assertEquals(sourceAuditJson.path("evidenceDocument").path("sha256").asText(),
+                summaryJson.path("productionEvidence").path("sha256").asText());
+        Assertions.assertEquals(preflightJson.path("sourceAuditActualSha256").asText(),
+                summaryJson.path("sourceAudit").path("sha256").asText());
         Assertions.assertEquals(56, summaryJson.path("plannedRows").path("perfectCurve").asInt());
         Assertions.assertEquals(56, summaryJson.path("plannedRows").path("perfectRaisedCurve").asInt());
         Assertions.assertEquals(9, summaryJson.path("plannedRows").path("perfectContention").asInt());
@@ -1332,6 +1338,10 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, summaryJson.path("sourceAudit").path("issueCount").asInt());
         Assertions.assertEquals(2, summaryJson.path("sourceAudit").path("requiredSources").size());
         Assertions.assertTrue(summaryJson.path("sourceAudit").path("sourceCount").asInt() >= 2);
+        Assertions.assertEquals(sourceAuditJson.path("evidenceDocument").path("document").asText(),
+                summaryJson.path("sourceAudit").path("evidenceDocument").path("document").asText());
+        Assertions.assertEquals(sourceAuditJson.path("evidenceDocument").path("sha256").asText(),
+                summaryJson.path("sourceAudit").path("evidenceDocument").path("sha256").asText());
         JsonNode summarySources = summaryJson.path("sourceAudit").path("sources");
         Assertions.assertTrue(summarySources.isArray());
         Assertions.assertTrue(findSource(summaryJson.path("sourceAudit"), "geyser").path("required").asBoolean());

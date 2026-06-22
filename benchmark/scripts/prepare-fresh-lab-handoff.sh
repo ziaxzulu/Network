@@ -231,6 +231,19 @@ jq -n \
       ),
       sourceAuditIssueCount: ($sourceAudit.issueCount // null),
       handoffIssueCount: ($preflight.issueCount // null),
+      productionEvidence: {
+        document: (
+          $preflight.productionEvidence.document //
+          $sourceAudit.evidenceDocument.document //
+          ""
+        ),
+        sha256: (
+          $preflight.productionEvidenceActualSha256 //
+          $preflight.productionEvidence.sha256 //
+          $sourceAudit.evidenceDocument.sha256 //
+          ""
+        )
+      },
       plannedRows: {
         perfectCurve: ($preflight.actualPerfectCurveRows // null),
         perfectRaisedCurve: ($preflight.actualPerfectRaisedCurveRows // null),
@@ -266,6 +279,11 @@ jq -n \
       artifactRoot: $artifactRoot,
       sourceAudit: {
         path: $sourceAuditPath,
+        sha256: (
+          $preflight.sourceAuditActualSha256 //
+          $preflight.sourceAudit.sha256 //
+          ""
+        ),
         ready: ($sourceAudit.ready == true),
         issueCount: ($sourceAudit.issueCount // null),
         networkRevision: ($sourceAudit.networkRevision // ""),
@@ -279,6 +297,19 @@ jq -n \
         ),
         requiredSources: ($sourceAudit.requiredSources // []),
         sourceCount: (($sourceAudit.sources // []) | length),
+        evidenceDocument: {
+          document: (
+            $sourceAudit.evidenceDocument.document //
+            $preflight.productionEvidence.document //
+            ""
+          ),
+          sha256: (
+            $sourceAudit.evidenceDocument.sha256 //
+            $preflight.productionEvidenceActualSha256 //
+            $preflight.productionEvidence.sha256 //
+            ""
+          )
+        },
         sources: (
           ($sourceAudit.requiredSources // []) as $requiredSources |
           ($sourceAudit.sources // []) | map(. as $source | {
