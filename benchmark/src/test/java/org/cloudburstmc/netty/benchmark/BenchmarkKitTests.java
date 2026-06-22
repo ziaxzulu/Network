@@ -300,6 +300,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, result.exitCode, result.output);
         Assertions.assertTrue(Files.exists(handoff.resolve("perfect-plan/check-plan-freshness.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("perfect-plan/merge-all.sh")));
+        Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/check-plan-freshness.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/validate-all.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/summarize-campaign.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/manifest.jsonl")));
@@ -320,6 +321,15 @@ public class BenchmarkKitTests {
         );
         Assertions.assertEquals(0, freshness.exitCode, freshness.output);
         Assertions.assertTrue(freshness.output.contains("result=fresh"));
+
+        ProcessResult impairmentFreshness = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                handoff.resolve("impairment-plan/check-plan-freshness.sh").toString()
+        );
+        Assertions.assertEquals(0, impairmentFreshness.exitCode, impairmentFreshness.output);
+        Assertions.assertTrue(impairmentFreshness.output.contains("==> profile perfect"));
+        Assertions.assertTrue(impairmentFreshness.output.contains("==> profile near-loss"));
+        Assertions.assertTrue(impairmentFreshness.output.contains("result=fresh"));
     }
 
     @Test

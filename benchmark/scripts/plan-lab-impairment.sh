@@ -19,6 +19,7 @@ Generates a host/NIC-level impairment campaign for remote RakNet lab baselines.
 For each selected profile it creates:
   - a complete plan-lab-baseline.sh output directory
   - netem apply/status/clear scripts for the impaired host or namespace
+  - a campaign-level freshness check over every generated profile plan
   - a campaign manifest and README tying qdisc state to benchmark artifacts
 
 Options before --:
@@ -135,6 +136,7 @@ fi
 mkdir -p "$output_root/netem"
 manifest="$output_root/manifest.jsonl"
 readme="$output_root/README.md"
+freshness_script="$output_root/check-plan-freshness.sh"
 validate_all_script="$output_root/validate-all.sh"
 summary_script="$output_root/summarize-campaign.sh"
 : >"$manifest"
@@ -296,6 +298,48 @@ if [[ "${#profile_names[@]}" -eq 0 ]]; then
   exit 2
 fi
 
+cat >"$freshness_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="\${REPO_ROOT:-\$(pwd)}"
+MIN_LEAD_SECONDS="\${MIN_LEAD_SECONDS:-60}"
+MANIFEST="$manifest"
+cd "\$REPO_ROOT"
+
+if ! [[ "\$MIN_LEAD_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "MIN_LEAD_SECONDS must be a non-negative integer" >&2
+  exit 2
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required to check impairment plan freshness" >&2
+  exit 2
+fi
+
+status=0
+while IFS=\$'\t' read -r profile plan; do
+  if [[ -z "\$profile" || -z "\$plan" ]]; then
+    continue
+  fi
+  if [[ "\$plan" != /* ]]; then
+    plan="\$REPO_ROOT/\$plan"
+  fi
+  check="\$plan/check-plan-freshness.sh"
+  echo "==> profile \$profile"
+  if [[ ! -x "\$check" ]]; then
+    echo "missing freshness check: \$check" >&2
+    status=1
+    continue
+  fi
+  if ! MIN_LEAD_SECONDS="\$MIN_LEAD_SECONDS" "\$check"; then
+    status=1
+  fi
+done < <(jq -r '[.profile, .plan] | @tsv' "\$MANIFEST")
+
+exit "\$status"
+EOF
+chmod +x "$freshness_script"
+
 cat >"$validate_all_script" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -366,6 +410,7 @@ EOF
   echo "- Profiles: \`$(IFS=','; echo "${profile_names[*]}")\`"
   echo "- Sudo netem: \`$sudo_netem\`"
   echo "- Manifest: \`$manifest\`"
+  echo "- Freshness check: \`$freshness_script\`"
   echo "- Validate all: \`$validate_all_script\`"
   echo "- Summarize campaign: \`$summary_script\`"
   echo
@@ -379,6 +424,7 @@ EOF
   echo
   echo "## Notes"
   echo
+  echo "- Run \`check-plan-freshness.sh\` shortly before starting the campaign. It runs every generated profile plan's freshness check and fails when any scheduled start timestamp is stale or too close."
   echo "- Use the \`perfect\` profile to clear qdisc state and capture the no-impairment baseline."
   echo "- Each generated netem script writes a timestamped evidence file under \`<profile artifact root>/netem/\`; copy that directory back with the benchmark artifacts."
   echo "- Keep impaired or disappearing clients isolated to the shaped receiver host when exact healthy/affected attribution matters."
@@ -391,5 +437,6 @@ EOF
 echo "Lab impairment plan: $output_root"
 echo "Manifest: $manifest"
 echo "README: $readme"
+echo "Freshness check: $freshness_script"
 echo "Validate all: $validate_all_script"
 echo "Summarize campaign: $summary_script"

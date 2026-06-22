@@ -326,9 +326,10 @@ checks shortly before execution, then follow each generated plan README.
 4. Run the perfect-network curve, raised-curve, and contention worker commands from \`perfect-plan/README.md\`.
 5. Copy receiver artifacts and host captures back under \`$perfect_artifacts\`.
 6. Run \`perfect-plan/merge-all.sh\` from the repository root.
-7. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
-8. Copy every profile's receiver artifacts and \`netem/\` evidence back under \`$impairment_artifacts\`.
-9. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
+7. Run \`impairment-plan/check-plan-freshness.sh\`.
+8. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
+9. Copy every profile's receiver artifacts and \`netem/\` evidence back under \`$impairment_artifacts\`.
+10. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
 
 ## Promote Baselines
 
