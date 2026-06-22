@@ -866,6 +866,27 @@ public class BenchmarkKitTests {
                 .contains("invalid-shell-syntax"));
         Files.writeString(receiverScript, originalReceiverScript, StandardCharsets.UTF_8);
 
+        Files.writeString(receiverScript,
+                originalReceiverScript.replace("--iterations 1 --reliability",
+                        "--iterations 2 --reliability"),
+                StandardCharsets.UTF_8);
+        ProcessResult driftedReceiverCommandCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-receiver-command-drift").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1",
+                "--required-min-iterations", "1"
+        );
+        Assertions.assertEquals(1, driftedReceiverCommandCheck.exitCode, driftedReceiverCommandCheck.output);
+        JsonNode driftedReceiverCommandJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-receiver-command-drift/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(driftedReceiverCommandJson.findValuesAsText("code")
+                .contains("worker-command-mismatch"));
+        Files.writeString(receiverScript, originalReceiverScript, StandardCharsets.UTF_8);
+
         Path impairmentReceiverScript = handoff.resolve("impairment-plan/near-loss-plan/contention-plan/receiver-receiver-a-commands.sh");
         String originalImpairmentReceiverScript = Files.readString(impairmentReceiverScript, StandardCharsets.UTF_8);
         Files.delete(impairmentReceiverScript);

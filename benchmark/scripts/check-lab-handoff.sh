@@ -298,7 +298,10 @@ expected_reliability="$(jq -r '.reliability // ""' "$manifest")"
 expected_curve_rows="$(jq -r '((.curvePayloadSizes // []) | length) * ((.curveRatesMbps // []) | length)' "$manifest")"
 expected_mtu="$(jq -r '.expectedMtu // empty' "$manifest")"
 expected_min_cpus="$(jq -r '.expectedMinCpus // empty' "$manifest")"
+expected_warmup="$(jq -r '.warmup // ""' "$manifest")"
+expected_duration="$(jq -r '.duration // ""' "$manifest")"
 expected_iterations="$(jq -r '.iterations // empty' "$manifest")"
+expected_max_queued_bytes="$(jq -r '.maxQueuedBytes // empty' "$manifest")"
 require_cpu_performance="$(jq -r '.requireCpuPerformance // false' "$manifest")"
 if [[ "$require_cpu_performance" != "true" ]]; then
   require_cpu_performance="false"
@@ -652,6 +655,7 @@ check_worker_plan_scripts() {
   local plan="$2"
   check_path "$plan/server-commands.sh" "$label" true
   check_path "$plan/merge-commands.sh" "$label" true
+  check_worker_command_script "$label" "$plan/server-commands.sh"
 
   local receiver_count=0
   local receiver_script
@@ -659,11 +663,31 @@ check_worker_plan_scripts() {
     [[ -z "$receiver_script" ]] && continue
     receiver_count=$((receiver_count + 1))
     check_path "$receiver_script" "$label" true
+    check_worker_command_script "$label" "$receiver_script"
   done < <(find "$plan" -maxdepth 1 -type f -name 'receiver-*-commands.sh' 2>/dev/null | sort)
 
   if [[ "$receiver_count" -eq 0 ]]; then
     append_issue "missing-receiver-command-script" "$label" "worker plan has no receiver command script" \
       "$(jq -n --arg path "$plan" '{path:$path}')"
+  fi
+}
+
+check_worker_command_script() {
+  local label="$1"
+  local path="$2"
+  [[ -s "$path" ]] || return
+
+  local common_args="--warmup $expected_warmup --duration $expected_duration --iterations $expected_iterations --reliability $expected_reliability"
+  if [[ -n "$expected_warmup" && -n "$expected_duration" && -n "$expected_iterations" && -n "$expected_reliability" ]] \
+      && ! grep -Fq -- "$common_args" "$path"; then
+    append_issue "worker-command-mismatch" "$label" "worker command script does not match handoff warmup, duration, iterations, or reliability" \
+      "$(jq -n --arg path "$path" --arg expected "$common_args" '{path:$path,expectedCommandArgs:$expected}')"
+  fi
+
+  if [[ "$expected_max_queued_bytes" =~ ^[0-9]+$ ]] \
+      && ! grep -Fq -- "--max-queued-bytes $expected_max_queued_bytes" "$path"; then
+    append_issue "worker-command-mismatch" "$label" "worker command script does not match handoff max queued bytes" \
+      "$(jq -n --arg path "$path" --argjson expectedMaxQueuedBytes "$expected_max_queued_bytes" '{path:$path,expectedMaxQueuedBytes:$expectedMaxQueuedBytes}')"
   fi
 }
 
