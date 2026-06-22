@@ -11,6 +11,8 @@ queue_regression_pct="50"
 allow_failed_validation=false
 require_validation=false
 allow_validation_bypasses=false
+allow_missing_retry_pressure_fields=false
+required_retry_pressure_fields="undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond"
 
 usage() {
   cat <<'USAGE'
@@ -28,6 +30,11 @@ Options:
   --require-validation            Fail when either input does not have validation.json.
   --allow-failed-validation       Do not fail when baseline or candidate validation.json exists and is failed.
   --allow-validation-bypasses     Allow validation files that used baseline bypass flags. Smoke only.
+  --allow-missing-retry-pressure-fields
+                                  Allow aggregate rows missing retry-pressure fields. Smoke only.
+  --required-retry-pressure-fields CSV
+                                  Required send-work/retry-pressure metric fields.
+                                  Default: undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond.
   --help                          Show this help.
 
 Suite directories prefer suite-aggregate.jsonl when present, falling back to
@@ -77,6 +84,14 @@ while [[ $# -gt 0 ]]; do
     --allow-validation-bypasses)
       allow_validation_bypasses=true
       shift
+      ;;
+    --allow-missing-retry-pressure-fields)
+      allow_missing_retry_pressure_fields=true
+      shift
+      ;;
+    --required-retry-pressure-fields)
+      required_retry_pressure_fields="$2"
+      shift 2
       ;;
     --require-validation)
       require_validation=true
@@ -155,6 +170,12 @@ baseline_summary="$(resolve_summary "$baseline_path")"
 candidate_summary="$(resolve_summary "$candidate_path")"
 baseline_validation="$(resolve_validation "$baseline_path" "$baseline_summary")"
 candidate_validation="$(resolve_validation "$candidate_path" "$candidate_summary")"
+required_retry_pressure_fields_json="$(jq -cn --arg fields "$required_retry_pressure_fields" '
+  $fields
+  | split(",")
+  | map(gsub("^\\s+|\\s+$"; ""))
+  | map(select(length > 0))
+')"
 
 validation_failures=()
 validation_missing=()
@@ -192,6 +213,29 @@ for label_and_path in "baseline:$baseline_validation" "candidate:$candidate_vali
     validation_bypasses+=("$label:$validation_path:$validation_bypass_flags")
   fi
 done
+
+retry_pressure_field_failures=()
+if [[ "$allow_missing_retry_pressure_fields" != "true" ]]; then
+  for label_and_path in "baseline:$baseline_summary" "candidate:$candidate_summary"; do
+    label="${label_and_path%%:*}"
+    summary_path="${label_and_path#*:}"
+    while IFS=$'\t' read -r case_name benchmark_name iteration_name field_name; do
+      [[ -z "$field_name" ]] && continue
+      retry_pressure_field_failures+=("$label:$summary_path:$case_name:$benchmark_name:$iteration_name:$field_name")
+    done < <(jq -r -s --argjson expected "$required_retry_pressure_fields_json" '
+      to_entries[] as $entry
+      | $entry.value as $row
+      | $expected[] as $field
+      | select(($row | has($field)) | not)
+      | [
+          ($row.case // ""),
+          ($row.benchmarkName // ""),
+          (($row.iteration // "aggregate") | tostring),
+          $field
+        ] | @tsv
+    ' "$summary_path")
+  done
+fi
 
 tmp_jsonl=""
 jsonl_retention_note=""
@@ -433,6 +477,7 @@ validation_bypass_rows="${#validation_bypasses[@]}"
 if [[ "$allow_validation_bypasses" == "true" ]]; then
   validation_bypass_rows=0
 fi
+retry_pressure_field_rows="${#retry_pressure_field_failures[@]}"
 
 write_report() {
   {
@@ -459,6 +504,8 @@ write_report() {
     echo "- Require validation: \`$require_validation\`"
     echo "- Allow failed validation: \`$allow_failed_validation\`"
     echo "- Allow validation bypasses: \`$allow_validation_bypasses\`"
+    echo "- Allow missing retry-pressure fields: \`$allow_missing_retry_pressure_fields\`"
+    echo "- Required retry-pressure fields: \`$required_retry_pressure_fields\`"
     echo
     echo "| Result | Count |"
     echo "| --- | ---: |"
@@ -470,6 +517,7 @@ write_report() {
     echo "| Failed validation inputs | ${#validation_failures[@]} |"
     echo "| Missing validation inputs | ${#validation_missing[@]} |"
     echo "| Validation bypass inputs | ${#validation_bypasses[@]} |"
+    echo "| Missing retry-pressure fields | ${#retry_pressure_field_failures[@]} |"
     echo
     if [[ "${#validation_missing[@]}" -gt 0 ]]; then
       echo "## Missing Validation"
@@ -504,6 +552,26 @@ write_report() {
         bypass_path="${bypass_rest%:*}"
         bypass_flags="${bypass_rest##*:}"
         echo "| $bypass_label | \`$bypass_path\` | \`$bypass_flags\` |"
+      done
+      echo
+    fi
+    if [[ "${#retry_pressure_field_failures[@]}" -gt 0 ]]; then
+      echo "## Missing Retry-Pressure Fields"
+      echo
+      echo "| Input | Summary | Case | Scenario | Iteration | Field |"
+      echo "| --- | --- | --- | --- | --- | --- |"
+      for failure in "${retry_pressure_field_failures[@]}"; do
+        failure_label="${failure%%:*}"
+        failure_rest="${failure#*:}"
+        failure_summary="${failure_rest%%:*}"
+        failure_rest="${failure_rest#*:}"
+        failure_case="${failure_rest%%:*}"
+        failure_rest="${failure_rest#*:}"
+        failure_benchmark="${failure_rest%%:*}"
+        failure_rest="${failure_rest#*:}"
+        failure_iteration="${failure_rest%%:*}"
+        failure_field="${failure_rest#*:}"
+        echo "| $failure_label | \`$failure_summary\` | \`$failure_case\` | \`$failure_benchmark\` | \`$failure_iteration\` | \`$failure_field\` |"
       done
       echo
     fi
@@ -575,8 +643,8 @@ write_report() {
       echo "| $status | $case_name | $scenario | $impairment | $batch_shape | $iteration | $iterations | $delivered | $delivered_delta | $healthy_delta | $affected_delta | $undelivered_delta | $affected_undelivered_delta | $client_p50 | $client_p50_delta | $client_p99 | $client_p99_delta | $send_ratio | $send_ratio_delta | $affected_send_ratio_delta | $datagram_out_s | $datagram_out_s_delta | $affected_datagram_out_s_delta | $stale_s_delta | $nack_out_s_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $healthy_fairness_delta | $affected_fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
     done
     echo
-    if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 || "$validation_missing_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then
-      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $validation_failure_rows failed validation input(s), $validation_missing_rows missing validation input(s), $validation_bypass_rows validation bypass input(s)."
+    if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 || "$validation_missing_rows" -gt 0 || "$validation_bypass_rows" -gt 0 || "$retry_pressure_field_rows" -gt 0 ]]; then
+      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $validation_failure_rows failed validation input(s), $validation_missing_rows missing validation input(s), $validation_bypass_rows validation bypass input(s), $retry_pressure_field_rows missing retry-pressure field(s)."
     else
       echo "Comparison passed."
     fi
@@ -592,6 +660,6 @@ else
   write_report
 fi
 
-if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 || "$validation_missing_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then
+if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 || "$validation_missing_rows" -gt 0 || "$validation_bypass_rows" -gt 0 || "$retry_pressure_field_rows" -gt 0 ]]; then
   exit 1
 fi

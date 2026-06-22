@@ -1162,6 +1162,47 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testComparisonRejectsMissingRetryPressureFields() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-compare-retry-fields-test");
+        Path baseline = output.resolve("baseline");
+        Path candidate = output.resolve("candidate");
+        writeComparableSuite(baseline, false);
+        writeComparableSuite(candidate, false);
+        Files.writeString(candidate.resolve("suite-aggregate.jsonl"),
+                Files.readString(candidate.resolve("suite-aggregate.jsonl"), StandardCharsets.UTF_8)
+                        .replace(",\"affectedServerDatagramsOutPerSecond\":0", ""),
+                StandardCharsets.UTF_8);
+
+        ProcessResult rejectedComparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-baseline-suite.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("comparison.md").toString()
+        );
+        Assertions.assertEquals(1, rejectedComparison.exitCode, rejectedComparison.output);
+        String rejectedReport = Files.readString(output.resolve("comparison.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(rejectedReport.contains("| Missing retry-pressure fields | 1 |"));
+        Assertions.assertTrue(rejectedReport.contains("affectedServerDatagramsOutPerSecond"));
+        Assertions.assertTrue(rejectedReport.contains("1 missing retry-pressure field(s)"));
+
+        ProcessResult smokeComparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-baseline-suite.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("comparison-smoke.md").toString(),
+                "--allow-missing-retry-pressure-fields"
+        );
+        Assertions.assertEquals(0, smokeComparison.exitCode, smokeComparison.output);
+        String smokeReport = Files.readString(output.resolve("comparison-smoke.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(smokeReport.contains("- Allow missing retry-pressure fields: `true`"));
+        Assertions.assertTrue(smokeReport.contains("Comparison passed."));
+    }
+
+    @Test
     public void testComparisonTreatsBatchShapeAsMatrixShape() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -2439,7 +2480,8 @@ public class BenchmarkKitTests {
                         + "\"nackOutPerSecond\":0,"
                         + "\"maxQueuedBytes\":0,"
                         + "\"unstable\":false,"
-                        + "\"unstableReasons\":[],"
+                        + "\"unstableReasons\":[]"
+                        + readinessRetryFieldsJson() + ","
                         + "\"artifact\":\"" + suiteRoot.resolve("fanout") + "\"}\n",
                 StandardCharsets.UTF_8);
         Files.writeString(suiteRoot.resolve("validation.json"),
@@ -2497,7 +2539,8 @@ public class BenchmarkKitTests {
                         + "\"nackOutPerSecond\":0,"
                         + "\"maxQueuedBytes\":0,"
                         + "\"unstable\":false,"
-                        + "\"unstableReasons\":[],"
+                        + "\"unstableReasons\":[]"
+                        + readinessRetryFieldsJson() + ","
                         + "\"artifact\":\"" + suiteRoot.resolve("batch") + "\"}\n",
                 StandardCharsets.UTF_8);
         Files.writeString(suiteRoot.resolve("validation.json"),
