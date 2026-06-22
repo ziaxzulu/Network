@@ -3013,6 +3013,51 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresPackagedPlanningManifests() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-packaged-manifest-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        clearDirectory(labBaseline.resolve("manifests"));
+        Files.delete(impairmentBaseline.resolve("campaign-manifest.jsonl"));
+
+        ProcessResult missingManifests = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missingManifests.exitCode, missingManifests.output);
+        JsonNode readinessJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(readinessJson.path("ready").asBoolean());
+        Assertions.assertEquals(0, readinessJson.path("labBaseline").path("packagedManifestCount").asInt());
+        Assertions.assertFalse(readinessJson.path("impairmentBaseline")
+                .path("packagedCampaignManifestExists").asBoolean());
+        Assertions.assertTrue(readinessJson.findValuesAsText("code")
+                .contains("lab-missing-packaged-manifests"));
+        Assertions.assertTrue(readinessJson.findValuesAsText("code")
+                .contains("impairment-missing-packaged-campaign-manifest"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+    }
+
+    @Test
     public void testResultWriterProducesArtifacts() throws Exception {
         Path output = Files.createTempDirectory("raknet-benchmark-test");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
@@ -3326,6 +3371,19 @@ public class BenchmarkKitTests {
                         + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length
                         + ",\"multi-client-fanout\":2,\"fairness\":1,\"disappearing-clients\":1,"
                         + "\"batched-game-traffic\":3,\"resource-pack-transfer\":2}}\n",
+                StandardCharsets.UTF_8);
+
+        Path manifests = labBaseline.resolve("manifests");
+        clearDirectory(manifests);
+        Files.createDirectories(manifests);
+        Files.writeString(manifests.resolve("01-curve-plan-manifest.jsonl"),
+                "{\"benchmarkName\":\"bandwidth-latency-curve\"}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(manifests.resolve("02-curve-raised-plan-manifest.jsonl"),
+                "{\"benchmarkName\":\"bandwidth-latency-curve\",\"packetLimit\":100000}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(manifests.resolve("03-contention-plan-manifest.jsonl"),
+                "{\"benchmarkName\":\"multi-client-fanout\"}\n",
                 StandardCharsets.UTF_8);
 
         Path hostReports = labBaseline.resolve("host-reports");
@@ -3729,6 +3787,10 @@ public class BenchmarkKitTests {
         Files.createDirectories(impairmentBaseline);
         Files.writeString(impairmentBaseline.resolve("impairment-baseline-manifest.json"),
                 "{\"baselineKind\":\"raknet-lab-impairment-campaign\"}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(impairmentBaseline.resolve("campaign-manifest.jsonl"),
+                "{\"profile\":\"perfect\"}\n{\"profile\":\"near-loss\"}\n"
+                        + "{\"profile\":\"regional-loss\"}\n{\"profile\":\"poor\"}\n{\"profile\":\"severe\"}\n",
                 StandardCharsets.UTF_8);
 
         int[] payloadSizes = includeSplitPayload

@@ -294,6 +294,7 @@ lab_aggregate="$lab_baseline/suite-aggregate.jsonl"
 lab_capacity="$lab_baseline/bandwidth-capacity.jsonl"
 lab_source_audit_json="null"
 lab_handoff_source_audit_json="null"
+lab_packaged_manifest_count="0"
 lab_packaged_host_report_count="0"
 lab_packaged_prereq_summary="$(jq -n '{
   reportCount: 0,
@@ -316,6 +317,9 @@ required_retry_pressure_fields_json="$(csv_json_array "$required_retry_pressure_
 
 if [[ -d "$lab_baseline/host-reports" ]]; then
   lab_packaged_host_report_count="$(find "$lab_baseline/host-reports" -maxdepth 1 -type f -name '*-host-report.md' 2>/dev/null | wc -l | tr -d ' ')"
+fi
+if [[ -d "$lab_baseline/manifests" ]]; then
+  lab_packaged_manifest_count="$(find "$lab_baseline/manifests" -maxdepth 1 -type f -name '*-manifest.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
 fi
 
 lab_packaged_prereq_files=()
@@ -412,6 +416,10 @@ if [[ -s "$lab_validation" ]]; then
   fi
   if ! jq -e '.hostReportCount >= 2' "$lab_validation" >/dev/null; then
     append_issue "lab-missing-host-reports" "lab-baseline" "lab baseline does not include at least two host reports" "{\"path\":\"$lab_validation\"}"
+  fi
+  if (( lab_packaged_manifest_count < 3 )); then
+    extra="$(jq -n --argjson actual "$lab_packaged_manifest_count" '{requiredPackagedManifests:3,actualPackagedManifestCount:$actual}')"
+    append_issue "lab-missing-packaged-manifests" "lab-baseline" "promoted lab baseline package does not contain copied curve, raised-curve, and contention manifests" "$extra"
   fi
   if (( lab_packaged_host_report_count < 2 )); then
     extra="$(jq -n --argjson actual "$lab_packaged_host_report_count" '{requiredPackagedHostReports:2,actualPackagedHostReportCount:$actual}')"
@@ -645,6 +653,8 @@ fi
 
 impairment_manifest="$impairment_baseline/impairment-baseline-manifest.json"
 impairment_summary="$impairment_baseline/impairment-summary.json"
+impairment_campaign_manifest="$impairment_baseline/campaign-manifest.jsonl"
+impairment_packaged_campaign_manifest_exists=false
 impairment_packaged_profiles_json="[]"
 
 if [[ ! -s "$impairment_manifest" ]]; then
@@ -653,8 +663,14 @@ fi
 if [[ ! -s "$impairment_summary" ]]; then
   append_issue "missing-impairment-summary" "impairment-baseline" "promoted impairment baseline summary is missing" "{\"path\":\"$impairment_summary\"}"
 fi
+if [[ -s "$impairment_campaign_manifest" ]]; then
+  impairment_packaged_campaign_manifest_exists=true
+fi
 
 if [[ -s "$impairment_summary" ]]; then
+  if [[ "$impairment_packaged_campaign_manifest_exists" != "true" ]]; then
+    append_issue "impairment-missing-packaged-campaign-manifest" "impairment-baseline" "promoted impairment baseline package is missing its copied campaign manifest" "{\"path\":\"$impairment_campaign_manifest\"}"
+  fi
   while IFS= read -r profile; do
     [[ -z "$profile" ]] && continue
     safe_profile="$(safe_name "$profile")"
@@ -1034,10 +1050,12 @@ jq -n \
   --argjson requiredMinReadyPrereqReports "$required_min_ready_prereq_reports" \
   --argjson requiredMinPrereqDistinctHostnames "$required_min_prereq_distinct_hostnames" \
   --argjson requireSourceAudit "$require_source_audit" \
+  --argjson packagedManifestCount "$lab_packaged_manifest_count" \
   --argjson packagedHostReportCount "$lab_packaged_host_report_count" \
   --argjson packagedPrereq "$lab_packaged_prereq_summary" \
   --argjson labSourceAudit "$lab_source_audit_json" \
   --argjson labHandoffSourceAudit "$lab_handoff_source_audit_json" \
+  --argjson impairmentPackagedCampaignManifestExists "$impairment_packaged_campaign_manifest_exists" \
   --argjson impairmentPackagedProfiles "$impairment_packaged_profiles_json" \
   --argjson issues "$issues_array" \
   --argjson nextActions "$next_actions_json" \
@@ -1049,12 +1067,14 @@ jq -n \
     issueCount: ($issues | length),
     labBaseline: {
       path: $labBaseline,
+      packagedManifestCount: $packagedManifestCount,
       packagedHostReportCount: $packagedHostReportCount,
       packagedPrereq: $packagedPrereq,
       validation: ($labValidation[0] // null)
     },
     impairmentBaseline: {
       path: $impairmentBaseline,
+      packagedCampaignManifestExists: $impairmentPackagedCampaignManifestExists,
       packagedProfiles: $impairmentPackagedProfiles,
       summary: ($impairmentSummary[0] // null)
     },
@@ -1112,6 +1132,7 @@ jq -n \
     echo "- Validation: \`$(jq -r 'if .passed then "passed" else "failed" end' "$lab_validation")\`"
     echo "- Rows: \`$(jq -r '.rowCount // 0' "$lab_validation")\`"
     echo "- Capacity rows: \`$(jq -r '.capacityRowCount // 0' "$lab_validation")\`"
+    echo "- Packaged planning manifests: \`$lab_packaged_manifest_count\`"
     echo "- Host reports: \`$(jq -r '.hostReportCount // 0' "$lab_validation")\`"
     echo "- Packaged host reports: \`$lab_packaged_host_report_count\`"
     echo "- Distinct hostnames: \`$(jq -r '.distinctHostnameCount // 0' "$lab_validation")\`"
@@ -1141,6 +1162,7 @@ jq -n \
     echo "- Aggregate rows: \`$(jq -r '.aggregateRowCount // 0' "$impairment_summary")\`"
     echo "- Capacity rows: \`$(jq -r '.capacityRowCount // 0' "$impairment_summary")\`"
     echo "- Netem status evidence files: \`$(jq -r '.netemStatusEvidenceCount // 0' "$impairment_summary")\`"
+    echo "- Packaged campaign manifest: \`$impairment_packaged_campaign_manifest_exists\`"
     echo "- Packaged profiles: \`$(jq -r 'length' <<<"$impairment_packaged_profiles_json")\`"
     echo "- Packaged profile validations: \`$(jq -r '[.[] | select(.validationExists == true)] | length' <<<"$impairment_packaged_profiles_json")\`"
     echo "- Packaged profile aggregates: \`$(jq -r '[.[] | select(.aggregateExists == true)] | length' <<<"$impairment_packaged_profiles_json")\`"
