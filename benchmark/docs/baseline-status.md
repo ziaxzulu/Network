@@ -37,15 +37,19 @@ For a stronger single-host smoke path, use `benchmark/scripts/run-netns-worker-s
 Latest current-branch smoke artifact in this worktree:
 
 ```text
-benchmark/build/benchmark-results/current-branch-smoke-20260622T050230Z/
+benchmark/build/benchmark-results/current-branch-smoke-20260622T061238Z/
 ```
 
-This historical run completed the smoke profile before the immediate small-packet row was added and produced `9` aggregate rows across best-case, curve, fanout, fairness, stop-reading disappearance, blackhole disappearance, batched game traffic, and resource-pack transfer cases. Current smoke plans schedule `10` rows. Every aggregate row includes the current retry-pressure send-work fields: `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`. Treat it as output-schema and instrumentation proof only; it uses one measured iteration per case and all rows are intentionally marked unstable by the default stability policy:
+This run completed the current smoke profile and produced `10` aggregate rows across best-case, two curve rate points, fanout, immediate small-packet fanout, fairness, stop-reading disappearance, blackhole disappearance, batched game traffic, and resource-pack transfer cases. Every aggregate row includes the current retry-pressure send-work fields: `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`. Treat it as output-schema and instrumentation proof only; it uses one measured iteration per case and all rows are intentionally marked unstable by the default stability policy:
 
-| Case | Delivered Gbps | Undelivered Gbps | Affected undelivered Gbps | Affected datagram out/s | Retry signal |
-| --- | ---: | ---: | ---: | ---: | --- |
-| `disappear-10-blackhole` | `0.001888256` | `0.000207008` | `0.000132144` | `58` | `26` stale datagrams/s |
-| `fairness-10-2poor` | `0.001974272` | `0.000128208` | `0.000061584` | `111` | `10` NACK out/s |
+| Case | Delivered Gbps | p99 RTT ms | Max queue bytes | Undelivered Gbps | Affected undelivered Gbps | Affected datagram out/s | Retry signal |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `immediate-10x0_1-p256` | `0.000997376` | `10.481245` | `273` | `0.000083408` | `0` | `0` | none |
+| `fanout-10x0_2` | `0.001994752` | `9.912738` | `529` | `0.000083504` | `0` | `0` | none |
+| `disappear-10-blackhole` | `0.001892352` | `12.106768` | `10820` | `0.000203104` | `0.000127936` | `57` | `25` stale datagrams/s |
+| `fairness-10-2poor` | `0.001961984` | `476.258398` | `2065` | `0.000158544` | `0.000091920` | `109` | `2` NACK out/s |
+
+The smoke capacity selector did not choose a stable point, which is expected for a one-iteration smoke. Its best observed curve row was `curve-100_0mbps` at `0.097824Gbps`, rejected for `insufficient-iterations`.
 
 Latest local pilot artifact in this worktree:
 
