@@ -11,8 +11,11 @@ allow_disconnects=false
 allow_missing_capacity=false
 allow_unselected_capacity=false
 allow_missing_host_context=false
+allow_missing_prereq_context=false
 min_host_reports="2"
 min_distinct_hostnames="2"
+min_prereq_reports="2"
+min_prereq_distinct_hostnames="2"
 min_healthy_fairness="0"
 max_healthy_send_deliver_ratio="0"
 max_affected_send_deliver_ratio="0"
@@ -41,8 +44,11 @@ Options:
   --allow-missing-capacity         Do not require bandwidth-capacity.jsonl.
   --allow-unselected-capacity      Do not fail capacity rows without a selected stable candidate.
   --allow-missing-host-context     Do not require topology.md and host reports.
+  --allow-missing-prereq-context   Do not require ready host prereq reports.
   --min-host-reports N             Minimum host-report.md files when host context is required. Default: 2.
   --min-distinct-hostnames N        Minimum distinct captured hostnames when host context is required. Default: 2.
+  --min-prereq-reports N           Minimum prereq.json files when prereq context is required. Default: 2.
+  --min-prereq-distinct-hostnames N Minimum distinct prereq hostnames when prereq context is required. Default: 2.
   --min-healthy-fairness N         Fail fairness/disappearance rows below this healthy-client Jain fairness. Default: 0, disabled.
   --max-healthy-send-deliver-ratio N Fail fairness/disappearance rows above this healthy-client send/deliver ratio. Default: 0, disabled.
   --max-affected-send-deliver-ratio N Fail affected-client rows above this send/deliver ratio. Default: 0, disabled.
@@ -99,12 +105,24 @@ while [[ $# -gt 0 ]]; do
       allow_missing_host_context=true
       shift
       ;;
+    --allow-missing-prereq-context)
+      allow_missing_prereq_context=true
+      shift
+      ;;
     --min-host-reports)
       min_host_reports="$2"
       shift 2
       ;;
     --min-distinct-hostnames)
       min_distinct_hostnames="$2"
+      shift 2
+      ;;
+    --min-prereq-reports)
+      min_prereq_reports="$2"
+      shift 2
+      ;;
+    --min-prereq-distinct-hostnames)
+      min_prereq_distinct_hostnames="$2"
       shift 2
       ;;
     --min-healthy-fairness)
@@ -157,6 +175,14 @@ if [[ ! "$min_host_reports" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$min_distinct_hostnames" =~ ^[0-9]+$ ]]; then
   echo "--min-distinct-hostnames must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ ! "$min_prereq_reports" =~ ^[0-9]+$ ]]; then
+  echo "--min-prereq-reports must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ ! "$min_prereq_distinct_hostnames" =~ ^[0-9]+$ ]]; then
+  echo "--min-prereq-distinct-hostnames must be a non-negative integer" >&2
   exit 2
 fi
 if [[ ! "$min_contention_clients" =~ ^[0-9]+$ ]]; then
@@ -238,6 +264,31 @@ hostnames_json="[]"
 if [[ "${#host_report_hostnames[@]}" -gt 0 ]]; then
   distinct_hostname_count="$(printf '%s\n' "${host_report_hostnames[@]}" | sort -u | wc -l | tr -d ' ')"
   hostnames_json="$(printf '%s\n' "${host_report_hostnames[@]}" | sort -u | jq -R -s 'split("\n") | map(select(length > 0))')"
+fi
+prereq_report_count="0"
+ready_prereq_report_count="0"
+not_ready_prereq_report_count="0"
+prereq_report_paths=()
+prereq_report_hostnames=()
+if [[ -d "$artifact_root" ]]; then
+  while IFS= read -r -d '' prereq_report; do
+    prereq_report_paths+=("$prereq_report")
+    hostname="$(jq -r '.hostname // empty' "$prereq_report" 2>/dev/null || true)"
+    if [[ -n "$hostname" ]]; then
+      prereq_report_hostnames+=("$hostname")
+    fi
+    if jq -e '.ready == true' "$prereq_report" >/dev/null 2>&1; then
+      ready_prereq_report_count=$((ready_prereq_report_count + 1))
+    fi
+  done < <(find "$artifact_root" -maxdepth 2 -type f -name prereq.json -print0 2>/dev/null | sort -z)
+  prereq_report_count="${#prereq_report_paths[@]}"
+  not_ready_prereq_report_count=$((prereq_report_count - ready_prereq_report_count))
+fi
+prereq_distinct_hostname_count="0"
+prereq_hostnames_json="[]"
+if [[ "${#prereq_report_hostnames[@]}" -gt 0 ]]; then
+  prereq_distinct_hostname_count="$(printf '%s\n' "${prereq_report_hostnames[@]}" | sort -u | wc -l | tr -d ' ')"
+  prereq_hostnames_json="$(printf '%s\n' "${prereq_report_hostnames[@]}" | sort -u | jq -R -s 'split("\n") | map(select(length > 0))')"
 fi
 if [[ -z "$out_dir" ]]; then
   out_dir="$suite_dir"
@@ -366,11 +417,13 @@ allow_disconnects_json=false
 allow_missing_capacity_json=false
 allow_unselected_capacity_json=false
 allow_missing_host_context_json=false
+allow_missing_prereq_context_json=false
 "$allow_unstable" && allow_unstable_json=true
 "$allow_disconnects" && allow_disconnects_json=true
 "$allow_missing_capacity" && allow_missing_capacity_json=true
 "$allow_unselected_capacity" && allow_unselected_capacity_json=true
 "$allow_missing_host_context" && allow_missing_host_context_json=true
+"$allow_missing_prereq_context" && allow_missing_prereq_context_json=true
 
 jq -n \
   --slurpfile rows "$suite_array" \
@@ -390,6 +443,13 @@ jq -n \
   --argjson hostReportCount "$host_report_count" \
   --argjson distinctHostnameCount "$distinct_hostname_count" \
   --argjson hostnames "$hostnames_json" \
+  --argjson minPrereqReports "$min_prereq_reports" \
+  --argjson minPrereqDistinctHostnames "$min_prereq_distinct_hostnames" \
+  --argjson prereqReportCount "$prereq_report_count" \
+  --argjson readyPrereqReportCount "$ready_prereq_report_count" \
+  --argjson notReadyPrereqReportCount "$not_ready_prereq_report_count" \
+  --argjson prereqDistinctHostnameCount "$prereq_distinct_hostname_count" \
+  --argjson prereqHostnames "$prereq_hostnames_json" \
   --argjson minHealthyFairness "$min_healthy_fairness" \
   --argjson maxHealthySendDeliverRatio "$max_healthy_send_deliver_ratio" \
   --argjson maxAffectedSendDeliverRatio "$max_affected_send_deliver_ratio" \
@@ -401,6 +461,7 @@ jq -n \
   --argjson allowMissingCapacity "$allow_missing_capacity_json" \
   --argjson allowUnselectedCapacity "$allow_unselected_capacity_json" \
   --argjson allowMissingHostContext "$allow_missing_host_context_json" \
+  --argjson allowMissingPrereqContext "$allow_missing_prereq_context_json" \
   --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
   def n($value): ($value // 0) | tonumber;
   def scenario($row):
@@ -479,6 +540,18 @@ jq -n \
       else [] end)
     + (if (($allowMissingHostContext | not) and ($distinctHostnameCount < $minDistinctHostnames)) then
         [issue("missing-distinct-hosts"; "not enough distinct hostnames were captured"; null; {artifactRoot: $artifactRoot, hostnames: $hostnames, distinctHostnameCount: $distinctHostnameCount, minDistinctHostnames: $minDistinctHostnames})]
+      else [] end)
+    + (if (($allowMissingPrereqContext | not) and ($prereqReportCount < $minPrereqReports)) then
+        [issue("missing-prereq-reports"; "not enough host prerequisite reports were captured"; null; {artifactRoot: $artifactRoot, prereqReportCount: $prereqReportCount, minPrereqReports: $minPrereqReports})]
+      else [] end)
+    + (if (($allowMissingPrereqContext | not) and ($readyPrereqReportCount < $minPrereqReports)) then
+        [issue("not-enough-ready-prereq-reports"; "not enough host prerequisite reports were ready"; null; {artifactRoot: $artifactRoot, readyPrereqReportCount: $readyPrereqReportCount, minPrereqReports: $minPrereqReports})]
+      else [] end)
+    + (if (($allowMissingPrereqContext | not) and ($notReadyPrereqReportCount > 0)) then
+        [issue("not-ready-prereq-reports"; "one or more host prerequisite reports were not ready"; null; {artifactRoot: $artifactRoot, notReadyPrereqReportCount: $notReadyPrereqReportCount})]
+      else [] end)
+    + (if (($allowMissingPrereqContext | not) and ($prereqDistinctHostnameCount < $minPrereqDistinctHostnames)) then
+        [issue("missing-prereq-distinct-hosts"; "not enough distinct prerequisite hostnames were captured"; null; {artifactRoot: $artifactRoot, prereqHostnames: $prereqHostnames, prereqDistinctHostnameCount: $prereqDistinctHostnameCount, minPrereqDistinctHostnames: $minPrereqDistinctHostnames})]
       else [] end)
     + (if ($aggregateRows | length) == 0 then
         [issue("missing-suite-aggregate-rows"; "suite-aggregate.jsonl has no rows"; null; {})]
@@ -593,6 +666,13 @@ jq -n \
     distinctHostnameCount: $distinctHostnameCount,
     minDistinctHostnames: $minDistinctHostnames,
     hostnames: $hostnames,
+    prereqReportCount: $prereqReportCount,
+    readyPrereqReportCount: $readyPrereqReportCount,
+    notReadyPrereqReportCount: $notReadyPrereqReportCount,
+    minPrereqReports: $minPrereqReports,
+    prereqDistinctHostnameCount: $prereqDistinctHostnameCount,
+    minPrereqDistinctHostnames: $minPrereqDistinctHostnames,
+    prereqHostnames: $prereqHostnames,
     minIterations: $minIterations,
     minHealthyFairness: $minHealthyFairness,
     maxHealthySendDeliverRatio: $maxHealthySendDeliverRatio,
@@ -606,6 +686,7 @@ jq -n \
     allowMissingCapacity: $allowMissingCapacity,
     allowUnselectedCapacity: $allowUnselectedCapacity,
     allowMissingHostContext: $allowMissingHostContext,
+    allowMissingPrereqContext: $allowMissingPrereqContext,
     rowCount: ($aggregateRows | length),
     capacityRowCount: ($capacityRows | length),
     scenarioCounts: $scenarioCounts,
@@ -627,6 +708,9 @@ jq -n \
   fi
   echo "- Host reports: \`$host_report_count\`"
   echo "- Distinct hostnames: \`$(jq -r '.distinctHostnameCount' "$validation_json")\`"
+  echo "- Prereq reports: \`$(jq -r '.prereqReportCount' "$validation_json")\`"
+  echo "- Ready prereq reports: \`$(jq -r '.readyPrereqReportCount' "$validation_json")\`"
+  echo "- Distinct prereq hostnames: \`$(jq -r '.prereqDistinctHostnameCount' "$validation_json")\`"
   echo "- Manifest rows: \`$(jq -r '.manifestRowCount' "$validation_json")\`"
   if [[ -n "$capacity_jsonl" ]]; then
     echo "- Capacity file: \`$capacity_jsonl\`"

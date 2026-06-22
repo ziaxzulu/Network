@@ -109,7 +109,7 @@ HOST_ROLE=server benchmark/scripts/check-lab-host-prereqs.sh \
   --out benchmark/build/benchmark-results/lab-<date>-<topology>/prereq-server-$(hostname)
 ```
 
-Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. The check is read-only and writes `prereq.json` plus `prereq.md`; it fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, or qdisc inspection failures.
+Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. The check is read-only and writes `prereq.json` plus `prereq.md`; it fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, or qdisc inspection failures. Keep those directories under the lab artifact root. Baseline validation requires at least two ready `prereq.json` files from at least two distinct hostnames unless `--allow-missing-prereq-context` is used for a non-baseline smoke run.
 
 For a baseline-of-record campaign, start with the lab planner. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
 
@@ -341,7 +341,7 @@ benchmark/scripts/validate-lab-baseline.sh \
   --input benchmark/build/benchmark-results/lab-baseline
 ```
 
-The lab planner's generated `merge-all.sh` runs the same validation automatically after it creates the combined aggregate, passing the curve and contention manifests so missing planned cases fail validation. Validation fails by default when `topology.md` is missing, fewer than two host reports were captured under the artifact root, or those reports do not contain at least two distinct hostnames.
+The lab planner's generated `merge-all.sh` runs the same validation automatically after it creates the combined aggregate, passing the curve and contention manifests so missing planned cases fail validation. Validation fails by default when `topology.md` is missing, fewer than two host reports were captured under the artifact root, those reports do not contain at least two distinct hostnames, fewer than two prereq reports were captured, any prereq report is not ready, or prereq reports do not contain at least two distinct hostnames.
 
 After validation passes, package the baseline of record:
 

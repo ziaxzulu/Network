@@ -118,6 +118,7 @@ The generated plan schedules:
 
 Before promotion, the lab output must include:
 
+- ready server and receiver prereq reports
 - server and receiver host reports
 - at least two distinct captured hostnames
 - topology metadata

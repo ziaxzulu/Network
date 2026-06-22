@@ -27,7 +27,7 @@ Options before --:
   --help                   Show this help.
 
 Arguments after -- are passed to validate-lab-baseline.sh, for example:
-  -- --min-iterations 3 --allow-missing-host-context
+  -- --min-iterations 3 --allow-missing-host-context --allow-missing-prereq-context
 
 Outputs under <out>/<name>/:
   baseline-manifest.json   Machine-readable promotion metadata.
@@ -38,6 +38,7 @@ Outputs under <out>/<name>/:
   bandwidth-capacity.*     Capacity selector artifacts when present.
   topology.md              Copied topology metadata when present.
   host-reports/            Copied host reports when present.
+  prereq-reports/          Copied host prerequisite reports when present.
   manifests/               Copied planned manifests when supplied.
 USAGE
 }
@@ -180,7 +181,7 @@ rm -f \
   "$destination/topology.md" \
   "$destination/baseline-manifest.json" \
   "$destination/BASELINE.md"
-rm -rf "$destination/host-reports" "$destination/manifests"
+rm -rf "$destination/host-reports" "$destination/prereq-reports" "$destination/manifests"
 
 cp "$suite_aggregate" "$destination/suite-aggregate.jsonl"
 cp "$validation_json" "$destination/validation.json"
@@ -211,6 +212,25 @@ if [[ -d "$artifact_root" ]]; then
   done < <(find "$artifact_root" -maxdepth 2 -type f -name host-report.md 2>/dev/null | sort)
   if [[ "$host_report_count" -eq 0 ]]; then
     rmdir "$destination/host-reports" 2>/dev/null || true
+  fi
+fi
+
+prereq_report_count=0
+if [[ -d "$artifact_root" ]]; then
+  mkdir -p "$destination/prereq-reports"
+  while IFS= read -r report; do
+    [[ -z "$report" ]] && continue
+    parent="$(basename "$(dirname "$report")")"
+    target_prefix="$destination/prereq-reports/$(safe_name "$parent")"
+    cp "$report" "$target_prefix-prereq.json"
+    prereq_md="$(dirname "$report")/prereq.md"
+    if [[ -s "$prereq_md" ]]; then
+      cp "$prereq_md" "$target_prefix-prereq.md"
+    fi
+    prereq_report_count=$((prereq_report_count + 1))
+  done < <(find "$artifact_root" -maxdepth 2 -type f -name prereq.json 2>/dev/null | sort)
+  if [[ "$prereq_report_count" -eq 0 ]]; then
+    rmdir "$destination/prereq-reports" 2>/dev/null || true
   fi
 fi
 
@@ -255,6 +275,7 @@ jq -n \
   echo "- Rows: \`$(jq -r '.rowCount' "$validation_json")\`"
   echo "- Capacity rows: \`$(jq -r '.capacityRowCount' "$validation_json")\`"
   echo "- Host reports copied: \`$host_report_count\`"
+  echo "- Prereq reports copied: \`$prereq_report_count\`"
   echo "- Planned manifests copied: \`$manifest_count\`"
   echo
   echo "## Scenario Counts"

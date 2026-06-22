@@ -9,6 +9,9 @@ required_curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 required_impairment_contention_scenarios="multi-client-fanout,fairness,disappearing-clients"
 required_min_contention_clients="100"
 required_min_contention_target_client_mbps="5"
+required_min_prereq_reports="2"
+required_min_ready_prereq_reports="2"
+required_min_prereq_distinct_hostnames="2"
 
 usage() {
   cat <<'USAGE'
@@ -26,6 +29,9 @@ Options:
   --required-impairment-contention-scenarios CSV Required contention scenarios per impairment profile. Default: multi-client-fanout,fairness,disappearing-clients.
   --required-min-contention-clients N Required lab validation contention-client gate. Default: 100.
   --required-min-contention-target-client-mbps N Required lab validation per-client Mbps gate. Default: 5.
+  --required-min-prereq-reports N Required lab prereq reports. Default: 2.
+  --required-min-ready-prereq-reports N Required ready lab prereq reports. Default: 2.
+  --required-min-prereq-distinct-hostnames N Required distinct lab prereq hostnames. Default: 2.
   --out DIR                        Output directory. Default: directory containing the lab baseline, or benchmark/build/benchmark-results/baseline-readiness.
   --help                           Show this help.
 
@@ -65,6 +71,18 @@ while [[ $# -gt 0 ]]; do
       required_min_contention_target_client_mbps="$2"
       shift 2
       ;;
+    --required-min-prereq-reports)
+      required_min_prereq_reports="$2"
+      shift 2
+      ;;
+    --required-min-ready-prereq-reports)
+      required_min_ready_prereq_reports="$2"
+      shift 2
+      ;;
+    --required-min-prereq-distinct-hostnames)
+      required_min_prereq_distinct_hostnames="$2"
+      shift 2
+      ;;
     --out)
       out_dir="$2"
       shift 2
@@ -91,6 +109,18 @@ if ! [[ "$required_min_contention_clients" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$required_min_contention_target_client_mbps" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "--required-min-contention-target-client-mbps must be a non-negative number" >&2
+  exit 2
+fi
+if ! [[ "$required_min_prereq_reports" =~ ^[0-9]+$ ]]; then
+  echo "--required-min-prereq-reports must be a non-negative integer" >&2
+  exit 2
+fi
+if ! [[ "$required_min_ready_prereq_reports" =~ ^[0-9]+$ ]]; then
+  echo "--required-min-ready-prereq-reports must be a non-negative integer" >&2
+  exit 2
+fi
+if ! [[ "$required_min_prereq_distinct_hostnames" =~ ^[0-9]+$ ]]; then
+  echo "--required-min-prereq-distinct-hostnames must be a non-negative integer" >&2
   exit 2
 fi
 
@@ -184,6 +214,22 @@ if [[ -s "$lab_validation" ]]; then
   fi
   if ! jq -e '.hostReportCount >= 2' "$lab_validation" >/dev/null; then
     append_issue "lab-missing-host-reports" "lab-baseline" "lab baseline does not include at least two host reports" "{\"path\":\"$lab_validation\"}"
+  fi
+  if ! jq -e --argjson required "$required_min_prereq_reports" '(.prereqReportCount // 0) >= $required' "$lab_validation" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_prereq_reports" --argjson actual "$(jq -r '.prereqReportCount // 0' "$lab_validation")" '{requiredMinPrereqReports:$required,actualPrereqReportCount:$actual}')"
+    append_issue "lab-missing-prereq-reports" "lab-baseline" "lab baseline does not include enough host prerequisite reports" "$extra"
+  fi
+  if ! jq -e --argjson required "$required_min_ready_prereq_reports" '(.readyPrereqReportCount // 0) >= $required' "$lab_validation" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_ready_prereq_reports" --argjson actual "$(jq -r '.readyPrereqReportCount // 0' "$lab_validation")" '{requiredMinReadyPrereqReports:$required,actualReadyPrereqReportCount:$actual}')"
+    append_issue "lab-prereq-not-ready" "lab-baseline" "lab baseline does not prove enough ready host prerequisite reports" "$extra"
+  fi
+  if ! jq -e '(.notReadyPrereqReportCount // 0) == 0' "$lab_validation" >/dev/null; then
+    extra="$(jq -n --argjson actual "$(jq -r '.notReadyPrereqReportCount // 0' "$lab_validation")" '{notReadyPrereqReportCount:$actual}')"
+    append_issue "lab-prereq-report-failed" "lab-baseline" "one or more lab host prerequisite reports was not ready" "$extra"
+  fi
+  if ! jq -e --argjson required "$required_min_prereq_distinct_hostnames" '(.prereqDistinctHostnameCount // 0) >= $required' "$lab_validation" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_prereq_distinct_hostnames" --argjson actual "$(jq -r '.prereqDistinctHostnameCount // 0' "$lab_validation")" '{requiredMinPrereqDistinctHostnames:$required,actualPrereqDistinctHostnameCount:$actual}')"
+    append_issue "lab-prereq-not-separate-hosts" "lab-baseline" "lab baseline does not prove prerequisite checks from enough distinct hostnames" "$extra"
   fi
   for scenario in curve multi-client-fanout fairness disappearing-clients; do
     if ! jq -e --arg scenario "$scenario" '(.scenarioCounts[$scenario] // 0) > 0' "$lab_validation" >/dev/null; then
@@ -344,6 +390,9 @@ jq -n \
   --argjson requiredImpairmentContentionScenarios "$required_impairment_contention_json" \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
+  --argjson requiredMinPrereqReports "$required_min_prereq_reports" \
+  --argjson requiredMinReadyPrereqReports "$required_min_ready_prereq_reports" \
+  --argjson requiredMinPrereqDistinctHostnames "$required_min_prereq_distinct_hostnames" \
   --argjson issues "$issues_array" \
   --slurpfile labValidation "$([[ -s "$lab_validation" ]] && printf '%s' "$lab_validation" || printf '%s' /dev/null)" \
   --slurpfile impairmentSummary "$([[ -s "$impairment_summary" ]] && printf '%s' "$impairment_summary" || printf '%s' /dev/null)" \
@@ -364,6 +413,9 @@ jq -n \
     requiredImpairmentContentionScenarios: $requiredImpairmentContentionScenarios,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
+    requiredMinPrereqReports: $requiredMinPrereqReports,
+    requiredMinReadyPrereqReports: $requiredMinReadyPrereqReports,
+    requiredMinPrereqDistinctHostnames: $requiredMinPrereqDistinctHostnames,
     issues: $issues
   }' >"$readiness_json"
 
@@ -379,6 +431,9 @@ jq -n \
   echo "- Required impairment contention scenarios: \`$required_impairment_contention_scenarios\`"
   echo "- Required minimum contention clients: \`$required_min_contention_clients\`"
   echo "- Required minimum contention target/client Mbps: \`$required_min_contention_target_client_mbps\`"
+  echo "- Required prereq reports: \`$required_min_prereq_reports\`"
+  echo "- Required ready prereq reports: \`$required_min_ready_prereq_reports\`"
+  echo "- Required distinct prereq hostnames: \`$required_min_prereq_distinct_hostnames\`"
   echo
   echo "## Lab Baseline"
   echo
@@ -388,6 +443,9 @@ jq -n \
     echo "- Capacity rows: \`$(jq -r '.capacityRowCount // 0' "$lab_validation")\`"
     echo "- Host reports: \`$(jq -r '.hostReportCount // 0' "$lab_validation")\`"
     echo "- Distinct hostnames: \`$(jq -r '.distinctHostnameCount // 0' "$lab_validation")\`"
+    echo "- Prereq reports: \`$(jq -r '.prereqReportCount // 0' "$lab_validation")\`"
+    echo "- Ready prereq reports: \`$(jq -r '.readyPrereqReportCount // 0' "$lab_validation")\`"
+    echo "- Distinct prereq hostnames: \`$(jq -r '.prereqDistinctHostnameCount // 0' "$lab_validation")\`"
     echo "- Validated minimum contention clients: \`$(jq -r '.minContentionClients // "missing"' "$lab_validation")\`"
     echo "- Validated minimum contention target/client Mbps: \`$(jq -r '.minContentionTargetClientMbps // "missing"' "$lab_validation")\`"
   else

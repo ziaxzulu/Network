@@ -546,6 +546,60 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testLabValidationRequiresReadyPrereqReports() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-lab-validation-prereq-test");
+
+        Path missingPrereqs = output.resolve("missing-prereqs");
+        writeValidationLabArtifacts(missingPrereqs, 1, 1);
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/validate-lab-baseline.sh").toString(),
+                "--input", missingPrereqs.toString(),
+                "--out", missingPrereqs.resolve("validation").toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode missingJson = JSON.readTree(Files.readString(
+                missingPrereqs.resolve("validation/validation.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(missingJson.findValuesAsText("code").contains("missing-prereq-reports"));
+        Assertions.assertTrue(missingJson.findValuesAsText("code")
+                .contains("not-enough-ready-prereq-reports"));
+        Assertions.assertTrue(missingJson.findValuesAsText("code")
+                .contains("missing-prereq-distinct-hosts"));
+
+        Path failedPrereqs = output.resolve("failed-prereqs");
+        writeValidationLabArtifacts(failedPrereqs, 2, 1);
+        ProcessResult failed = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/validate-lab-baseline.sh").toString(),
+                "--input", failedPrereqs.toString(),
+                "--out", failedPrereqs.resolve("validation").toString()
+        );
+        Assertions.assertEquals(1, failed.exitCode, failed.output);
+        JsonNode failedJson = JSON.readTree(Files.readString(
+                failedPrereqs.resolve("validation/validation.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(failedJson.findValuesAsText("code")
+                .contains("not-ready-prereq-reports"));
+
+        Path readyPrereqs = output.resolve("ready-prereqs");
+        writeValidationLabArtifacts(readyPrereqs, 2, 2);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/validate-lab-baseline.sh").toString(),
+                "--input", readyPrereqs.toString(),
+                "--out", readyPrereqs.resolve("validation").toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+        JsonNode readyJson = JSON.readTree(Files.readString(
+                readyPrereqs.resolve("validation/validation.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(readyJson.path("passed").asBoolean());
+        Assertions.assertEquals(2, readyJson.path("prereqReportCount").asInt());
+        Assertions.assertEquals(2, readyJson.path("readyPrereqReportCount").asInt());
+        Assertions.assertEquals(2, readyJson.path("prereqDistinctHostnameCount").asInt());
+    }
+
+    @Test
     public void testNetnsWorkerSmokeDryRunProducesManifest() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -770,6 +824,67 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresPrereqReports() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-prereq-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaselineWithMetadata(labBaseline, 100, 5.0D, 1, 1, 1,
+                64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+
+        ProcessResult missingPrereqs = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missingPrereqs.exitCode, missingPrereqs.output);
+        JsonNode missingPrereqsReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingPrereqsReadiness.path("ready").asBoolean());
+        Assertions.assertEquals(2, missingPrereqsReadiness.path("requiredMinPrereqReports").asInt());
+        Assertions.assertTrue(missingPrereqsReadiness.findValuesAsText("code")
+                .contains("lab-missing-prereq-reports"));
+        Assertions.assertTrue(missingPrereqsReadiness.findValuesAsText("code")
+                .contains("lab-prereq-not-ready"));
+        Assertions.assertTrue(missingPrereqsReadiness.findValuesAsText("code")
+                .contains("lab-prereq-not-separate-hosts"));
+
+        writeReadinessLabBaselineWithMetadata(labBaseline, 100, 5.0D, 2, 1, 2,
+                64, 256, 512, 1200, 1340, 1400, 262144);
+        ProcessResult notReadyPrereq = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, notReadyPrereq.exitCode, notReadyPrereq.output);
+        JsonNode notReadyPrereqReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(notReadyPrereqReadiness.findValuesAsText("code")
+                .contains("lab-prereq-not-ready"));
+        Assertions.assertTrue(notReadyPrereqReadiness.findValuesAsText("code")
+                .contains("lab-prereq-report-failed"));
+
+        writeReadinessLabBaselineWithMetadata(labBaseline, 100, 5.0D, 2, 2, 2,
+                64, 256, 512, 1200, 1340, 1400, 262144);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+    }
+
+    @Test
     public void testResultWriterProducesArtifacts() throws Exception {
         Path output = Files.createTempDirectory("raknet-benchmark-test");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
@@ -902,6 +1017,17 @@ public class BenchmarkKitTests {
                                                   int minContentionClients,
                                                   double minContentionTargetClientMbps,
                                                   int... payloadSizes) throws Exception {
+        writeReadinessLabBaselineWithMetadata(labBaseline, minContentionClients, minContentionTargetClientMbps,
+                2, 2, 2, payloadSizes);
+    }
+
+    private static void writeReadinessLabBaselineWithMetadata(Path labBaseline,
+                                                              int minContentionClients,
+                                                              double minContentionTargetClientMbps,
+                                                              int prereqReportCount,
+                                                              int readyPrereqReportCount,
+                                                              int prereqDistinctHostnameCount,
+                                                              int... payloadSizes) throws Exception {
         Files.createDirectories(labBaseline);
         Files.writeString(labBaseline.resolve("baseline-manifest.json"),
                 "{\"baselineKind\":\"raknet-lab-baseline\"}\n",
@@ -910,6 +1036,10 @@ public class BenchmarkKitTests {
                 "{\"passed\":true,\"distinctHostnameCount\":2,\"hostReportCount\":2,\"rowCount\":"
                         + (payloadSizes.length + 3)
                         + ",\"capacityRowCount\":" + payloadSizes.length
+                        + ",\"prereqReportCount\":" + prereqReportCount
+                        + ",\"readyPrereqReportCount\":" + readyPrereqReportCount
+                        + ",\"notReadyPrereqReportCount\":" + Math.max(0, prereqReportCount - readyPrereqReportCount)
+                        + ",\"prereqDistinctHostnameCount\":" + prereqDistinctHostnameCount
                         + ",\"minContentionClients\":" + minContentionClients
                         + ",\"minContentionTargetClientMbps\":" + minContentionTargetClientMbps
                         + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length
@@ -935,6 +1065,68 @@ public class BenchmarkKitTests {
         aggregate.append("{\"case\":\"disappear\",\"benchmarkName\":\"disappearing-clients\",\"payloadSize\":512}\n");
         Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("bandwidth-capacity.jsonl"), capacity.toString(), StandardCharsets.UTF_8);
+    }
+
+    private static void writeValidationLabArtifacts(Path labRoot,
+                                                    int prereqReportCount,
+                                                    int readyPrereqReportCount) throws Exception {
+        Files.createDirectories(labRoot);
+        Files.writeString(labRoot.resolve("topology.md"), "# Topology\n", StandardCharsets.UTF_8);
+        for (int host = 0; host < 2; host++) {
+            Path hostDir = labRoot.resolve("host-" + host);
+            Files.createDirectories(hostDir);
+            Files.writeString(hostDir.resolve("host-report.md"),
+                    "# Host Report\n\n- Hostname: `host-" + host + "`\n",
+                    StandardCharsets.UTF_8);
+        }
+        for (int prereq = 0; prereq < prereqReportCount; prereq++) {
+            Path prereqDir = labRoot.resolve("prereq-host-" + prereq);
+            Files.createDirectories(prereqDir);
+            Files.writeString(prereqDir.resolve("prereq.json"),
+                    "{\"ready\":" + (prereq < readyPrereqReportCount)
+                            + ",\"hostname\":\"host-" + prereq + "\"}\n",
+                    StandardCharsets.UTF_8);
+            Files.writeString(prereqDir.resolve("prereq.md"), "# Prereq\n", StandardCharsets.UTF_8);
+        }
+
+        String[] benchmarks = {"curve-100_0mbps", "multi-client-fanout", "fairness", "disappearing-clients"};
+        StringBuilder aggregate = new StringBuilder();
+        for (String benchmark : benchmarks) {
+            Path artifact = labRoot.resolve("artifacts").resolve(benchmark);
+            Files.createDirectories(artifact);
+            Files.writeString(artifact.resolve("summary.json"), "{}\n", StandardCharsets.UTF_8);
+            Files.writeString(artifact.resolve("timeseries.csv"), "name\nunit\n", StandardCharsets.UTF_8);
+            Files.writeString(artifact.resolve("latency.hdr"), "histogram\n", StandardCharsets.UTF_8);
+            Files.writeString(artifact.resolve("report.md"), "# Report\n", StandardCharsets.UTF_8);
+            aggregate.append("{\"case\":\"").append(benchmark).append("\",")
+                    .append("\"benchmarkName\":\"").append(benchmark).append("\",")
+                    .append("\"measuredIterations\":3,")
+                    .append("\"clients\":100,")
+                    .append("\"payloadSize\":512,")
+                    .append("\"reliability\":\"RELIABLE_ORDERED\",")
+                    .append("\"targetClientMbps\":5,")
+                    .append("\"deliveredGbps\":1,")
+                    .append("\"probeRttP99Millis\":1,")
+                    .append("\"deliveredGbpsSpreadPct\":0,")
+                    .append("\"probeRttP99MillisSpreadPct\":0,")
+                    .append("\"maxQueuedBytes\":0,")
+                    .append("\"sentToDeliveredBytesRatio\":1,")
+                    .append("\"serverDatagramsOutPerSecond\":1,")
+                    .append("\"staleDatagramsPerSecond\":0,")
+                    .append("\"nackOutPerSecond\":0,")
+                    .append("\"fairnessIndex\":1,")
+                    .append("\"healthyFairnessIndex\":1,")
+                    .append("\"affectedFairnessIndex\":1,")
+                    .append("\"disconnects\":0,")
+                    .append("\"unstable\":false,")
+                    .append("\"unstableReasons\":[],")
+                    .append("\"artifact\":\"").append(artifact).append("\"}\n");
+        }
+        Files.writeString(labRoot.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
+        Files.writeString(labRoot.resolve("bandwidth-capacity.jsonl"),
+                "{\"summaryKind\":\"bandwidth-capacity\",\"case\":\"curve-100_0mbps\",\"payloadSize\":512,"
+                        + "\"selected\":true}\n",
+                StandardCharsets.UTF_8);
     }
 
     private static void writeReadinessImpairmentBaseline(Path impairmentBaseline) throws Exception {
