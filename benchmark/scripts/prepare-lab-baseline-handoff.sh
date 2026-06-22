@@ -1144,6 +1144,7 @@ benchmark/scripts/promote-lab-impairment.sh \\
   --name "\$IMPAIRMENT_BASELINE_NAME"
 
 benchmark/scripts/check-baseline-readiness.sh \\
+  --handoff "$output_root" \\
   --lab-baseline "\$BASELINE_ROOT/\$PERFECT_BASELINE_NAME" \\
   --impairment-baseline "\$BASELINE_ROOT/\$IMPAIRMENT_BASELINE_NAME" \\
   --required-min-contention-clients "$contention_client_total" \\
@@ -1278,6 +1279,7 @@ benchmark/scripts/promote-lab-impairment.sh \\
 
 \`\`\`bash
 benchmark/scripts/check-baseline-readiness.sh \\
+  --handoff "$output_root" \\
   --lab-baseline benchmark/build/benchmark-baselines/lab-<date>-<topology> \\
   --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \\
   --required-min-contention-clients "$contention_client_total" \\

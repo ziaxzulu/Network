@@ -626,6 +626,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("--require-clock-sync"));
         Assertions.assertTrue(readme.contains("--require-no-netem"));
         Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
+        Assertions.assertTrue(readme.contains("--handoff \"" + handoff + "\""));
         Assertions.assertTrue(readme.contains("--required-min-contention-clients \"2\""));
         Assertions.assertTrue(readme.contains("--required-min-contention-target-client-mbps \"1\""));
         Assertions.assertTrue(readme.contains("Production evidence document: `benchmark/docs/production-usage-evidence.md`"));
@@ -647,6 +648,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(promoteScriptContent.contains("--input \"" + artifacts.resolve("perfect/combined") + "\""));
         Assertions.assertTrue(promoteScriptContent.contains("--input \"" + artifacts.resolve("impairment/campaign-summary") + "\""));
         Assertions.assertTrue(promoteScriptContent.contains("check-baseline-readiness.sh"));
+        Assertions.assertTrue(promoteScriptContent.contains("--handoff \"" + handoff + "\""));
         Assertions.assertTrue(promoteScriptContent.contains("--required-min-contention-clients \"2\""));
         Assertions.assertTrue(promoteScriptContent.contains("--required-min-contention-target-client-mbps \"1\""));
 
