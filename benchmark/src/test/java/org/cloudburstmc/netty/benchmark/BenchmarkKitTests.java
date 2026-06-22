@@ -267,6 +267,31 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testPilotBaselineMatrixDryRunProducesRepresentativeManifest() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-pilot-matrix-test");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/run-baseline-matrix.sh").toString(),
+                "--profile", "pilot",
+                "--dry-run",
+                "--out", output.toString()
+        );
+        Assertions.assertEquals(0, result.exitCode, result.output);
+
+        List<String> manifest = Files.readAllLines(output.resolve("manifest.jsonl"), StandardCharsets.UTF_8);
+        Assertions.assertEquals(5, manifest.size());
+        Assertions.assertTrue(manifest.stream().allMatch(row -> row.contains("\"status\":\"dry-run\"")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-curve-1c-mtu\"")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-fanout-100x5\"")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-fairness-100-10poor\"")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-disappear-100-blackhole\"")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-batch-100-20ms\"")));
+    }
+
+    @Test
     public void testLabHandoffGeneratorProducesBaselineAndImpairmentPlans() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();

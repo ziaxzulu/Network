@@ -95,11 +95,12 @@ Profiles:
 
 ```bash
 benchmark/scripts/run-baseline-matrix.sh --profile smoke --dry-run
+benchmark/scripts/run-baseline-matrix.sh --profile pilot --out benchmark/build/benchmark-results/pilot-baseline
 benchmark/scripts/run-baseline-matrix.sh --profile local --out benchmark/build/benchmark-results/local-baseline
 benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-baseline
 ```
 
-`smoke` is short and intended for local regression. Because smoke cases use one measured iteration, aggregate rows are marked `insufficient-iterations`; use them to verify execution and artifact shape, not baseline stability. `local` is longer but still loopback-only. `lab` matches the recurring baseline matrix and should be used on controlled hosts/NICs, optionally with `tc netem` applied outside the JVM.
+`smoke` is short and intended for local regression. Because smoke cases use one measured iteration, aggregate rows are marked `insufficient-iterations`; use them to verify execution and artifact shape, not baseline stability. `pilot` is a short three-iteration local subset with one bandwidth curve, 100-client fanout, fairness, blackhole disappearance, and batched traffic at `5Mbps` per client. Use it for quick development comparisons when full `local` is too expensive. `local` is longer but still loopback-only. `lab` matches the recurring baseline matrix and should be used on controlled hosts/NICs, optionally with `tc netem` applied outside the JVM.
 
 For baseline-of-record runs, follow [`lab-baseline-runbook.md`](lab-baseline-runbook.md), run `benchmark/scripts/check-lab-host-prereqs.sh`, and capture host reports with `benchmark/scripts/capture-lab-host.sh` before running the suite.
 

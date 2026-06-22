@@ -16,7 +16,7 @@ Usage:
   benchmark/scripts/run-baseline-matrix.sh [options]
 
 Options:
-  --profile smoke|local|lab     Baseline profile to run. Default: smoke.
+  --profile smoke|pilot|local|lab Baseline profile to run. Default: smoke.
   --out DIR                     Suite output directory. Default: benchmark/build/benchmark-results/baseline-<profile>-<timestamp>.
   --dry-run                     Print Gradle commands and write a manifest without running benchmarks.
   --only PATTERN                Run only cases whose name contains PATTERN.
@@ -27,7 +27,8 @@ Options:
   --help                        Show this help.
 
 Profiles:
-  smoke  Short local regression baseline. Not line-rate evidence.
+  smoke  Short one-iteration local regression baseline. Not line-rate evidence.
+  pilot  Short three-iteration local development baseline subset. Not line-rate evidence.
   local  Longer single-host baseline for local comparisons. Not line-rate evidence.
   lab    Recommended remote/lab-oriented baseline command set. Use controlled hosts/NICs.
 USAGE
@@ -84,7 +85,7 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
 case "$profile" in
-  smoke|local|lab)
+  smoke|pilot|local|lab)
     ;;
   *)
     echo "Unknown profile: $profile" >&2
@@ -541,6 +542,16 @@ batch-10-20ms|batched-game-traffic --clients 10 --warmup 0ms --duration 1s --ite
 CASES
 }
 
+case_list_pilot() {
+  cat <<'CASES'
+pilot-curve-1c-mtu|bandwidth-latency-curve --clients 1 --warmup 1s --duration 5s --iterations 3 --payload-size 1200 --rates-mbps 50,100,250 --workers 1
+pilot-fanout-100x5|multi-client-fanout --clients 100 --warmup 1s --duration 5s --iterations 3 --payload-size 512 --per-client-mbps 5 --workers 1
+pilot-fairness-100-10poor|fairness --clients 100 --impaired-clients 10 --warmup 1s --duration 6s --iterations 3 --payload-size 512 --per-client-mbps 5 --impairment-latency 100ms --impairment-jitter 10ms --impairment-loss 5 --workers 1
+pilot-disappear-100-blackhole|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 2s --disappear-mode blackhole --warmup 1s --duration 6s --iterations 3 --payload-size 512 --per-client-mbps 5 --workers 1
+pilot-batch-100-20ms|batched-game-traffic --clients 100 --warmup 1s --duration 5s --iterations 3 --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5 --workers 1
+CASES
+}
+
 case_list_local() {
   cat <<'CASES'
 bestcase-1c-small|bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --iterations 3 --payload-size 64 --rates-mbps 100,250,500,1000,unlimited
@@ -627,6 +638,9 @@ cd "$repo_root"
 case "$profile" in
   smoke)
     cases="$(case_list_smoke)"
+    ;;
+  pilot)
+    cases="$(case_list_pilot)"
     ;;
   local)
     cases="$(case_list_local)"

@@ -29,7 +29,7 @@ The executable local/lab profiles in `benchmark/scripts/run-baseline-matrix.sh` 
 
 ## Local Development Evidence
 
-Local loopback artifacts are useful for regression shape only. They should not be used for line-rate claims.
+Local loopback artifacts are useful for regression shape only. They should not be used for line-rate claims. Use `benchmark/scripts/run-baseline-matrix.sh --profile pilot` when you need a short three-iteration local development comparison without running the full local matrix.
 
 For a stronger single-host smoke path, use `benchmark/scripts/run-netns-worker-smoke.sh`. It runs the normal server/receiver worker roles through Linux network namespaces and veth pairs so `tc netem` and blackhole behavior are applied outside the JVM. This is useful for local retry-pressure and external-qdisc regression checks, but it is still not accepted as line-rate or baseline-of-record evidence.
 
