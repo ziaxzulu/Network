@@ -155,9 +155,14 @@ The promotion script reruns validation, refuses validation bypass flags by defau
 For remote lab campaigns where the impairment must happen outside the JVM, generate one coordinated lab baseline plan per host-level profile:
 
 ```bash
+benchmark/scripts/capture-production-evidence.sh \
+  --out benchmark/build/benchmark-results/production-evidence-current \
+  --require-sources geyser,cloudburst-protocol,cloudburst-nukkit,cubecraft
+
 benchmark/scripts/prepare-lab-baseline-handoff.sh \
   --out benchmark/build/benchmark-results/lab-handoff \
   --artifact-root benchmark/build/benchmark-results/lab-run \
+  --source-audit benchmark/build/benchmark-results/production-evidence-current/source-audit.json \
   --server-host <server-ip> \
   --interface <nic> \
   --expect-mtu <mtu> \

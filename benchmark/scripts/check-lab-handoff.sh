@@ -9,6 +9,7 @@ required_batch_intervals_ms="10,20,50"
 required_resource_pack_chunk_sizes="8192,262144"
 required_resource_pack_intervals_ms="200"
 required_disappearance_modes="blackhole"
+require_source_audit=false
 
 usage() {
   cat <<'USAGE'
@@ -29,6 +30,7 @@ Options:
   --required-resource-pack-chunk-sizes CSV Required resource-pack chunk payload sizes. Default: 8192,262144.
   --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
   --required-disappearance-modes CSV Required disappearing-client modes. Default: blackhole.
+  --require-source-audit           Require a ready capture-production-evidence.sh source-audit artifact.
   --help                           Show this help.
 
 Outputs:
@@ -70,6 +72,10 @@ while [[ $# -gt 0 ]]; do
     --required-disappearance-modes)
       required_disappearance_modes="$2"
       shift 2
+      ;;
+    --require-source-audit)
+      require_source_audit=true
+      shift
       ;;
     --help|-h)
       usage
@@ -287,6 +293,12 @@ production_evidence_doc="$(jq -r '.productionEvidence.document // ""' "$manifest
 production_evidence_sha256="$(jq -r '.productionEvidence.sha256 // ""' "$manifest")"
 production_evidence_path=""
 production_evidence_actual_sha256=""
+source_audit_json="$(jq -c '.sourceAudit // null' "$manifest")"
+source_audit_doc="$(jq -r '.sourceAudit.document // ""' "$manifest")"
+source_audit_sha256="$(jq -r '.sourceAudit.sha256 // ""' "$manifest")"
+source_audit_path=""
+source_audit_actual_sha256=""
+source_audit_actual_ready="null"
 expected_contention_scenarios_json="$(jq -c '
   def scenario($value):
     ($value | ascii_downcase) as $case
@@ -338,6 +350,36 @@ if [[ -n "$production_evidence_doc" ]]; then
   elif [[ -n "$production_evidence_sha256" && "$production_evidence_sha256" != "$production_evidence_actual_sha256" ]]; then
     append_issue "handoff-production-evidence-sha-mismatch" "handoff" "handoff production evidence fingerprint does not match the current evidence document" \
       "$(jq -n --arg document "$production_evidence_doc" --arg path "$production_evidence_path" --arg expected "$production_evidence_sha256" --arg actual "$production_evidence_actual_sha256" '{document:$document,path:$path,expectedSha256:$expected,actualSha256:$actual}')"
+  fi
+fi
+if "$require_source_audit" && ! jq -e '.sourceAudit != null' "$manifest" >/dev/null; then
+  append_issue "handoff-missing-source-audit" "handoff" "handoff manifest does not include a production source audit artifact" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
+fi
+if jq -e '.sourceAudit != null' "$manifest" >/dev/null; then
+  if ! jq -e '(.sourceAudit.document // "") != "" and (.sourceAudit.exists == true) and (.sourceAudit.ready == true) and ((.sourceAudit.sha256 // "") | test("^[0-9a-f]{64}$"))' "$manifest" >/dev/null; then
+    append_issue "handoff-invalid-source-audit" "handoff" "handoff manifest does not include a ready source audit fingerprint" \
+      "$(jq -n --arg path "$manifest" '{path:$path}')"
+  fi
+  if [[ -n "$source_audit_doc" ]]; then
+    source_audit_path="$(resolve_path "$source_audit_doc")"
+    if [[ ! -f "$source_audit_path" ]]; then
+      append_issue "handoff-source-audit-missing" "handoff" "source audit referenced by the handoff manifest is missing" \
+        "$(jq -n --arg document "$source_audit_doc" --arg path "$source_audit_path" '{document:$document,path:$path}')"
+    elif ! source_audit_actual_sha256="$(sha256_file "$source_audit_path")"; then
+      append_issue "handoff-source-audit-sha-unavailable" "handoff" "could not compute source audit SHA-256 on this host" \
+        "$(jq -n --arg document "$source_audit_doc" --arg path "$source_audit_path" '{document:$document,path:$path}')"
+    else
+      source_audit_actual_ready="$(jq -r 'if .ready == true then "true" else "false" end' "$source_audit_path" 2>/dev/null || echo false)"
+      if [[ -n "$source_audit_sha256" && "$source_audit_sha256" != "$source_audit_actual_sha256" ]]; then
+        append_issue "handoff-source-audit-sha-mismatch" "handoff" "handoff source audit fingerprint does not match the current source audit artifact" \
+          "$(jq -n --arg document "$source_audit_doc" --arg path "$source_audit_path" --arg expected "$source_audit_sha256" --arg actual "$source_audit_actual_sha256" '{document:$document,path:$path,expectedSha256:$expected,actualSha256:$actual}')"
+      fi
+      if [[ "$source_audit_actual_ready" != "true" ]]; then
+        append_issue "handoff-source-audit-not-ready" "handoff" "source audit referenced by the handoff manifest is not ready" \
+          "$(jq -n --arg document "$source_audit_doc" --arg path "$source_audit_path" '{document:$document,path:$path}')"
+      fi
+    fi
   fi
 fi
 if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("batched-game-traffic") != null' >/dev/null; then
@@ -414,6 +456,12 @@ if [[ -n "$production_evidence_doc" ]]; then
 fi
 if [[ -n "$production_evidence_sha256" ]]; then
   check_readme_contains "Production evidence SHA-256: \`$production_evidence_sha256\`" "handoff README does not record the production evidence fingerprint"
+fi
+if [[ -n "$source_audit_doc" ]]; then
+  check_readme_contains "Production source audit: \`$source_audit_doc\`" "handoff README does not record the production source audit"
+fi
+if [[ -n "$source_audit_sha256" ]]; then
+  check_readme_contains "Production source audit SHA-256: \`$source_audit_sha256\`" "handoff README does not record the production source audit fingerprint"
 fi
 check_readme_contains "benchmark/scripts/promote-lab-baseline.sh" "handoff README does not show the perfect-network promotion command"
 check_readme_contains "--handoff-manifest \"$manifest\"" "handoff README promotion command does not pass the handoff manifest into baseline promotion"
@@ -687,6 +735,11 @@ jq -n \
   --argjson productionEvidence "$production_evidence_json" \
   --arg productionEvidencePath "$production_evidence_path" \
   --arg productionEvidenceActualSha256 "$production_evidence_actual_sha256" \
+  --argjson sourceAudit "$source_audit_json" \
+  --arg sourceAuditPath "$source_audit_path" \
+  --arg sourceAuditActualSha256 "$source_audit_actual_sha256" \
+  --argjson sourceAuditActualReady "$source_audit_actual_ready" \
+  --argjson requireSourceAudit "$require_source_audit" \
   --argjson expectedCurveRows "$expected_curve_rows" \
   --argjson actualPerfectCurveRows "$actual_perfect_curve_rows" \
   --argjson actualPerfectRaisedCurveRows "$actual_perfect_raised_curve_rows" \
@@ -724,6 +777,11 @@ jq -n \
     productionEvidence: $productionEvidence,
     productionEvidencePath: $productionEvidencePath,
     productionEvidenceActualSha256: $productionEvidenceActualSha256,
+    sourceAudit: $sourceAudit,
+    sourceAuditPath: $sourceAuditPath,
+    sourceAuditActualSha256: $sourceAuditActualSha256,
+    sourceAuditActualReady: $sourceAuditActualReady,
+    requireSourceAudit: $requireSourceAudit,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     issues: $issues
@@ -749,6 +807,8 @@ jq -n \
   echo "- Expected MTU: \`$(jq -r '.expectedMtu' "$check_json")\`"
   echo "- Expected minimum CPUs: \`$(jq -r '.expectedMinCpus' "$check_json")\`"
   echo "- Require CPU performance governor: \`$(jq -r '.requireCpuPerformance' "$check_json")\`"
+  echo "- Require source audit: \`$(jq -r '.requireSourceAudit' "$check_json")\`"
+  echo "- Source audit ready: \`$(jq -r '.sourceAuditActualReady' "$check_json")\`"
   echo "- Required minimum contention clients: \`$(jq -r '.requiredMinContentionClients' "$check_json")\`"
   echo "- Required minimum per-client Mbps: \`$(jq -r '.requiredMinContentionTargetClientMbps' "$check_json")\`"
   echo

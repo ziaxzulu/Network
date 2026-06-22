@@ -38,6 +38,7 @@ expect_mtu=""
 expect_min_cpus=""
 require_cpu_performance=false
 common_args=""
+source_audit=""
 
 usage() {
   cat <<'USAGE'
@@ -92,6 +93,7 @@ Options:
   --expect-min-cpus N               Expected minimum online CPU count for strict prereq reports. Required.
   --require-cpu-performance         Include strict CPU performance-governor prereq gate.
   --common-args "..."               Extra benchmark args appended to worker commands.
+  --source-audit FILE               Optional source-audit.json from capture-production-evidence.sh.
   --help                            Show this help.
 
 Outputs:
@@ -253,6 +255,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --common-args)
       common_args="$2"
+      shift 2
+      ;;
+    --source-audit)
+      source_audit="$2"
       shift 2
       ;;
     --help|-h)
@@ -442,6 +448,57 @@ if [[ ! "$production_evidence_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   exit 2
 fi
 
+source_audit_json="null"
+source_audit_path=""
+source_audit_sha256=""
+if [[ -n "$source_audit" ]]; then
+  if [[ "$source_audit" == /* ]]; then
+    source_audit_path="$source_audit"
+  else
+    source_audit_path="$repo_root/$source_audit"
+  fi
+  if [[ ! -s "$source_audit_path" ]]; then
+    echo "source audit file is missing or empty: $source_audit_path" >&2
+    exit 2
+  fi
+  if ! jq -e '.kind == "raknet-production-source-audit" and .ready == true' "$source_audit_path" >/dev/null; then
+    echo "source audit must be a ready raknet-production-source-audit artifact: $source_audit_path" >&2
+    exit 2
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    source_audit_sha256="$(sha256sum "$source_audit_path" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    source_audit_sha256="$(shasum -a 256 "$source_audit_path" | awk '{print $1}')"
+  fi
+  if [[ ! "$source_audit_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "unable to compute SHA-256 for source audit: $source_audit_path" >&2
+    exit 2
+  fi
+  source_audit_json="$(jq -c --arg document "$source_audit_path" --arg sha256 "$source_audit_sha256" '
+    {
+      document: $document,
+      exists: true,
+      sha256: $sha256,
+      ready: (.ready == true),
+      issueCount: (.issueCount // 0),
+      networkRevision: (.networkRevision // ""),
+      networkShortRevision: (.networkShortRevision // ""),
+      networkDirtyTrackedFiles: (.networkDirtyTrackedFiles // null),
+      evidenceDocument: (.evidenceDocument // null),
+      requiredSources: (.requiredSources // []),
+      sources: [(.sources // [])[] | {
+        id,
+        visibility,
+        available,
+        revision,
+        shortRevision,
+        dirtyTrackedFiles,
+        pathIncluded: (.path != null)
+      }]
+    }
+  ' "$source_audit_path")"
+fi
+
 json_array_from_args() {
   if [[ "$#" -eq 0 ]]; then
     printf '[]'
@@ -587,6 +644,7 @@ jq -n \
   --argjson batchPayloadSizes "$batch_payload_sizes_json" \
   --argjson resourcePackChunkSizes "$resource_pack_chunk_sizes_json" \
   --argjson productionEvidenceExists "$production_evidence_exists" \
+  --argjson sourceAudit "$source_audit_json" \
   --argjson sudoNetem "$sudo_netem" \
   --argjson requireCpuPerformance "$require_cpu_performance" \
   '{
@@ -606,6 +664,7 @@ jq -n \
       exists: $productionEvidenceExists,
       sha256: $productionEvidenceSha256
     },
+    sourceAudit: $sourceAudit,
     serverHost: $serverHost,
     bindHost: $bindHost,
     port: ($port | tonumber),
@@ -658,6 +717,8 @@ cat >"$readme" <<EOF
 - Handoff manifest: \`$handoff_manifest\`
 - Production evidence document: \`$production_evidence_doc_rel\`
 - Production evidence SHA-256: \`$production_evidence_sha256\`
+- Production source audit: \`$(if [[ -n "$source_audit_path" ]]; then echo "$source_audit_path"; else echo "not provided"; fi)\`
+- Production source audit SHA-256: \`$(if [[ -n "$source_audit_sha256" ]]; then echo "$source_audit_sha256"; else echo "not provided"; fi)\`
 - Profiles: \`$profiles\`
 - Impairment target host role: \`$target_host_role\`
 - Curve receivers: \`$(IFS=,; echo "${curve_receivers[*]}")\`

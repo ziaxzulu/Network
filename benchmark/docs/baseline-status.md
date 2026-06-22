@@ -111,6 +111,7 @@ The baseline of record is not complete until a separate-host lab run is captured
 benchmark/scripts/prepare-lab-baseline-handoff.sh \
   --out benchmark/build/benchmark-results/lab-handoff-current \
   --artifact-root benchmark/build/benchmark-results/lab-run-current \
+  --source-audit benchmark/build/benchmark-results/production-evidence-current/source-audit.json \
   --server-host <server-ip> \
   --interface <nic> \
   --expect-mtu <mtu> \
@@ -125,10 +126,12 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
 The handoff writes the perfect-network plan, impairment campaign plan, top-level run order, promotion commands, and readiness-gate command. Before distributing commands to lab hosts, run:
 
 ```bash
-benchmark/scripts/check-lab-handoff.sh --handoff benchmark/build/benchmark-results/lab-handoff-current
+benchmark/scripts/check-lab-handoff.sh \
+  --handoff benchmark/build/benchmark-results/lab-handoff-current \
+  --require-source-audit
 ```
 
-That preflight checks handoff structure, generated scripts, profile plans, the production-evidence fingerprint, curve matrix coverage, contention scenario coverage, required `blackhole` disappearance mode, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. The immediate small-packet row uses its own lower `immediatePerClientMbps` target and is not used to satisfy the main `5Mbps` contention gate. By default the preflight rejects handoffs below `500` contention clients or below `5Mbps` for the main contention target, matching the baseline readiness gate. It also checks that generated contention plans include the production-shape batch/resource rows and blackhole disappearance row before operators spend lab time on them. The underlying perfect-network baseline plan is equivalent to:
+That preflight checks handoff structure, generated scripts, profile plans, the production-evidence fingerprint, optional source-audit fingerprint/readiness, curve matrix coverage, contention scenario coverage, required `blackhole` disappearance mode, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. The immediate small-packet row uses its own lower `immediatePerClientMbps` target and is not used to satisfy the main `5Mbps` contention gate. By default the preflight rejects handoffs below `500` contention clients or below `5Mbps` for the main contention target, matching the baseline readiness gate. It also checks that generated contention plans include the production-shape batch/resource rows and blackhole disappearance row before operators spend lab time on them. The underlying perfect-network baseline plan is equivalent to:
 
 ```bash
 benchmark/scripts/plan-lab-baseline.sh \

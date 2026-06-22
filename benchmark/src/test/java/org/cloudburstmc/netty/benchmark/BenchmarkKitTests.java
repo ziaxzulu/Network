@@ -444,12 +444,15 @@ public class BenchmarkKitTests {
         Path output = Files.createTempDirectory("raknet-handoff-test");
         Path handoff = output.resolve("handoff");
         Path artifacts = output.resolve("artifacts");
+        Path sourceAudit = output.resolve("source-audit.json");
+        writeReadySourceAudit(sourceAudit);
 
         ProcessResult result = runProcess(root, Duration.ofSeconds(30),
                 "bash",
                 root.resolve("benchmark/scripts/prepare-lab-baseline-handoff.sh").toString(),
                 "--out", handoff.toString(),
                 "--artifact-root", artifacts.toString(),
+                "--source-audit", sourceAudit.toString(),
                 "--server-host", "127.0.0.1",
                 "--interface", "lo",
                 "--expect-mtu", "1500",
@@ -497,6 +500,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("--required-min-contention-target-client-mbps \"1\""));
         Assertions.assertTrue(readme.contains("Production evidence document: `benchmark/docs/production-usage-evidence.md`"));
         Assertions.assertTrue(readme.contains("Production evidence SHA-256: `"));
+        Assertions.assertTrue(readme.contains("Production source audit: `" + sourceAudit + "`"));
+        Assertions.assertTrue(readme.contains("Production source audit SHA-256: `"));
         Assertions.assertTrue(readme.contains("--handoff-manifest \"" + handoff.resolve("handoff-manifest.json") + "\""));
 
         JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
@@ -517,6 +522,13 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(handoffManifest.path("productionEvidence").path("exists").asBoolean());
         Assertions.assertTrue(handoffManifest.path("productionEvidence").path("sha256").asText()
                 .matches("[0-9a-f]{64}"));
+        Assertions.assertEquals(sourceAudit.toString(), handoffManifest.path("sourceAudit").path("document").asText());
+        Assertions.assertTrue(handoffManifest.path("sourceAudit").path("ready").asBoolean());
+        Assertions.assertEquals(0, handoffManifest.path("sourceAudit").path("issueCount").asInt());
+        Assertions.assertTrue(handoffManifest.path("sourceAudit").path("sha256").asText()
+                .matches("[0-9a-f]{64}"));
+        Assertions.assertEquals(2, handoffManifest.path("sourceAudit").path("sources").size());
+        Assertions.assertTrue(handoffManifest.path("sourceAudit").path("sources").get(0).path("pathIncluded").isBoolean());
         Assertions.assertEquals("127.0.0.1", handoffManifest.path("serverHost").asText());
         Assertions.assertEquals("0.0.0.0", handoffManifest.path("bindHost").asText());
         Assertions.assertEquals(19132, handoffManifest.path("port").asInt());
@@ -608,7 +620,8 @@ public class BenchmarkKitTests {
                 "--handoff", handoff.toString(),
                 "--out", handoffPreflight.toString(),
                 "--required-min-contention-clients", "2",
-                "--required-min-contention-target-client-mbps", "1"
+                "--required-min-contention-target-client-mbps", "1",
+                "--require-source-audit"
         );
         Assertions.assertEquals(0, handoffCheck.exitCode, handoffCheck.output);
         JsonNode handoffCheckJson = JSON.readTree(Files.readString(handoffPreflight.resolve("handoff-check.json"),
@@ -630,6 +643,11 @@ public class BenchmarkKitTests {
                 .matches("[0-9a-f]{64}"));
         Assertions.assertEquals(handoffCheckJson.path("productionEvidence").path("sha256").asText(),
                 handoffCheckJson.path("productionEvidenceActualSha256").asText());
+        Assertions.assertTrue(handoffCheckJson.path("requireSourceAudit").asBoolean());
+        Assertions.assertTrue(handoffCheckJson.path("sourceAudit").path("ready").asBoolean());
+        Assertions.assertTrue(handoffCheckJson.path("sourceAuditActualReady").asBoolean());
+        Assertions.assertEquals(handoffCheckJson.path("sourceAudit").path("sha256").asText(),
+                handoffCheckJson.path("sourceAuditActualSha256").asText());
         Assertions.assertEquals(2, handoffCheckJson.path("actualImpairmentProfileRows").size());
         for (JsonNode profileRows : handoffCheckJson.path("actualImpairmentProfileRows")) {
             Assertions.assertEquals(56, profileRows.path("curveRows").asInt());
@@ -838,6 +856,20 @@ public class BenchmarkKitTests {
                 .contains("handoff-missing-required-resource-pack-interval"));
         Assertions.assertTrue(strictShapeJson.findValuesAsText("code")
                 .contains("contention-missing-resource-pack-shape"));
+
+        ProcessResult missingSourceAuditCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-source-audit-required").toString(),
+                "--require-source-audit"
+        );
+        Assertions.assertEquals(1, missingSourceAuditCheck.exitCode, missingSourceAuditCheck.output);
+        JsonNode missingSourceAuditJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-source-audit-required/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(missingSourceAuditJson.findValuesAsText("code")
+                .contains("handoff-missing-source-audit"));
     }
 
     @Test
@@ -2536,6 +2568,29 @@ public class BenchmarkKitTests {
         return "{\"document\":\"benchmark/docs/production-usage-evidence.md\","
                 + "\"exists\":true,"
                 + "\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}";
+    }
+
+    private static void writeReadySourceAudit(Path sourceAudit) throws Exception {
+        Files.createDirectories(sourceAudit.getParent());
+        Files.writeString(sourceAudit,
+                "{\"kind\":\"raknet-production-source-audit\","
+                        + "\"ready\":true,"
+                        + "\"issueCount\":0,"
+                        + "\"networkRevision\":\"0123456789abcdef\","
+                        + "\"networkShortRevision\":\"0123456789ab\","
+                        + "\"networkDirtyTrackedFiles\":false,"
+                        + "\"evidenceDocument\":{\"document\":\"benchmark/docs/production-usage-evidence.md\","
+                        + "\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"},"
+                        + "\"requiredSources\":[\"geyser\",\"cubecraft\"],"
+                        + "\"sources\":["
+                        + "{\"id\":\"geyser\",\"visibility\":\"public\",\"available\":true,"
+                        + "\"revision\":\"abcdef0123456789\",\"shortRevision\":\"abcdef012345\","
+                        + "\"dirtyTrackedFiles\":false,\"path\":null},"
+                        + "{\"id\":\"cubecraft\",\"visibility\":\"private\",\"available\":true,"
+                        + "\"revision\":\"fedcba9876543210\",\"shortRevision\":\"fedcba987654\","
+                        + "\"dirtyTrackedFiles\":false,\"path\":null}"
+                        + "]}\n",
+                StandardCharsets.UTF_8);
     }
 
     private static String readinessRetryFieldsJson() {
