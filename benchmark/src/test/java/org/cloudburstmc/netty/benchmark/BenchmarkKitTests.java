@@ -763,6 +763,75 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testFreshLabHandoffWrapperRefreshesSourceAuditAndPreflights() throws Exception {
+        assumeShellTooling();
+        assumeGit();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-fresh-handoff-test");
+        Path handoff = output.resolve("handoff");
+        Path artifacts = output.resolve("artifacts");
+        Path geyser = initGitRepo(output.resolve("geyser"));
+        Path protocol = initGitRepo(output.resolve("protocol"));
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(60),
+                "bash",
+                root.resolve("benchmark/scripts/prepare-fresh-lab-handoff.sh").toString(),
+                "--out", handoff.toString(),
+                "--artifact-root", artifacts.toString(),
+                "--require-sources", "geyser,cloudburst-protocol",
+                "--geyser", geyser.toString(),
+                "--cloudburst-protocol", protocol.toString(),
+                "--server-host", "127.0.0.1",
+                "--interface", "lo",
+                "--expect-mtu", "1500",
+                "--expect-min-cpus", "1",
+                "--profiles", "perfect",
+                "--warmup", "1s",
+                "--duration", "60s",
+                "--iterations", "1",
+                "--start-delay", "1s",
+                "--start-offset", "300s"
+        );
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        Assertions.assertTrue(result.output.contains("Fresh lab handoff:"));
+        Path sourceAudit = handoff.resolve("production-evidence/source-audit.json");
+        Path preflight = handoff.resolve("preflight/handoff-check.json");
+        Path summary = handoff.resolve("fresh-handoff-summary.json");
+        Assertions.assertTrue(Files.exists(sourceAudit));
+        Assertions.assertTrue(Files.exists(preflight));
+        Assertions.assertTrue(Files.exists(summary));
+
+        JsonNode sourceAuditJson = JSON.readTree(Files.readString(sourceAudit, StandardCharsets.UTF_8));
+        Assertions.assertTrue(sourceAuditJson.path("ready").asBoolean());
+        Assertions.assertEquals(0, sourceAuditJson.path("issueCount").asInt());
+        Assertions.assertEquals(2, sourceAuditJson.path("requiredSources").size());
+        Assertions.assertTrue(findSource(sourceAuditJson, "geyser").path("available").asBoolean());
+        Assertions.assertTrue(findSource(sourceAuditJson, "cloudburst-protocol").path("available").asBoolean());
+
+        JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertEquals(sourceAudit.toString(), handoffManifest.path("sourceAudit").path("document").asText());
+        Assertions.assertTrue(handoffManifest.path("sourceAudit").path("ready").asBoolean());
+        Assertions.assertEquals(500, handoffManifest.path("contentionClientTotal").asInt());
+        Assertions.assertEquals(5.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
+
+        JsonNode preflightJson = JSON.readTree(Files.readString(preflight, StandardCharsets.UTF_8));
+        Assertions.assertTrue(preflightJson.path("ready").asBoolean(), preflightJson.toPrettyString());
+        Assertions.assertEquals(0, preflightJson.path("issueCount").asInt());
+        Assertions.assertTrue(preflightJson.path("requireSourceAudit").asBoolean());
+        Assertions.assertTrue(preflightJson.path("sourceAuditActualReady").asBoolean());
+        Assertions.assertEquals(preflightJson.path("sourceAudit").path("sha256").asText(),
+                preflightJson.path("sourceAuditActualSha256").asText());
+
+        JsonNode summaryJson = JSON.readTree(Files.readString(summary, StandardCharsets.UTF_8));
+        Assertions.assertEquals("raknet-fresh-lab-handoff", summaryJson.path("kind").asText());
+        Assertions.assertTrue(summaryJson.path("sourceAudit").path("ready").asBoolean());
+        Assertions.assertTrue(summaryJson.path("preflight").path("ready").asBoolean());
+        Assertions.assertEquals(0, summaryJson.path("preflight").path("issueCount").asInt());
+    }
+
+    @Test
     public void testDefaultLabHandoffPassesProductionScalePreflight() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();

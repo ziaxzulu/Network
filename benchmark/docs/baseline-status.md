@@ -154,13 +154,13 @@ The local 100-client rows delivered roughly the expected aggregate load, but eve
 
 ## Lab Baseline Of Record
 
-The baseline of record is not complete until a separate-host lab run is captured, validated, and promoted. Generate the current recommended plan with:
+The baseline of record is not complete until a separate-host lab run is captured, validated, and promoted. Generate and preflight the current recommended handoff with:
 
 ```bash
-benchmark/scripts/prepare-lab-baseline-handoff.sh \
+benchmark/scripts/prepare-fresh-lab-handoff.sh \
   --out benchmark/build/benchmark-results/lab-handoff-current \
   --artifact-root benchmark/build/benchmark-results/lab-run-current \
-  --source-audit benchmark/build/benchmark-results/production-evidence-current/source-audit.json \
+  --source-audit-out benchmark/build/benchmark-results/production-evidence-current \
   --server-host <server-ip> \
   --interface <nic> \
   --expect-mtu <mtu> \
@@ -172,13 +172,7 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
   --sudo-netem
 ```
 
-The handoff writes the perfect-network plan, impairment campaign plan, top-level run order, promotion commands, and readiness-gate command. Before distributing commands to lab hosts, run:
-
-```bash
-benchmark/scripts/check-lab-handoff.sh \
-  --handoff benchmark/build/benchmark-results/lab-handoff-current \
-  --require-source-audit
-```
+This wrapper refreshes `source-audit.json`, generates the perfect-network plan and impairment campaign plan, runs `check-lab-handoff.sh --require-source-audit`, and runs the generated freshness checks. The handoff writes the top-level run order, promotion commands, and readiness-gate command.
 
 That preflight checks handoff structure, generated scripts, profile plans, the production-evidence fingerprint, optional source-audit fingerprint/readiness, curve matrix coverage, contention scenario coverage, required `blackhole` disappearance mode, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. The immediate small-packet row uses its own lower `immediatePerClientMbps` target and is not used to satisfy the main `5Mbps` contention gate. By default the preflight rejects handoffs below `500` contention clients or below `5Mbps` for the main contention target, matching the baseline readiness gate. It also checks that generated contention plans include the production-shape batch/resource rows and blackhole disappearance row before operators spend lab time on them. The underlying perfect-network baseline plan is equivalent to:
 
@@ -217,7 +211,7 @@ benchmark/build/benchmark-results/lab-handoff-current-audit-20260622T070505Z/
 
 This generated handoff passed `check-lab-handoff.sh` with `ready=true` and `0` issues when it was created. It contains `56` default-limiter curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, and five impairment profiles (`perfect`, `near-loss`, `regional-loss`, `poor`, `severe`) each with the same `56/56/9` row shape. The perfect contention plan includes `lab-perfect-contention-immediate-500x1-p256` at payload `256` and `1Mbps` per client, plus the main `5Mbps` fanout, fairness, blackhole disappearance, batched, and resource-pack rows. The generated perfect and impairment freshness checks reported `result=fresh` when run at `2026-06-22T07:05:41Z`.
 
-After later local evidence commits, rerunning `check-lab-handoff.sh --require-source-audit` against this older generated handoff correctly reports `not-ready` with `handoff-source-audit-sha-mismatch`, because the handoff embeds the source-audit fingerprint from the checkout that created it. This is expected and useful. Before lab operators distribute commands, refresh `production-evidence-current/source-audit.json`, regenerate the handoff from the current checkout, rerun `check-lab-handoff.sh --require-source-audit`, and run the generated freshness checks close to the actual start time.
+After later local evidence commits, rerunning `check-lab-handoff.sh --require-source-audit` against this older generated handoff correctly reports `not-ready` with `handoff-source-audit-sha-mismatch`, because the handoff embeds the source-audit fingerprint from the checkout that created it. This is expected and useful. Before lab operators distribute commands, rerun `prepare-fresh-lab-handoff.sh` from the current checkout so source evidence, handoff generation, required preflight, and freshness checks are produced together.
 
 This audit used local placeholder host values (`127.0.0.1`, `lo`) and proves planner/preflight structure only. It is not a reusable lab execution handoff, not separate-host line-rate evidence, and does not replace the lab baseline run.
 

@@ -155,14 +155,10 @@ The promotion script reruns validation, refuses validation bypass flags by defau
 For remote lab campaigns where the impairment must happen outside the JVM, generate one coordinated lab baseline plan per host-level profile:
 
 ```bash
-benchmark/scripts/capture-production-evidence.sh \
-  --out benchmark/build/benchmark-results/production-evidence-current \
-  --require-sources geyser,cloudburst-protocol,cloudburst-nukkit,cubecraft
-
-benchmark/scripts/prepare-lab-baseline-handoff.sh \
+benchmark/scripts/prepare-fresh-lab-handoff.sh \
   --out benchmark/build/benchmark-results/lab-handoff \
   --artifact-root benchmark/build/benchmark-results/lab-run \
-  --source-audit benchmark/build/benchmark-results/production-evidence-current/source-audit.json \
+  --source-audit-out benchmark/build/benchmark-results/production-evidence-current \
   --server-host <server-ip> \
   --interface <nic> \
   --expect-mtu <mtu> \
@@ -173,7 +169,7 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
   --sudo-netem
 ```
 
-That top-level handoff command creates both the perfect-network baseline plan and the host/NIC-level impairment campaign plan. Use it for baseline-of-record prep; use the lower-level impairment planner directly when you need a custom profile set or are debugging one campaign layer.
+That top-level wrapper refreshes source evidence, creates both the perfect-network baseline plan and the host/NIC-level impairment campaign plan, runs the required handoff preflight, and runs generated freshness checks. Use it for baseline-of-record prep; use the lower-level source audit, handoff, or impairment planner scripts directly when you need a custom profile set or are debugging one campaign layer.
 
 ```bash
 benchmark/scripts/plan-lab-impairment.sh \

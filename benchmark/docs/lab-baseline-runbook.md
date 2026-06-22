@@ -101,10 +101,10 @@ For line-rate validation, prefer explicit server and receiver workers instead of
 For the baseline-of-record run, generate the complete handoff package first. It creates the perfect-network plan, the host/NIC impairment campaign plan, and a top-level README with promotion and readiness commands:
 
 ```bash
-benchmark/scripts/prepare-lab-baseline-handoff.sh \
+benchmark/scripts/prepare-fresh-lab-handoff.sh \
   --out benchmark/build/benchmark-results/lab-handoff-<date>-<topology> \
   --artifact-root benchmark/build/benchmark-results/lab-run-<date>-<topology> \
-  --source-audit benchmark/build/benchmark-results/lab-<date>-<topology>/production-evidence/source-audit.json \
+  --source-audit-out benchmark/build/benchmark-results/lab-<date>-<topology>/production-evidence \
   --server-host <server-ip> \
   --interface <nic> \
   --expect-mtu <mtu> \
@@ -115,10 +115,10 @@ benchmark/scripts/prepare-lab-baseline-handoff.sh \
   --sudo-netem
 ```
 
-Use the generated handoff README as the operator run order. The lower-level commands below are still useful when diagnosing or building a custom campaign.
-The handoff manifest records the `benchmark/docs/production-usage-evidence.md` SHA-256 fingerprint and, when `--source-audit` is passed, the `capture-production-evidence.sh` audit fingerprint so promoted lab artifacts can be traced back to the exact source revisions used to choose the matrix.
+Use the generated handoff README as the operator run order. The wrapper refreshes source evidence, wires that exact `source-audit.json` into the handoff, runs the required handoff preflight, and runs generated freshness checks. The lower-level commands below are still useful when diagnosing or building a custom campaign.
+The handoff manifest records the `benchmark/docs/production-usage-evidence.md` SHA-256 fingerprint and the `capture-production-evidence.sh` audit fingerprint so promoted lab artifacts can be traced back to the exact source revisions used to choose the matrix.
 
-Before distributing the generated command scripts to lab hosts, run the handoff preflight on the merge/control host:
+Before distributing the generated command scripts to lab hosts, confirm that the wrapper-created preflight is still ready, or rerun it manually on the merge/control host:
 
 ```bash
 benchmark/scripts/check-lab-handoff.sh \
