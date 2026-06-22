@@ -776,6 +776,92 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testImpairmentSummaryAndPromotionRejectValidationBypasses() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-impairment-bypass-test");
+        Path campaign = output.resolve("campaign");
+        Path profileRoot = campaign.resolve("profiles/perfect");
+        Path combined = profileRoot.resolve("combined");
+        Path netem = campaign.resolve("netem");
+        Files.createDirectories(combined);
+        Files.createDirectories(netem);
+
+        Files.writeString(campaign.resolve("manifest.jsonl"),
+                "{\"profile\":\"perfect\",\"latency\":\"0ms\",\"jitter\":\"0ms\",\"loss\":\"0%\","
+                        + "\"artifactRoot\":\"" + profileRoot + "\","
+                        + "\"netemEvidenceDir\":\"" + netem + "\"}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(combined.resolve("validation.json"),
+                "{\"passed\":true,\"allowLoosePrereqGates\":true,\"rowCount\":1,\"capacityRowCount\":1,\"issues\":[]}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(combined.resolve("suite-aggregate.jsonl"),
+                "{\"case\":\"perfect\",\"benchmarkName\":\"multi-client-fanout\",\"deliveredGbps\":1,"
+                        + "\"probeRttP99Millis\":1}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(combined.resolve("bandwidth-capacity.jsonl"),
+                "{\"summaryKind\":\"bandwidth-capacity\",\"case\":\"perfect\",\"payloadSize\":512,"
+                        + "\"selected\":true}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(netem.resolve("perfect-status-before.txt"), "qdisc noqueue 0: root\n", StandardCharsets.UTF_8);
+
+        ProcessResult strictSummary = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/summarize-lab-impairment.sh").toString(),
+                "--manifest", campaign.resolve("manifest.jsonl").toString(),
+                "--out", campaign.resolve("summary-strict").toString()
+        );
+        Assertions.assertEquals(1, strictSummary.exitCode, strictSummary.output);
+        JsonNode strictSummaryJson = JSON.readTree(Files.readString(
+                campaign.resolve("summary-strict/impairment-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertFalse(strictSummaryJson.path("passed").asBoolean());
+        Assertions.assertTrue(strictSummaryJson.findValuesAsText("code")
+                .contains("validation-bypass-flags"));
+
+        ProcessResult smokeSummary = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/summarize-lab-impairment.sh").toString(),
+                "--manifest", campaign.resolve("manifest.jsonl").toString(),
+                "--out", campaign.resolve("summary-smoke").toString(),
+                "--allow-validation-bypasses"
+        );
+        Assertions.assertEquals(0, smokeSummary.exitCode, smokeSummary.output);
+        JsonNode smokeSummaryJson = JSON.readTree(Files.readString(
+                campaign.resolve("summary-smoke/impairment-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(smokeSummaryJson.path("passed").asBoolean());
+        Assertions.assertTrue(smokeSummaryJson.path("allowValidationBypasses").asBoolean());
+        Assertions.assertEquals("allowLoosePrereqGates",
+                smokeSummaryJson.path("profiles").get(0).path("validation").path("bypassFlags").get(0).asText());
+
+        ProcessResult rejectedPromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-impairment.sh").toString(),
+                "--input", campaign.resolve("summary-smoke").toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "impairment-smoke",
+                "--no-latest"
+        );
+        Assertions.assertEquals(1, rejectedPromotion.exitCode, rejectedPromotion.output);
+        Assertions.assertTrue(rejectedPromotion.output.contains("allowed profile validation bypasses"));
+
+        ProcessResult smokePromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-impairment.sh").toString(),
+                "--input", campaign.resolve("summary-smoke").toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "impairment-smoke",
+                "--no-latest",
+                "--allow-validation-bypasses"
+        );
+        Assertions.assertEquals(0, smokePromotion.exitCode, smokePromotion.output);
+        JsonNode promotionManifest = JSON.readTree(Files.readString(
+                output.resolve("baselines/impairment-smoke/impairment-baseline-manifest.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(promotionManifest.path("allowValidationBypasses").asBoolean());
+        Assertions.assertTrue(promotionManifest.path("summary").path("allowValidationBypasses").asBoolean());
+    }
+
+    @Test
     public void testNetnsWorkerSmokeDryRunProducesManifest() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();

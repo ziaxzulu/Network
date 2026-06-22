@@ -5,6 +5,7 @@ manifest=""
 out_dir=""
 allow_missing_validation=false
 allow_failed_validation=false
+allow_validation_bypasses=false
 require_netem_evidence=true
 
 usage() {
@@ -22,6 +23,7 @@ Options:
   --out DIR                        Output directory. Default: <manifest dir>/campaign-summary.
   --allow-missing-validation       Do not fail when a profile has no validation.json.
   --allow-failed-validation        Do not fail when a profile validation failed.
+  --allow-validation-bypasses      Do not fail when profile validation used bypass flags. Smoke only.
   --allow-missing-netem-evidence   Do not fail when profile status evidence is missing.
   --help                           Show this help.
 
@@ -48,6 +50,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-failed-validation)
       allow_failed_validation=true
+      shift
+      ;;
+    --allow-validation-bypasses)
+      allow_validation_bypasses=true
       shift
       ;;
     --allow-missing-netem-evidence)
@@ -221,6 +227,20 @@ while IFS=$'\t' read -r profile latency jitter loss artifact_root netem_evidence
         exists: $validationExists,
         path: (if $validationExists then $validationPath else null end),
         passed: (if $validationExists then ($validationObject.passed // false) else false end),
+        bypassFlags: (
+          if $validationExists then
+            [
+              ["allowUnstable", ($validationObject.allowUnstable // false)],
+              ["allowDisconnects", ($validationObject.allowDisconnects // false)],
+              ["allowMissingCapacity", ($validationObject.allowMissingCapacity // false)],
+              ["allowUnselectedCapacity", ($validationObject.allowUnselectedCapacity // false)],
+              ["allowMissingHostContext", ($validationObject.allowMissingHostContext // false)],
+              ["allowMissingPrereqContext", ($validationObject.allowMissingPrereqContext // false)],
+              ["allowLoosePrereqGates", ($validationObject.allowLoosePrereqGates // false)]
+            ]
+            | map(select(.[1] == true) | .[0])
+          else [] end
+        ),
         rowCount: ($validationObject.rowCount // null),
         capacityRowCount: ($validationObject.capacityRowCount // null),
         hostReportCount: ($validationObject.hostReportCount // null),
@@ -284,9 +304,11 @@ done < <(jq -r '[.profile, .latency, .jitter, .loss, .artifactRoot, .netemEviden
 
 allow_missing_validation_json=false
 allow_failed_validation_json=false
+allow_validation_bypasses_json=false
 require_netem_evidence_json=false
 "$allow_missing_validation" && allow_missing_validation_json=true
 "$allow_failed_validation" && allow_failed_validation_json=true
+"$allow_validation_bypasses" && allow_validation_bypasses_json=true
 "$require_netem_evidence" && require_netem_evidence_json=true
 
 jq -s \
@@ -295,6 +317,7 @@ jq -s \
   --arg outDir "$out_dir" \
   --argjson allowMissingValidation "$allow_missing_validation_json" \
   --argjson allowFailedValidation "$allow_failed_validation_json" \
+  --argjson allowValidationBypasses "$allow_validation_bypasses_json" \
   --argjson requireNetemEvidence "$require_netem_evidence_json" '
   def issue($code; $message; $profile; $extra):
     {code:$code,message:$message,profile:$profile} + $extra;
@@ -306,6 +329,7 @@ jq -s \
       else [] end)
     + ($profiles | map(select((.validation.exists | not) and ($allowMissingValidation | not)) | issue("missing-validation"; "profile is missing combined validation.json"; .profile; {artifactRoot:.artifactRoot})))
     + ($profiles | map(select(.validation.exists and (.validation.passed | not) and ($allowFailedValidation | not)) | issue("failed-validation"; "profile validation did not pass"; .profile; {validationPath:.validation.path, issueCount:.validation.issueCount})))
+    + ($profiles | map(select(.validation.exists and ((.validation.bypassFlags // []) | length) > 0 and ($allowValidationBypasses | not)) | issue("validation-bypass-flags"; "profile validation used baseline bypass flags"; .profile; {validationPath:.validation.path, bypassFlags:.validation.bypassFlags})))
     + ($profiles | map(select(.aggregate.exists | not) | issue("missing-aggregate"; "profile is missing combined suite-aggregate.jsonl"; .profile; {artifactRoot:.artifactRoot})))
     + ($profiles | map(select($requireNetemEvidence and (.netem.statusEvidenceCount == 0)) | issue("missing-netem-status-evidence"; "profile is missing netem status evidence"; .profile; {netemEvidenceDir:.netem.evidenceDir})))
   ) as $issues |
@@ -322,6 +346,7 @@ jq -s \
     requireNetemEvidence: $requireNetemEvidence,
     allowMissingValidation: $allowMissingValidation,
     allowFailedValidation: $allowFailedValidation,
+    allowValidationBypasses: $allowValidationBypasses,
     passed: (($issues | length) == 0),
     issues: $issues,
     profiles: $profiles

@@ -320,6 +320,9 @@ if [[ -s "$impairment_summary" ]]; then
   if ! jq -e '.requireNetemEvidence == true' "$impairment_summary" >/dev/null; then
     append_issue "impairment-netem-evidence-not-required" "impairment-baseline" "impairment campaign summary was generated without required netem evidence" "{\"path\":\"$impairment_summary\"}"
   fi
+  if jq -e '.allowValidationBypasses == true' "$impairment_summary" >/dev/null; then
+    append_issue "impairment-validation-bypasses-allowed" "impairment-baseline" "impairment campaign summary allowed profile validation bypasses" "{\"path\":\"$impairment_summary\"}"
+  fi
   if ! jq -e '.validationPassedCount == .profileCount and .profileCount > 0' "$impairment_summary" >/dev/null; then
     append_issue "impairment-profile-validation-incomplete" "impairment-baseline" "not every impairment profile has passing validation" "{\"path\":\"$impairment_summary\"}"
   fi

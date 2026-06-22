@@ -7,6 +7,7 @@ baseline_name=""
 allow_existing=false
 allow_failed_summary=false
 allow_missing_netem_evidence=false
+allow_validation_bypasses=false
 update_latest=true
 
 usage() {
@@ -25,6 +26,7 @@ Options:
   --allow-existing                Allow replacing generated files in an existing package directory.
   --allow-failed-summary          Allow promotion when impairment-summary.json is failed.
   --allow-missing-netem-evidence  Allow promotion when the summary did not require netem evidence.
+  --allow-validation-bypasses     Allow promotion when profile validation used bypass flags. Smoke only.
   --no-latest                     Do not update the latest-impairment symlink.
   --help                          Show this help.
 
@@ -61,6 +63,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-missing-netem-evidence)
       allow_missing_netem_evidence=true
+      shift
+      ;;
+    --allow-validation-bypasses)
+      allow_validation_bypasses=true
       shift
       ;;
     --no-latest)
@@ -158,6 +164,11 @@ if ! jq -e '.passed == true' "$summary_json" >/dev/null && [[ "$allow_failed_sum
 fi
 if ! jq -e '.requireNetemEvidence == true' "$summary_json" >/dev/null && [[ "$allow_missing_netem_evidence" != "true" ]]; then
   echo "impairment campaign summary was generated without required netem evidence; refusing to promote baseline" >&2
+  exit 1
+fi
+if jq -e '.allowValidationBypasses == true' "$summary_json" >/dev/null && [[ "$allow_validation_bypasses" != "true" ]]; then
+  echo "impairment campaign summary allowed profile validation bypasses; refusing to promote baseline" >&2
+  echo "Use --allow-validation-bypasses only for non-baseline smoke packages." >&2
   exit 1
 fi
 
@@ -316,6 +327,7 @@ jq -n \
   --arg campaignManifest "$campaign_manifest" \
   --argjson profileCount "$profile_count" \
   --argjson copiedProfileFiles "$copied_profile_files" \
+  --argjson allowValidationBypasses "$allow_validation_bypasses" \
   '{
     baselineKind: "raknet-lab-impairment-campaign",
     name: $name,
@@ -331,6 +343,7 @@ jq -n \
     },
     profileCount: $profileCount,
     copiedProfileFiles: $copiedProfileFiles,
+    allowValidationBypasses: $allowValidationBypasses,
     summary: $summary[0],
     promotedFiles: $promotedFiles[0]
   }' >"$destination/impairment-baseline-manifest.json"
