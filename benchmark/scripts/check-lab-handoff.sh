@@ -10,6 +10,7 @@ required_resource_pack_chunk_sizes="8192,262144"
 required_resource_pack_intervals_ms="200"
 required_disappearance_modes="blackhole"
 require_source_audit=false
+require_current_revision=false
 
 usage() {
   cat <<'USAGE'
@@ -31,6 +32,7 @@ Options:
   --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
   --required-disappearance-modes CSV Required disappearing-client modes. Default: blackhole.
   --require-source-audit           Require a ready capture-production-evidence.sh source-audit artifact.
+  --require-current-revision       Require the source-audit Network revision to match the current checkout.
   --help                           Show this help.
 
 Outputs:
@@ -77,6 +79,10 @@ while [[ $# -gt 0 ]]; do
       require_source_audit=true
       shift
       ;;
+    --require-current-revision)
+      require_current_revision=true
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -108,6 +114,8 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+current_network_revision="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
+current_network_short_revision="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || true)"
 
 resolve_path() {
   local path="$1"
@@ -296,6 +304,7 @@ production_evidence_actual_sha256=""
 source_audit_json="$(jq -c '.sourceAudit // null' "$manifest")"
 source_audit_doc="$(jq -r '.sourceAudit.document // ""' "$manifest")"
 source_audit_sha256="$(jq -r '.sourceAudit.sha256 // ""' "$manifest")"
+source_audit_network_revision="$(jq -r '.sourceAudit.networkRevision // ""' "$manifest")"
 source_audit_path=""
 source_audit_actual_sha256=""
 source_audit_actual_ready="null"
@@ -355,6 +364,21 @@ fi
 if "$require_source_audit" && ! jq -e '.sourceAudit != null' "$manifest" >/dev/null; then
   append_issue "handoff-missing-source-audit" "handoff" "handoff manifest does not include a production source audit artifact" \
     "$(jq -n --arg path "$manifest" '{path:$path}')"
+fi
+if "$require_current_revision"; then
+  if ! jq -e '.sourceAudit != null' "$manifest" >/dev/null; then
+    append_issue "handoff-current-revision-missing-source-audit" "handoff" "cannot require current checkout revision without a source audit artifact" \
+      "$(jq -n --arg path "$manifest" '{path:$path}')"
+  elif [[ -z "$current_network_revision" ]]; then
+    append_issue "handoff-current-revision-unavailable" "handoff" "could not determine the current Network git revision" \
+      "$(jq -n --arg repoRoot "$repo_root" '{repoRoot:$repoRoot}')"
+  elif [[ -z "$source_audit_network_revision" ]]; then
+    append_issue "handoff-source-audit-missing-revision" "handoff" "source audit does not include a Network revision" \
+      "$(jq -n --arg path "$manifest" '{path:$path}')"
+  elif [[ "$source_audit_network_revision" != "$current_network_revision" ]]; then
+    append_issue "handoff-source-audit-revision-mismatch" "handoff" "source audit Network revision does not match the current checkout" \
+      "$(jq -n --arg expected "$current_network_revision" --arg actual "$source_audit_network_revision" '{currentNetworkRevision:$expected,sourceAuditNetworkRevision:$actual}')"
+  fi
 fi
 if jq -e '.sourceAudit != null' "$manifest" >/dev/null; then
   if ! jq -e '(.sourceAudit.document // "") != "" and (.sourceAudit.exists == true) and (.sourceAudit.ready == true) and ((.sourceAudit.sha256 // "") | test("^[0-9a-f]{64}$"))' "$manifest" >/dev/null; then
@@ -459,6 +483,7 @@ if [[ -n "$production_evidence_sha256" ]]; then
 fi
 if [[ -n "$source_audit_doc" ]]; then
   check_readme_contains "Production source audit: \`$source_audit_doc\`" "handoff README does not record the production source audit"
+  check_readme_contains "--require-current-revision" "handoff README preflight command does not require the current source-audit revision"
 fi
 if [[ -n "$source_audit_sha256" ]]; then
   check_readme_contains "Production source audit SHA-256: \`$source_audit_sha256\`" "handoff README does not record the production source audit fingerprint"
@@ -738,8 +763,11 @@ jq -n \
   --argjson sourceAudit "$source_audit_json" \
   --arg sourceAuditPath "$source_audit_path" \
   --arg sourceAuditActualSha256 "$source_audit_actual_sha256" \
+  --arg currentNetworkRevision "$current_network_revision" \
+  --arg currentNetworkShortRevision "$current_network_short_revision" \
   --argjson sourceAuditActualReady "$source_audit_actual_ready" \
   --argjson requireSourceAudit "$require_source_audit" \
+  --argjson requireCurrentRevision "$require_current_revision" \
   --argjson expectedCurveRows "$expected_curve_rows" \
   --argjson actualPerfectCurveRows "$actual_perfect_curve_rows" \
   --argjson actualPerfectRaisedCurveRows "$actual_perfect_raised_curve_rows" \
@@ -782,6 +810,9 @@ jq -n \
     sourceAuditActualSha256: $sourceAuditActualSha256,
     sourceAuditActualReady: $sourceAuditActualReady,
     requireSourceAudit: $requireSourceAudit,
+    requireCurrentRevision: $requireCurrentRevision,
+    currentNetworkRevision: $currentNetworkRevision,
+    currentNetworkShortRevision: $currentNetworkShortRevision,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     issues: $issues
@@ -808,6 +839,8 @@ jq -n \
   echo "- Expected minimum CPUs: \`$(jq -r '.expectedMinCpus' "$check_json")\`"
   echo "- Require CPU performance governor: \`$(jq -r '.requireCpuPerformance' "$check_json")\`"
   echo "- Require source audit: \`$(jq -r '.requireSourceAudit' "$check_json")\`"
+  echo "- Require current revision: \`$(jq -r '.requireCurrentRevision' "$check_json")\`"
+  echo "- Current Network revision: \`$(jq -r '.currentNetworkShortRevision' "$check_json")\`"
   echo "- Source audit ready: \`$(jq -r '.sourceAuditActualReady' "$check_json")\`"
   echo "- Required minimum contention clients: \`$(jq -r '.requiredMinContentionClients' "$check_json")\`"
   echo "- Required minimum per-client Mbps: \`$(jq -r '.requiredMinContentionTargetClientMbps' "$check_json")\`"

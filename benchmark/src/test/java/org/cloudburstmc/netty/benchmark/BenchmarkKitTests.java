@@ -645,6 +645,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(handoffCheckJson.path("productionEvidence").path("sha256").asText(),
                 handoffCheckJson.path("productionEvidenceActualSha256").asText());
         Assertions.assertTrue(handoffCheckJson.path("requireSourceAudit").asBoolean());
+        Assertions.assertFalse(handoffCheckJson.path("requireCurrentRevision").asBoolean());
         Assertions.assertTrue(handoffCheckJson.path("sourceAudit").path("ready").asBoolean());
         Assertions.assertTrue(handoffCheckJson.path("sourceAuditActualReady").asBoolean());
         Assertions.assertEquals(handoffCheckJson.path("sourceAudit").path("sha256").asText(),
@@ -655,6 +656,25 @@ public class BenchmarkKitTests {
             Assertions.assertEquals(56, profileRows.path("raisedCurveRows").asInt());
             Assertions.assertEquals(1, profileRows.path("contentionRows").asInt());
         }
+
+        Path currentRevisionPreflight = output.resolve("handoff-preflight-current-revision");
+        ProcessResult currentRevisionCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", currentRevisionPreflight.toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1",
+                "--require-source-audit",
+                "--require-current-revision"
+        );
+        Assertions.assertEquals(1, currentRevisionCheck.exitCode, currentRevisionCheck.output);
+        JsonNode currentRevisionJson = JSON.readTree(Files.readString(
+                currentRevisionPreflight.resolve("handoff-check.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(currentRevisionJson.path("requireCurrentRevision").asBoolean());
+        Assertions.assertTrue(currentRevisionJson.path("currentNetworkRevision").asText().length() >= 12);
+        Assertions.assertTrue(currentRevisionJson.findValuesAsText("code")
+                .contains("handoff-source-audit-revision-mismatch"));
 
         Path handoffReadme = handoff.resolve("README.md");
         Files.writeString(handoffReadme,
@@ -823,6 +843,9 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(preflightJson.path("ready").asBoolean(), preflightJson.toPrettyString());
         Assertions.assertEquals(0, preflightJson.path("issueCount").asInt());
         Assertions.assertTrue(preflightJson.path("requireSourceAudit").asBoolean());
+        Assertions.assertTrue(preflightJson.path("requireCurrentRevision").asBoolean());
+        Assertions.assertEquals(sourceAuditJson.path("networkRevision").asText(),
+                preflightJson.path("currentNetworkRevision").asText());
         Assertions.assertTrue(preflightJson.path("sourceAuditActualReady").asBoolean());
         Assertions.assertEquals(preflightJson.path("sourceAudit").path("sha256").asText(),
                 preflightJson.path("sourceAuditActualSha256").asText());

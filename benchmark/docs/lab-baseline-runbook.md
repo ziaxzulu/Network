@@ -123,10 +123,11 @@ Before distributing the generated command scripts to lab hosts, confirm that the
 ```bash
 benchmark/scripts/check-lab-handoff.sh \
   --handoff benchmark/build/benchmark-results/lab-handoff-<date>-<topology> \
-  --require-source-audit
+  --require-source-audit \
+  --require-current-revision
 ```
 
-The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, production-evidence SHA-256 freshness, optional source-audit SHA-256/readiness, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, required `blackhole` disappearance mode, and contention row client-count/per-client-rate consistency. The immediate small-packet row is checked against `immediatePerClientMbps`; it is intentionally lower-rate and does not satisfy the main contention-rate gate. By default the preflight requires at least `500` planned contention clients and at least `5Mbps` for the main contention target; use explicit lower `--required-min-contention-*` overrides only for smoke handoffs that will not become the baseline of record. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
+The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, production-evidence SHA-256 freshness, optional source-audit SHA-256/readiness, optional source-audit revision match against the current checkout, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, required `blackhole` disappearance mode, and contention row client-count/per-client-rate consistency. The immediate small-packet row is checked against `immediatePerClientMbps`; it is intentionally lower-rate and does not satisfy the main contention-rate gate. By default the preflight requires at least `500` planned contention clients and at least `5Mbps` for the main contention target; use explicit lower `--required-min-contention-*` overrides only for smoke handoffs that will not become the baseline of record. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
 It also rejects handoffs that omit the required production-shape batch intervals, resource-pack chunk/interval rows, or blackhole disappearing-client row, so these mistakes are caught before the lab run rather than at final readiness.
 
 Before host capture or worker startup, run the local prereq check on every server and receiver host:

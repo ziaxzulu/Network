@@ -18,8 +18,8 @@ Usage:
   benchmark/scripts/prepare-fresh-lab-handoff.sh --server-host HOST --interface NIC --expect-mtu N --expect-min-cpus N [options]
 
 Refreshes production source evidence, generates a lab handoff from that exact
-source-audit artifact, runs handoff preflight with --require-source-audit, and
-runs the generated freshness checks.
+source-audit artifact, runs handoff preflight with --require-source-audit and
+--require-current-revision, and runs the generated freshness checks.
 
 Wrapper options:
   --out DIR                         Handoff output directory.
@@ -172,6 +172,7 @@ preflight_cmd=(
   --handoff "$handoff_out"
   --out "$preflight_out"
   --require-source-audit
+  --require-current-revision
 )
 preflight_cmd+=("${preflight_args[@]}")
 

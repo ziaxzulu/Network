@@ -600,6 +600,10 @@ if "$require_cpu_performance"; then
 fi
 strict_prereq_flags="$(printf ' %q' "${strict_prereq_args[@]}")"
 strict_prereq_flags="${strict_prereq_flags# }"
+preflight_flags=""
+if [[ -n "$source_audit_path" ]]; then
+  preflight_flags=" --require-source-audit --require-current-revision"
+fi
 
 jq -n \
   --arg kind "raknet-lab-handoff" \
@@ -754,7 +758,7 @@ checks shortly before execution, then follow each generated plan README.
 
 ## Run Order
 
-1. On the merge/control host, run \`benchmark/scripts/check-lab-handoff.sh --handoff "$output_root"\`.
+1. On the merge/control host, run \`benchmark/scripts/check-lab-handoff.sh --handoff "$output_root"$preflight_flags\`.
 2. Run \`perfect-plan/check-plan-freshness.sh\` shortly before execution.
 3. On each server and receiver host, run \`benchmark/scripts/check-lab-host-prereqs.sh --interface "$interface" --out "$artifact_root/prereq-\$HOST_ROLE-\$(hostname)" $strict_prereq_flags\` with the correct \`HOST_ROLE\`. Add \`--require-sudo-netem\` on hosts that will run sudo netem scripts.
 4. Fill \`perfect-plan/topology-template.md\` as \`$perfect_artifacts/topology.md\`.
