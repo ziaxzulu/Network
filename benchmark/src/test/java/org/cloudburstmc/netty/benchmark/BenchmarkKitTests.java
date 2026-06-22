@@ -26,14 +26,20 @@ import io.netty.buffer.UnpooledByteBufAllocator;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 public class BenchmarkKitTests {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -261,6 +267,112 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testLabHandoffGeneratorProducesBaselineAndImpairmentPlans() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-handoff-test");
+        Path handoff = output.resolve("handoff");
+        Path artifacts = output.resolve("artifacts");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(30),
+                "bash",
+                root.resolve("benchmark/scripts/prepare-lab-baseline-handoff.sh").toString(),
+                "--out", handoff.toString(),
+                "--artifact-root", artifacts.toString(),
+                "--server-host", "127.0.0.1",
+                "--interface", "lo",
+                "--curve-receiver", "receiver-a=1",
+                "--contention-receiver", "receiver-a=2",
+                "--profiles", "perfect,near-loss",
+                "--contention-cases", "fanout",
+                "--contention-payload-size", "64",
+                "--per-client-mbps", "1",
+                "--raised-packet-limit", "1000",
+                "--raised-global-packet-limit", "10000",
+                "--max-queued-bytes", "1048576",
+                "--warmup", "1s",
+                "--duration", "1s",
+                "--iterations", "1",
+                "--start-delay", "1s",
+                "--start-offset", "180s"
+        );
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        Assertions.assertTrue(Files.exists(handoff.resolve("perfect-plan/check-plan-freshness.sh")));
+        Assertions.assertTrue(Files.exists(handoff.resolve("perfect-plan/merge-all.sh")));
+        Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/validate-all.sh")));
+        Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/summarize-campaign.sh")));
+        Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/manifest.jsonl")));
+
+        String readme = Files.readString(handoff.resolve("README.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(readme.contains("RakNet Lab Baseline Handoff"));
+        Assertions.assertTrue(readme.contains("promote-lab-baseline.sh"));
+        Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
+
+        List<String> profiles = Files.readAllLines(handoff.resolve("impairment-plan/manifest.jsonl"), StandardCharsets.UTF_8);
+        Assertions.assertEquals(2, profiles.size());
+        Assertions.assertTrue(profiles.get(0).contains("\"profile\":\"perfect\""));
+        Assertions.assertTrue(profiles.get(1).contains("\"profile\":\"near-loss\""));
+
+        ProcessResult freshness = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                handoff.resolve("perfect-plan/check-plan-freshness.sh").toString()
+        );
+        Assertions.assertEquals(0, freshness.exitCode, freshness.output);
+        Assertions.assertTrue(freshness.output.contains("result=fresh"));
+    }
+
+    @Test
+    public void testNetnsWorkerSmokeDryRunProducesManifest() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-netns-test").resolve("netns");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/run-netns-worker-smoke.sh").toString(),
+                "--out", output.toString(),
+                "--namespace-prefix", "rb-test",
+                "--case", "fairness",
+                "--clients", "10",
+                "--affected-clients", "2",
+                "--latency", "50ms",
+                "--jitter", "5ms",
+                "--loss", "2%",
+                "--direction", "both",
+                "--payload-size", "64",
+                "--per-client-mbps", "1",
+                "--warmup", "1s",
+                "--duration", "2s",
+                "--iterations", "1",
+                "--start-offset", "30s"
+        );
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        Assertions.assertTrue(result.output.contains("Dry-run only"));
+        Assertions.assertTrue(result.output.contains("raknet-netem.sh --interface srvi --action apply"));
+        Assertions.assertTrue(result.output.contains("raknet-netem.sh --interface rcvi --action apply"));
+
+        JsonNode manifest = JSON.readTree(Files.readString(output.resolve("manifest.json"), StandardCharsets.UTF_8));
+        Assertions.assertEquals("raknet-netns-worker-smoke", manifest.path("kind").asText());
+        Assertions.assertEquals("fairness", manifest.path("case").asText());
+        Assertions.assertEquals(10, manifest.path("clients").asInt());
+        Assertions.assertEquals(8, manifest.path("healthyClients").asInt());
+        Assertions.assertEquals(2, manifest.path("affectedClients").asInt());
+        Assertions.assertEquals("50ms", manifest.path("latency").asText());
+        Assertions.assertEquals("5ms", manifest.path("jitter").asText());
+        Assertions.assertEquals("2%", manifest.path("loss").asText());
+        Assertions.assertEquals("both", manifest.path("direction").asText());
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--clients 10"));
+        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
+        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--clients 2"));
+
+        String readme = Files.readString(output.resolve("README.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(readme.contains("single-host smoke harness"));
+        Assertions.assertTrue(readme.contains("does not prove NIC line-rate"));
+    }
+
+    @Test
     public void testResultWriterProducesArtifacts() throws Exception {
         Path output = Files.createTempDirectory("raknet-benchmark-test");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
@@ -407,5 +519,62 @@ public class BenchmarkKitTests {
                 histogram.snapshot(),
                 Arrays.asList(peer.snapshot())
         );
+    }
+
+    private static void assumeShellTooling() throws Exception {
+        Assumptions.assumeTrue(commandAvailable("bash"), "bash is required for benchmark script tests");
+        Assumptions.assumeTrue(commandAvailable("jq"), "jq is required for benchmark script tests");
+    }
+
+    private static boolean commandAvailable(String command) throws Exception {
+        Process process = new ProcessBuilder("bash", "-lc", "command -v " + command)
+                .redirectErrorStream(true)
+                .start();
+        return process.waitFor(5, TimeUnit.SECONDS) && process.exitValue() == 0;
+    }
+
+    private static Path repoRoot() {
+        Path path = Paths.get("").toAbsolutePath();
+        while (path != null) {
+            if (Files.exists(path.resolve("benchmark/scripts/prepare-lab-baseline-handoff.sh"))) {
+                return path;
+            }
+            path = path.getParent();
+        }
+        throw new AssertionError("Unable to locate repository root from " + Paths.get("").toAbsolutePath());
+    }
+
+    private static ProcessResult runProcess(Path workingDirectory, Duration timeout, String... command) throws Exception {
+        Process process = new ProcessBuilder(command)
+                .directory(workingDirectory.toFile())
+                .redirectErrorStream(true)
+                .start();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        Thread reader = new Thread(() -> copyOutput(process.getInputStream(), output), "benchmark-test-output-reader");
+        reader.start();
+        if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+            process.destroyForcibly();
+            reader.join(TimeUnit.SECONDS.toMillis(5));
+            Assertions.fail("Timed out running " + Arrays.toString(command) + "\n" + output.toString(StandardCharsets.UTF_8));
+        }
+        reader.join(TimeUnit.SECONDS.toMillis(5));
+        return new ProcessResult(process.exitValue(), output.toString(StandardCharsets.UTF_8));
+    }
+
+    private static void copyOutput(InputStream input, ByteArrayOutputStream output) {
+        try (input) {
+            input.transferTo(output);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static final class ProcessResult {
+        private final int exitCode;
+        private final String output;
+
+        private ProcessResult(int exitCode, String output) {
+            this.exitCode = exitCode;
+            this.output = output;
+        }
     }
 }
