@@ -103,6 +103,7 @@ Outputs:
   impairment-plan/                  plan-lab-impairment.sh output.
   handoff-manifest.json             Machine-readable handoff metadata.
   README.md                         Handoff preflight, run order, promotion, and readiness commands.
+  promote-and-check.sh              Promotes completed artifacts and runs readiness with this handoff's paths.
 USAGE
 }
 
@@ -432,6 +433,7 @@ perfect_artifacts="$artifact_root/perfect"
 impairment_artifacts="$artifact_root/impairment"
 readme="$output_root/README.md"
 handoff_manifest="$output_root/handoff-manifest.json"
+promote_script="$output_root/promote-and-check.sh"
 production_evidence_doc_rel="benchmark/docs/production-usage-evidence.md"
 production_evidence_doc="$repo_root/$production_evidence_doc_rel"
 production_evidence_exists=false
@@ -626,6 +628,7 @@ jq -n \
   --arg productionEvidenceDoc "$production_evidence_doc_rel" \
   --arg productionEvidenceSha256 "$production_evidence_sha256" \
   --arg readme "$readme" \
+  --arg promoteScript "$promote_script" \
   --arg serverHost "$server_host" \
   --arg bindHost "$bind_host" \
   --arg port "$port" \
@@ -673,6 +676,7 @@ jq -n \
     outputRoot: $outputRoot,
     artifactRoot: $artifactRoot,
     readme: $readme,
+    promoteScript: $promoteScript,
     perfectPlan: $perfectPlan,
     impairmentPlan: $impairmentPlan,
     perfectArtifacts: $perfectArtifacts,
@@ -722,6 +726,57 @@ jq -n \
     commonArgs: $commonArgs
   }' >"$handoff_manifest"
 
+cat >"$promote_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run this after perfect-plan/merge-all.sh and impairment-plan/summarize-campaign.sh
+# have completed and the resulting artifacts have been copied back to this host.
+cd "$repo_root"
+
+BASELINE_ROOT="\${BASELINE_ROOT:-benchmark/build/benchmark-baselines}"
+PERFECT_BASELINE_NAME="\${PERFECT_BASELINE_NAME:-lab-$timestamp}"
+IMPAIRMENT_BASELINE_NAME="\${IMPAIRMENT_BASELINE_NAME:-lab-impairment-$timestamp}"
+READINESS_OUT="\${READINESS_OUT:-benchmark/build/benchmark-results/baseline-readiness-$timestamp}"
+
+benchmark/scripts/promote-lab-baseline.sh \\
+  --input "$perfect_artifacts/combined" \\
+  --handoff-manifest "$handoff_manifest" \\
+  --manifest "$perfect_plan/curve-plan/manifest.jsonl" \\
+  --manifest "$perfect_plan/curve-raised-plan/manifest.jsonl" \\
+  --manifest "$perfect_plan/contention-plan/manifest.jsonl" \\
+  --out "\$BASELINE_ROOT" \\
+  --name "\$PERFECT_BASELINE_NAME" \\
+  -- \\
+  --min-iterations "$iterations" \\
+  --min-healthy-fairness 0.95 \\
+  --max-healthy-send-deliver-ratio 1.2 \\
+  --max-affected-send-deliver-ratio 5 \\
+  --min-contention-clients "$contention_client_total" \\
+  --min-contention-target-client-mbps "$per_client_mbps"
+
+benchmark/scripts/promote-lab-impairment.sh \\
+  --input "$impairment_artifacts/campaign-summary" \\
+  --out "\$BASELINE_ROOT" \\
+  --name "\$IMPAIRMENT_BASELINE_NAME"
+
+benchmark/scripts/check-baseline-readiness.sh \\
+  --lab-baseline "\$BASELINE_ROOT/\$PERFECT_BASELINE_NAME" \\
+  --impairment-baseline "\$BASELINE_ROOT/\$IMPAIRMENT_BASELINE_NAME" \\
+  --required-min-contention-clients "$contention_client_total" \\
+  --required-min-contention-target-client-mbps "$per_client_mbps" \\
+  --required-batch-intervals-ms "$batch_intervals" \\
+  --required-resource-pack-chunk-sizes "$resource_pack_chunk_sizes" \\
+  --required-resource-pack-intervals-ms "$resource_pack_interval" \\
+  --required-disappearance-modes "blackhole" \\
+  --out "\$READINESS_OUT"
+
+echo "Perfect baseline: \$BASELINE_ROOT/\$PERFECT_BASELINE_NAME"
+echo "Impairment baseline: \$BASELINE_ROOT/\$IMPAIRMENT_BASELINE_NAME"
+echo "Readiness report: \$READINESS_OUT"
+EOF
+chmod +x "$promote_script"
+
 cat >"$readme" <<EOF
 # RakNet Lab Baseline Handoff
 
@@ -734,6 +789,7 @@ cat >"$readme" <<EOF
 - Perfect-network plan: \`$perfect_plan\`
 - Impairment campaign plan: \`$impairment_plan\`
 - Handoff manifest: \`$handoff_manifest\`
+- Promotion/readiness helper: \`$promote_script\`
 - Production evidence document: \`$production_evidence_doc_rel\`
 - Production evidence SHA-256: \`$production_evidence_sha256\`
 - Production source audit: \`$(if [[ -n "$source_audit_path" ]]; then echo "$source_audit_path"; else echo "not provided"; fi)\`
@@ -780,6 +836,7 @@ checks shortly before execution, then follow each generated plan README.
 10. Run each impairment profile from \`impairment-plan/README.md\`, including the generated netem apply/status/clear scripts on the shaped host or namespace.
 11. Copy every profile's receiver artifacts, prereq reports, and \`netem/\` evidence back under \`$impairment_artifacts\`.
 12. Run \`impairment-plan/validate-all.sh\`, then \`impairment-plan/summarize-campaign.sh\`.
+13. Run \`promote-and-check.sh\` to promote the perfect-network and impairment baselines with this handoff's manifests, then run the final readiness gate.
 
 ## Optional TeamZiax VM/eBPF Companion Evidence
 
@@ -794,6 +851,17 @@ worker results used for baseline promotion. See
 commands.
 
 ## Promote Baselines
+
+After the merge and impairment summary are complete, run the generated helper
+from the repository root. Override \`BASELINE_ROOT\`, \`PERFECT_BASELINE_NAME\`,
+\`IMPAIRMENT_BASELINE_NAME\`, or \`READINESS_OUT\` if the lab package needs
+site-specific names:
+
+\`\`\`bash
+"$promote_script"
+\`\`\`
+
+The helper runs the equivalent commands below with this handoff's exact paths:
 
 \`\`\`bash
 benchmark/scripts/promote-lab-baseline.sh \\
@@ -842,4 +910,5 @@ echo "Lab handoff: $output_root"
 echo "Perfect-network plan: $perfect_plan"
 echo "Impairment campaign plan: $impairment_plan"
 echo "Handoff manifest: $handoff_manifest"
+echo "Promotion/readiness helper: $promote_script"
 echo "README: $readme"

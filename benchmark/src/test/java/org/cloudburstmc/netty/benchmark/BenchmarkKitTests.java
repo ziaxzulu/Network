@@ -514,12 +514,25 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/summarize-campaign.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/manifest.jsonl")));
         Assertions.assertTrue(Files.exists(handoff.resolve("handoff-manifest.json")));
+        Path promoteScript = handoff.resolve("promote-and-check.sh");
+        Assertions.assertTrue(Files.exists(promoteScript));
+        Assertions.assertTrue(Files.isExecutable(promoteScript));
         Assertions.assertTrue(result.output.contains("Handoff manifest:"));
+        Assertions.assertTrue(result.output.contains("Promotion/readiness helper:"));
+
+        ProcessResult promoteSyntax = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                "-n",
+                promoteScript.toString()
+        );
+        Assertions.assertEquals(0, promoteSyntax.exitCode, promoteSyntax.output);
 
         String readme = Files.readString(handoff.resolve("README.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(readme.contains("RakNet Lab Baseline Handoff"));
         Assertions.assertTrue(readme.contains("check-lab-handoff.sh"));
         Assertions.assertTrue(readme.contains("handoff-manifest.json"));
+        Assertions.assertTrue(readme.contains("Promotion/readiness helper: `" + promoteScript + "`"));
+        Assertions.assertTrue(readme.contains("promote-and-check.sh"));
         Assertions.assertTrue(readme.contains("promote-lab-baseline.sh"));
         Assertions.assertTrue(readme.contains("--min-contention-clients \"2\""));
         Assertions.assertTrue(readme.contains("--min-contention-target-client-mbps \"1\""));
@@ -538,12 +551,25 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("Reliability: `reliable_ordered`"));
         Assertions.assertTrue(readme.contains("--handoff-manifest \"" + handoff.resolve("handoff-manifest.json") + "\""));
 
+        String promoteScriptContent = Files.readString(promoteScript, StandardCharsets.UTF_8);
+        Assertions.assertTrue(promoteScriptContent.contains("promote-lab-baseline.sh"));
+        Assertions.assertTrue(promoteScriptContent.contains("--handoff-manifest \"" + handoff.resolve("handoff-manifest.json") + "\""));
+        Assertions.assertTrue(promoteScriptContent.contains("--manifest \"" + handoff.resolve("perfect-plan/curve-plan/manifest.jsonl") + "\""));
+        Assertions.assertTrue(promoteScriptContent.contains("--manifest \"" + handoff.resolve("perfect-plan/curve-raised-plan/manifest.jsonl") + "\""));
+        Assertions.assertTrue(promoteScriptContent.contains("--manifest \"" + handoff.resolve("perfect-plan/contention-plan/manifest.jsonl") + "\""));
+        Assertions.assertTrue(promoteScriptContent.contains("--input \"" + artifacts.resolve("perfect/combined") + "\""));
+        Assertions.assertTrue(promoteScriptContent.contains("--input \"" + artifacts.resolve("impairment/campaign-summary") + "\""));
+        Assertions.assertTrue(promoteScriptContent.contains("check-baseline-readiness.sh"));
+        Assertions.assertTrue(promoteScriptContent.contains("--required-min-contention-clients \"2\""));
+        Assertions.assertTrue(promoteScriptContent.contains("--required-min-contention-target-client-mbps \"1\""));
+
         JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
                 StandardCharsets.UTF_8));
         Assertions.assertEquals("raknet-lab-handoff", handoffManifest.path("kind").asText());
         Assertions.assertEquals(root.toString(), handoffManifest.path("repoRoot").asText());
         Assertions.assertEquals(handoff.toString(), handoffManifest.path("outputRoot").asText());
         Assertions.assertEquals(artifacts.toString(), handoffManifest.path("artifactRoot").asText());
+        Assertions.assertEquals(promoteScript.toString(), handoffManifest.path("promoteScript").asText());
         Assertions.assertEquals(handoff.resolve("perfect-plan").toString(), handoffManifest.path("perfectPlan").asText());
         Assertions.assertEquals(handoff.resolve("impairment-plan").toString(),
                 handoffManifest.path("impairmentPlan").asText());

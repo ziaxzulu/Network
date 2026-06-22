@@ -467,6 +467,7 @@ if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenario
 fi
 
 check_path "$handoff_root/README.md" "handoff"
+check_path "$handoff_root/promote-and-check.sh" "handoff" true
 check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
 check_readme_contains "benchmark/scripts/check-lab-host-prereqs.sh" "handoff README does not show the host prerequisite check"
 if [[ -n "$expected_mtu" ]]; then
@@ -494,6 +495,7 @@ if [[ -n "$source_audit_sha256" ]]; then
   check_readme_contains "Production source audit SHA-256: \`$source_audit_sha256\`" "handoff README does not record the production source audit fingerprint"
 fi
 check_readme_contains "benchmark/scripts/promote-lab-baseline.sh" "handoff README does not show the perfect-network promotion command"
+check_readme_contains "promote-and-check.sh" "handoff README does not show the generated promotion/readiness helper"
 check_readme_contains "--handoff-manifest \"$manifest\"" "handoff README promotion command does not pass the handoff manifest into baseline promotion"
 check_readme_contains "--min-contention-clients \"$expected_contention_clients\"" "handoff README promotion command does not enforce the handoff contention client count"
 check_readme_contains "--min-contention-target-client-mbps \"$expected_per_client_mbps\"" "handoff README promotion command does not enforce the handoff per-client Mbps target"
