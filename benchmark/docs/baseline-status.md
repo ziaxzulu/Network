@@ -120,7 +120,26 @@ This run used payload `1340`, three measured iterations, raised packet limits (`
 
 This is the best current local capacity selector result, but it is still loopback-only. Treat it as a regression baseline and overload-knee clue, not as line-rate evidence.
 
-Latest focused current-branch 100-client fanout artifact in this worktree:
+Latest current-branch 100-client local contention suite artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-local-contention-100-20260622T095159Z/
+```
+
+This run used the local profile filtered to 100-client contention rows on git revision `609ca9c45431`. All selected cases passed and produced aggregate artifacts. It is the best current single-host evidence for the contention half of the synthetic benchmark: healthy clients generally held the intended local throughput, while poor-link and disappearing-client rows exposed the expected extra send work, queue pressure, stale datagrams, and p99 probe spread. It is still loopback-only and should not be promoted as the baseline of record.
+
+| Case | Delivered Gbps | Healthy Gbps | Affected Gbps | Client p50 Mbps | Healthy p50 Mbps | Affected p50 Mbps | Healthy fairness | p99 RTT ms | Max queue bytes | Undelivered Gbps | Affected undelivered Gbps | Affected datagram out/s | Retry signal | Unstable reason |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `fanout-100x5` | `0.4942262272` | `0.4942262272` | `0` | `4.9422336` | `4.9422336` | `0` | `0.9999999061398828` | `217.97969` | `390707` | `0.0115993368` | `0` | `0` | none | `p99-spread` |
+| `immediate-100x1-p256` | `0.099980288` | `0.099980288` | `0` | `0.9998336` | `0.9998336` | `0` | `0.9999999468162345` | `10.125639` | `2048` | `0.0045202416` | `0` | `0` | none | none |
+| `fairness-100-10poor` | `0.4351164416` | `0.43511453013333334` | `0.0000027306666666666666` | `4.834372266666667` | `4.8346453333333335` | `0` | `0.99999997982028` | `339.494957` | `9895936` | `0.01395084` | `0.0034922272` | `545.0666666666667` | `20.8` stale datagrams/s, `7.133333333333334` NACK out/s | `p99-spread` |
+| `disappear-100-close` | `0.46484302506666664` | `0.4495848789333333` | `0.016499234133333332` | `4.995208533333333` | `4.9954816` | `1.6498688000000001` | `0.9999991096459783` | `269.03889` | `461346` | `0.011331053866666668` | `0.00040264479999999996` | `2063.866666666667` | none | `p99-spread` |
+| `disappear-100-stopread` | `0.44664668160000004` | `0.43016437760000004` | `0.016482304` | `4.780032` | `4.780032` | `1.6471381333333333` | `0.9999999424044643` | `342.923905` | `6122626` | `0.05401864106666667` | `0.042254070399999996` | `7202.533333333334` | `5164.133333333333` stale datagrams/s | `p99-spread` |
+| `disappear-100-blackhole` | `0.45202172586666667` | `0.435458048` | `0.016563677866666668` | `4.828637866666666` | `4.8300032` | `1.6564223999999999` | `0.999951282033574` | `200.320648` | `6186643` | `0.04825476693333333` | `0.0348397072` | `6331.133333333333` | `4512.2` stale datagrams/s | `p99-spread` |
+| `batch-100-20ms` | `0.51136` | `0.51136` | `0` | `5.1008` | `5.1008` | `0` | `0.9999812033902818` | `34.25217` | `25777` | `0.0106383968` | `0` | `0` | `0.4` NACK out/s | `p99-spread` |
+| `resource-100-8k-200ms` | `0.032768` | `0.032768` | `0` | `0.32768` | `0.32768` | `0` | `1.0` | `13.944991` | `8209` | `0.0009968776` | `0` | `0` | none | `p99-spread` |
+
+Previous focused current-branch 100-client fanout artifact in this worktree:
 
 ```text
 benchmark/build/benchmark-results/current-local-fanout-100-20260622T072219Z/
@@ -132,7 +151,7 @@ This run used `100` established healthy clients, payload `512`, `5Mbps` per clie
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
 | `fanout-100x5` | `0.49545584639999996` | `4.9545216` | `4.95616` | `0.9999843765777217` | `325.667429` | `274449` | `0.011588379199999999` | `61988.0` | none | `p99-spread` |
 
-Latest focused current-branch 100-client fairness artifact in this worktree:
+Previous focused current-branch 100-client fairness artifact in this worktree:
 
 ```text
 benchmark/build/benchmark-results/current-local-fairness-100-20260622T071941Z/
@@ -144,7 +163,7 @@ This run used `100` established clients, `10` impaired clients, payload `512`, `
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
 | `fairness-100-10poor` | `0.449581056` | `0.4495805098666667` | `0.0000016384` | `4.995208533333333` | `0` | `0.9999999480568666` | `0.2790943396226415` | `161.770849` | `10082816` | `0.0035025002666666666` | `539.3333333333334` | `19.266666666666666` stale datagrams/s, `6.6` NACK out/s | `p99-spread` |
 
-Latest focused current-branch 100-client blackhole artifact in this worktree:
+Previous focused current-branch 100-client blackhole artifact in this worktree:
 
 ```text
 benchmark/build/benchmark-results/current-local-disappear-blackhole-100-20260622T071700Z/
