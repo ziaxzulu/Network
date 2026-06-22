@@ -2192,6 +2192,9 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(report.contains("prepare-fresh-lab-handoff.sh"));
         Assertions.assertTrue(report.contains("perfect-plan/merge-all.sh"));
         Assertions.assertTrue(report.contains("impairment-plan/summarize-campaign.sh"));
+        Assertions.assertTrue(report.contains("## Baseline Proof Checklist"));
+        Assertions.assertTrue(report.contains("combined/bandwidth-capacity.jsonl"));
+        Assertions.assertTrue(report.contains("impairment-baseline-manifest.json"));
     }
 
     @Test
