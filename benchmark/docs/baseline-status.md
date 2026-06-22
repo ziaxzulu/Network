@@ -253,13 +253,20 @@ Current-revision structural handoffs are generated artifacts, not durable commit
 
 Before lab operators distribute commands, regenerate a fresh handoff from the exact checkout that will be used for lab execution. A valid handoff should report `ready=true`, `issueCount=0`, `sourceAuditIssueCount=0`, `handoffIssueCount=0`, no dirty tracked Network files, and the expected `56` default curve, `56` raised-limiter curve, and `9` contention rows for the perfect-network plan. The impairment campaign should contain `perfect`, `near-loss`, `regional-loss`, `poor`, and `severe` profiles, each with the same `56/56/9` row shape. The refreshed source audit should also be `ready=true` with `0` issues and confirm the required Geyser, Cloudburst Protocol, Cloudburst Nukkit, and private CubeCraft checkouts are available. TeamZiax eBPF availability is captured in the same summary as optional companion evidence unless the operator explicitly includes `teamziax-ebpf` in `--require-sources`.
 
-Latest structural handoff generated during this status pass:
+Fresh structural handoff summaries are local generated artifacts, not durable committed references. After generating a handoff, inspect the wrapper summary and plan freshness artifacts:
 
-```text
-benchmark/build/benchmark-results/current-fresh-handoff-20260622T114000Z/
+```bash
+jq '{ready, issueCount, networkRevision, networkDirtyTrackedFiles, sourceAuditIssueCount, handoffIssueCount, plannedRows, requirements}' \
+  benchmark/build/benchmark-results/<handoff>/fresh-handoff-summary.json
+
+jq '{kind, passed, manifests}' \
+  benchmark/build/benchmark-results/<handoff>/perfect-plan/plan-freshness.json
+
+jq '{kind, passed, profiles}' \
+  benchmark/build/benchmark-results/<handoff>/impairment-plan/plan-freshness.json
 ```
 
-It was generated from Network revision `dab48165c2f9` and reported `ready=true`, `issueCount=0`, source-audit ready, preflight ready, `56` default curve rows, `56` raised-limiter curve rows, and `9` contention rows. The expected, manifest, and generated helper prereq roles matched: `receiver-a`, `receiver-b`, and `server`. Source audit confirmed Geyser `0d65b201f26c`, Cloudburst Protocol `f8295d3258fc`, Cloudburst Nukkit `dbbb7ca6fe7e`, private CubeCraft `c2ea06b92c19`, and optional TeamZiax eBPF `68f39f1d05db` checkouts were available with no dirty tracked files. Because any subsequent commit changes the source-audit revision fingerprint, regenerate the handoff again from the exact checkout used for lab execution.
+A current-revision handoff should report `ready=true`, `issueCount=0`, source-audit ready, preflight ready, no dirty tracked Network files, `56` default curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, and five impairment profiles each with `56/56/9` rows. The expected, manifest, and generated helper prereq roles should match: `receiver-a`, `receiver-b`, and `server`. Source audit should confirm Geyser, Cloudburst Protocol, Cloudburst Nukkit, and private CubeCraft checkouts are available with no dirty tracked files. Optional TeamZiax eBPF evidence may also be present. Because any subsequent commit changes the source-audit revision fingerprint, regenerate the handoff again from the exact checkout used for lab execution.
 
 The readiness report's `proofChecklist` JSON and Markdown sections show the required evidence chain: fresh handoff, perfect-network execution, impairment execution, and promotion. It remains intentionally `ready=false` until separate-host lab execution produces promoted perfect-network and impairment baselines.
 
@@ -318,16 +325,14 @@ The baseline is not accepted as the comparison baseline until this readiness che
 Readiness also checks that the promoted artifacts have no validation or missing retry-pressure-field bypass markers, that the perfect-network baseline retained its copied handoff manifest with matching production-evidence and source-audit fingerprints, that the promoted perfect-network package still contains copied curve, raised-curve, and contention manifests plus host reports and strict ready prereq reports from separate hosts, that the promoted impairment package still contains its copied campaign manifest plus per-profile validation, aggregate, capacity, and netem status evidence, that the perfect-network validation enforced the requested measured-iteration count, contention scale, and per-client Mbps target, and that both perfect-network and impairment packages include `blackhole` disappearing-client coverage. The recommended handoff uses `3` measured iterations and `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
 It also requires the production-shape contention rows from the source audit: immediate small-packet fanout at payload `256` and `1Mbps` per client, `10ms`, `20ms`, and `50ms` batched-game-traffic rows, plus `8192` and `262144` byte resource-pack rows at `200ms`. Promoted aggregate rows must include retry-pressure send-work fields such as `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`, so future candidate comparisons can detect send work consumed by impaired or disappeared clients.
 
-Current readiness audit in this worktree:
+Current readiness audit command before lab promotion:
 
 ```bash
 benchmark/scripts/check-baseline-readiness.sh \
-  --lab-baseline benchmark/build/benchmark-baselines/current-dab4816-lab \
-  --impairment-baseline benchmark/build/benchmark-baselines/current-dab4816-impairment \
-  --out benchmark/build/benchmark-results/readiness-current-dab4816-handoff-20260622T114000Z
+  --out benchmark/build/benchmark-results/readiness-current
 ```
 
-The audit correctly reports `not-ready` with `6` issues because no promoted perfect-network baseline or promoted impairment baseline exists yet. Its blocking issues are the missing promoted lab baseline manifest, `validation.json`, `suite-aggregate.jsonl`, `bandwidth-capacity.jsonl`, impairment baseline manifest, and impairment campaign summary. This is the expected state before the separate-host lab campaign has been run, validated, and promoted.
+Before separate-host lab execution and promotion, the audit should report `not-ready` with the expected missing-promoted-artifact issues: promoted lab baseline manifest, `validation.json`, `suite-aggregate.jsonl`, `bandwidth-capacity.jsonl`, impairment baseline manifest, and impairment campaign summary. After the lab campaign has been run, validated, and promoted, those issues should disappear and the same readiness gate should become the acceptance check for the baseline of record.
 
 TeamZiax VM/eBPF replay artifacts are optional companion evidence for lab captures. They help validate filter and capture-replay behavior, but they do not replace active established-channel RakNet throughput, latency, fairness, and retry-pressure measurements. See [`teamziax-vm-bench.md`](teamziax-vm-bench.md) before attaching those artifacts to a baseline package.
 
