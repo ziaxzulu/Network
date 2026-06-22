@@ -83,6 +83,8 @@ The `batched-game-traffic` scenario sends bursty, length-framed synthetic batche
 
 The `resource-pack-transfer` scenario sends one large bulk chunk to each established client on a fixed cadence while probes continue. Use `--chunk-size 8192 --chunk-interval 200ms` for Nukkit-style smaller resource-pack responses and `--chunk-size 262144 --chunk-interval 200ms` for Geyser-style large chunks. It records the derived target Mbps from chunk size, interval, and client count.
 
+Direct `baseline-bandwidth`, `bandwidth-latency-curve`, and `matrix` runs write `bandwidth-capacity.jsonl`, `bandwidth-capacity.csv`, and `bandwidth-capacity.md` next to `summary.json`. These direct capacity artifacts select the highest stable delivered curve row and keep the best observed rejected row visible, so one-off local and lab capacity sweeps do not require hand-parsing report tables.
+
 ## Baseline Suite Runner
 
 The baseline runner executes named cases and writes:

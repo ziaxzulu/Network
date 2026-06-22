@@ -92,7 +92,7 @@ Primary acceptance metrics:
 - ACK/NACK and stale datagram pressure
 - sender CPU and receiver CPU from the lab environment
 
-The baseline suite runner writes `bandwidth-capacity.jsonl`, `bandwidth-capacity.csv`, and `bandwidth-capacity.md` to select the highest stable bandwidth-curve point per payload/reliability/impairment/packet-limit group. The selector chooses by delivered Gbps, not offered target, because uncapped `unlimited` rows are represented as target `0`. Remote lab plans can include a paired raised-limiter curve campaign with `--raised-packet-limit` and `--raised-global-packet-limit`.
+Direct bandwidth-curve and matrix runs write `bandwidth-capacity.jsonl`, `bandwidth-capacity.csv`, and `bandwidth-capacity.md` next to `summary.json` so one-off capacity sweeps report the highest stable delivered point without hand parsing. The baseline suite runner writes the same artifact names at suite scope to select the highest stable bandwidth-curve point per payload/reliability/impairment/packet-limit group. The selector chooses by delivered Gbps, not offered target, because uncapped `unlimited` rows are represented as target `0`. Remote lab plans can include a paired raised-limiter curve campaign with `--raised-packet-limit` and `--raised-global-packet-limit`.
 
 ### 2. Bandwidth-Latency Curve
 

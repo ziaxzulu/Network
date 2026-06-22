@@ -39,8 +39,10 @@ import java.util.Map;
 public final class BenchmarkResultWriter {
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(SerializationFeature.INDENT_OUTPUT);
+    private static final ObjectMapper JSON_LINE = new ObjectMapper();
     private static final CsvMapper CSV = new CsvMapper();
     private static final CsvSchema TIMESERIES_SCHEMA = CSV.schemaFor(TimeseriesCsv.class).withHeader();
+    private static final CsvSchema CAPACITY_SCHEMA = CSV.schemaFor(CapacityCsv.class).withHeader();
 
     public File write(BenchmarkRunResult result) throws IOException {
         File directory = result.outputDirectory();
@@ -51,6 +53,7 @@ public final class BenchmarkResultWriter {
         writeTimeseriesCsv(result, new File(directory, "timeseries.csv"));
         writeLatencyData(result, new File(directory, "latency.hdr"));
         writeReport(result, new File(directory, "report.md"));
+        writeCapacityArtifacts(result, directory);
         return directory;
     }
 
@@ -138,7 +141,66 @@ public final class BenchmarkResultWriter {
             writer.write('\n');
             writer.write("## Stability\n\n");
             writer.write(stabilitySummary(result.iterations()));
+            List<CapacityRow> capacityRows = capacityRows(result);
+            if (!capacityRows.isEmpty()) {
+                writer.write("\n## Direct Bandwidth Capacity\n\n");
+                writer.write("Direct capacity artifacts are written to `bandwidth-capacity.jsonl`, `bandwidth-capacity.csv`, and `bandwidth-capacity.md`.\n");
+            }
         }
+    }
+
+    private static void writeCapacityArtifacts(BenchmarkRunResult result, File directory) throws IOException {
+        List<CapacityRow> rows = capacityRows(result);
+        if (rows.isEmpty()) {
+            return;
+        }
+
+        File jsonl = new File(directory, "bandwidth-capacity.jsonl");
+        try (BufferedWriter writer = writer(jsonl)) {
+            for (CapacityRow row : rows) {
+                writer.write(JSON_LINE.writeValueAsString(row));
+                writer.write('\n');
+            }
+        }
+
+        List<CapacityCsv> csvRows = new ArrayList<>();
+        for (CapacityRow row : rows) {
+            csvRows.add(CapacityCsv.from(row));
+        }
+        CSV.writer(CAPACITY_SCHEMA).writeValue(new File(directory, "bandwidth-capacity.csv"), csvRows);
+        writeCapacityReport(rows, result, new File(directory, "bandwidth-capacity.md"));
+    }
+
+    private static void writeCapacityReport(List<CapacityRow> rows, BenchmarkRunResult result, File file) throws IOException {
+        try (BufferedWriter writer = writer(file)) {
+            writer.write("# Direct Stable Bandwidth Capacity\n\n");
+            writer.write("- Run ID: `" + result.runId() + "`\n");
+            writer.write("- Scenario: `" + result.config().scenario().cliName() + "`\n");
+            writer.write("- Minimum iterations: `3`\n");
+            writer.write("- Allow unstable rows: `false`\n\n");
+            writer.write("| Case | Payload | Reliability | Selected | Stable Gbps | Stable target Mbps | Stable p99 ms | Stable spread | Best observed Gbps | Best observed target Mbps | Best observed reasons |\n");
+            writer.write("| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
+            for (CapacityRow row : rows) {
+                CapacityCandidate selected = row.selectedCandidate;
+                CapacityCandidate best = row.bestObservedCandidate;
+                writer.write("| `" + row.caseName
+                        + "` | " + row.payloadSize
+                        + " | `" + row.reliability
+                        + "` | " + row.selected
+                        + " | " + candidateField(selected, selected == null ? "" : format(selected.deliveredGbps))
+                        + " | " + candidateField(selected, selected == null ? "" : format(selected.targetMbps))
+                        + " | " + candidateField(selected, selected == null ? "" : format(selected.probeRttP99Millis))
+                        + " | " + candidateField(selected, selected == null ? "" : format(selected.deliveredGbpsSpreadPct) + "%")
+                        + " | " + candidateField(best, best == null ? "" : format(best.deliveredGbps))
+                        + " | " + candidateField(best, best == null ? "" : format(best.targetMbps))
+                        + " | `" + (best == null ? "" : String.join(",", best.rejectionReasons)) + "` |\n");
+            }
+            writer.write("\nStable Gbps is the highest delivered row that has at least three measured iterations, is not marked unstable, has positive delivery, and has no disconnects. Best observed Gbps is shown separately so failed high-rate rows remain visible.\n");
+        }
+    }
+
+    private static String candidateField(CapacityCandidate candidate, String value) {
+        return candidate == null ? "n/a" : value;
     }
 
     static String stabilitySummary(List<BenchmarkIterationResult> iterations) {
@@ -177,6 +239,117 @@ public final class BenchmarkResultWriter {
             rows.add(stabilityRow(entry.getKey(), entry.getValue()));
         }
         return rows;
+    }
+
+    private static List<CapacityRow> capacityRows(BenchmarkRunResult result) {
+        if (!writesCapacityArtifacts(result.config().scenario())) {
+            return Collections.emptyList();
+        }
+
+        Map<String, List<BenchmarkIterationResult>> byName = new LinkedHashMap<>();
+        for (BenchmarkIterationResult iteration : result.iterations()) {
+            byName.computeIfAbsent(iteration.name, ignored -> new ArrayList<>()).add(iteration);
+        }
+        if (byName.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        Map<String, StabilityRow> stabilityByName = new LinkedHashMap<>();
+        for (StabilityRow row : stabilityRows(result.iterations())) {
+            stabilityByName.put(row.name, row);
+        }
+
+        Map<CapacityGroupKey, List<CapacityCandidate>> byGroup = new LinkedHashMap<>();
+        for (Map.Entry<String, List<BenchmarkIterationResult>> entry : byName.entrySet()) {
+            List<BenchmarkIterationResult> iterations = entry.getValue();
+            BenchmarkIterationResult first = iterations.get(0);
+            CapacityGroupKey key = CapacityGroupKey.from(result, first);
+            CapacityCandidate candidate = capacityCandidate(entry.getKey(), iterations, stabilityByName.get(entry.getKey()));
+            byGroup.computeIfAbsent(key, ignored -> new ArrayList<>()).add(candidate);
+        }
+
+        List<CapacityRow> rows = new ArrayList<>();
+        for (Map.Entry<CapacityGroupKey, List<CapacityCandidate>> entry : byGroup.entrySet()) {
+            List<CapacityCandidate> candidates = entry.getValue();
+            CapacityCandidate selected = null;
+            CapacityCandidate bestObserved = null;
+            for (CapacityCandidate candidate : candidates) {
+                if (bestObserved == null || capacityCompare(candidate, bestObserved) < 0) {
+                    bestObserved = candidate;
+                }
+                if (candidate.rejectionReasons.isEmpty()
+                        && (selected == null || capacityCompare(candidate, selected) < 0)) {
+                    selected = candidate;
+                }
+            }
+            rows.add(CapacityRow.from(entry.getKey(), candidates, selected, bestObserved));
+        }
+        return rows;
+    }
+
+    private static boolean writesCapacityArtifacts(BenchmarkScenario scenario) {
+        return scenario == BenchmarkScenario.BASELINE_BANDWIDTH
+                || scenario == BenchmarkScenario.BANDWIDTH_LATENCY_CURVE
+                || scenario == BenchmarkScenario.MATRIX;
+    }
+
+    private static CapacityCandidate capacityCandidate(String name, List<BenchmarkIterationResult> iterations,
+                                                       StabilityRow stability) {
+        List<Double> delivered = new ArrayList<>();
+        List<Double> p99 = new ArrayList<>();
+        long maxQueuedBytes = 0L;
+        long disconnects = 0L;
+        double maxSendDeliverRatio = 0.0D;
+        double maxNackOutPerSecond = 0.0D;
+        for (BenchmarkIterationResult iteration : iterations) {
+            delivered.add(iteration.deliveredGbps);
+            p99.add(iteration.probeRtt.percentileMillis(99.0D));
+            maxQueuedBytes = Math.max(maxQueuedBytes, iteration.maxQueuedBytes);
+            disconnects += iteration.disconnects;
+            maxSendDeliverRatio = Math.max(maxSendDeliverRatio, iteration.sentToDeliveredBytesRatio);
+            maxNackOutPerSecond = Math.max(maxNackOutPerSecond, iteration.nackOutPerSecond);
+        }
+
+        BenchmarkIterationResult first = iterations.get(0);
+        double medianDeliveredGbps = median(delivered);
+        List<String> rejectionReasons = new ArrayList<>();
+        if (stability != null && stability.unstable) {
+            rejectionReasons.addAll(stability.unstableReasons);
+        }
+        if (medianDeliveredGbps <= 0.0D && !rejectionReasons.contains("zero-delivery")) {
+            rejectionReasons.add("zero-delivery");
+        }
+        if (disconnects > 0L) {
+            rejectionReasons.add("disconnects");
+        }
+
+        return new CapacityCandidate(
+                name,
+                first.targetMbps,
+                medianDeliveredGbps,
+                median(p99),
+                stability == null ? 0.0D : stability.deliveredGbpsRelativeSpreadPct,
+                stability == null ? 0.0D : stability.probeP99RelativeSpreadPct,
+                maxQueuedBytes,
+                maxSendDeliverRatio,
+                maxNackOutPerSecond,
+                disconnects,
+                iterations.size(),
+                stability != null && stability.unstable,
+                rejectionReasons
+        );
+    }
+
+    private static int capacityCompare(CapacityCandidate left, CapacityCandidate right) {
+        int delivered = Double.compare(right.deliveredGbps, left.deliveredGbps);
+        if (delivered != 0) {
+            return delivered;
+        }
+        int p99 = Double.compare(left.probeRttP99Millis, right.probeRttP99Millis);
+        if (p99 != 0) {
+            return p99;
+        }
+        return Long.compare(left.maxQueuedBytes, right.maxQueuedBytes);
     }
 
     private static StabilityRow stabilityRow(String name, List<BenchmarkIterationResult> iterations) {
@@ -219,6 +392,14 @@ public final class BenchmarkResultWriter {
         return (max - min) / median;
     }
 
+    private static double median(List<Double> values) {
+        if (values.isEmpty()) {
+            return 0.0D;
+        }
+        Collections.sort(values);
+        return values.get(values.size() / 2);
+    }
+
     private static String format(double value) {
         return String.format(Locale.ROOT, "%.6f", value);
     }
@@ -252,6 +433,200 @@ public final class BenchmarkResultWriter {
             boolean unstable,
             List<String> unstableReasons
     ) {
+    }
+
+    private record CapacityGroupKey(
+            String runId,
+            String scenario,
+            String caseName,
+            int clients,
+            int payloadSize,
+            String reliability,
+            String impairmentProfile,
+            long impairmentLatencyMillis,
+            long impairmentJitterMillis,
+            double impairmentLossPercent,
+            Integer packetLimit,
+            Integer globalPacketLimit,
+            Integer configuredMaxQueuedBytes
+    ) {
+        static CapacityGroupKey from(BenchmarkRunResult result, BenchmarkIterationResult iteration) {
+            BenchmarkConfig config = result.config();
+            return new CapacityGroupKey(
+                    result.runId(),
+                    config.scenario().cliName(),
+                    result.runId(),
+                    iteration.clients,
+                    iteration.payloadSize,
+                    iteration.reliability.name(),
+                    impairmentSummary(config),
+                    config.impairmentLatencyMillis(),
+                    config.impairmentJitterMillis(),
+                    config.impairmentLossPercent(),
+                    config.packetLimit() > 0 ? config.packetLimit() : null,
+                    config.globalPacketLimit() > 0 ? config.globalPacketLimit() : null,
+                    config.maxQueuedBytes() > 0 ? config.maxQueuedBytes() : null
+            );
+        }
+    }
+
+    private record CapacityCandidate(
+            String benchmarkName,
+            double targetMbps,
+            double deliveredGbps,
+            double probeRttP99Millis,
+            double deliveredGbpsSpreadPct,
+            double probeP99SpreadPct,
+            long maxQueuedBytes,
+            double sentToDeliveredBytesRatio,
+            double nackOutPerSecond,
+            long disconnects,
+            int iterations,
+            boolean unstable,
+            List<String> rejectionReasons
+    ) {
+    }
+
+    private record CapacityRow(
+            String summaryKind,
+            String runId,
+            String scenario,
+            String caseName,
+            int clients,
+            int payloadSize,
+            String reliability,
+            String impairmentProfile,
+            long impairmentLatencyMillis,
+            long impairmentJitterMillis,
+            double impairmentLossPercent,
+            Integer packetLimit,
+            Integer globalPacketLimit,
+            Integer configuredMaxQueuedBytes,
+            int minIterations,
+            int candidateCount,
+            int eligibleCandidateCount,
+            boolean selected,
+            CapacityCandidate selectedCandidate,
+            CapacityCandidate bestObservedCandidate,
+            List<CapacityCandidate> rejectedCandidates
+    ) {
+        static CapacityRow from(CapacityGroupKey key, List<CapacityCandidate> candidates,
+                                CapacityCandidate selected, CapacityCandidate bestObserved) {
+            List<CapacityCandidate> rejected = new ArrayList<>();
+            for (CapacityCandidate candidate : candidates) {
+                if (!candidate.rejectionReasons.isEmpty()) {
+                    rejected.add(candidate);
+                }
+            }
+            int eligible = candidates.size() - rejected.size();
+            return new CapacityRow(
+                    "direct-bandwidth-capacity",
+                    key.runId,
+                    key.scenario,
+                    key.caseName,
+                    key.clients,
+                    key.payloadSize,
+                    key.reliability,
+                    key.impairmentProfile,
+                    key.impairmentLatencyMillis,
+                    key.impairmentJitterMillis,
+                    key.impairmentLossPercent,
+                    key.packetLimit,
+                    key.globalPacketLimit,
+                    key.configuredMaxQueuedBytes,
+                    3,
+                    candidates.size(),
+                    eligible,
+                    selected != null,
+                    selected,
+                    bestObserved,
+                    rejected
+            );
+        }
+    }
+
+    @JsonPropertyOrder({
+            "case",
+            "clients",
+            "payload_size",
+            "reliability",
+            "impairment_profile",
+            "packet_limit",
+            "global_packet_limit",
+            "configured_max_queued_bytes",
+            "selected",
+            "eligible_candidates",
+            "candidate_count",
+            "selected_benchmark",
+            "selected_target_mbps",
+            "selected_delivered_gbps",
+            "selected_p99_ms",
+            "selected_spread_pct",
+            "selected_max_queue_bytes",
+            "selected_send_deliver_ratio",
+            "selected_nack_out_s",
+            "best_observed_benchmark",
+            "best_observed_target_mbps",
+            "best_observed_delivered_gbps",
+            "best_observed_p99_ms",
+            "best_observed_reasons"
+    })
+    private record CapacityCsv(
+            @JsonProperty("case") String caseName,
+            int clients,
+            @JsonProperty("payload_size") int payloadSize,
+            String reliability,
+            @JsonProperty("impairment_profile") String impairmentProfile,
+            @JsonProperty("packet_limit") Integer packetLimit,
+            @JsonProperty("global_packet_limit") Integer globalPacketLimit,
+            @JsonProperty("configured_max_queued_bytes") Integer configuredMaxQueuedBytes,
+            boolean selected,
+            @JsonProperty("eligible_candidates") int eligibleCandidates,
+            @JsonProperty("candidate_count") int candidateCount,
+            @JsonProperty("selected_benchmark") String selectedBenchmark,
+            @JsonProperty("selected_target_mbps") Double selectedTargetMbps,
+            @JsonProperty("selected_delivered_gbps") Double selectedDeliveredGbps,
+            @JsonProperty("selected_p99_ms") Double selectedP99Millis,
+            @JsonProperty("selected_spread_pct") Double selectedSpreadPct,
+            @JsonProperty("selected_max_queue_bytes") Long selectedMaxQueueBytes,
+            @JsonProperty("selected_send_deliver_ratio") Double selectedSendDeliverRatio,
+            @JsonProperty("selected_nack_out_s") Double selectedNackOutPerSecond,
+            @JsonProperty("best_observed_benchmark") String bestObservedBenchmark,
+            @JsonProperty("best_observed_target_mbps") Double bestObservedTargetMbps,
+            @JsonProperty("best_observed_delivered_gbps") Double bestObservedDeliveredGbps,
+            @JsonProperty("best_observed_p99_ms") Double bestObservedP99Millis,
+            @JsonProperty("best_observed_reasons") String bestObservedReasons
+    ) {
+        static CapacityCsv from(CapacityRow row) {
+            CapacityCandidate selected = row.selectedCandidate;
+            CapacityCandidate best = row.bestObservedCandidate;
+            return new CapacityCsv(
+                    row.caseName,
+                    row.clients,
+                    row.payloadSize,
+                    row.reliability,
+                    row.impairmentProfile,
+                    row.packetLimit,
+                    row.globalPacketLimit,
+                    row.configuredMaxQueuedBytes,
+                    row.selected,
+                    row.eligibleCandidateCount,
+                    row.candidateCount,
+                    selected == null ? null : selected.benchmarkName,
+                    selected == null ? null : selected.targetMbps,
+                    selected == null ? null : selected.deliveredGbps,
+                    selected == null ? null : selected.probeRttP99Millis,
+                    selected == null ? null : selected.deliveredGbpsSpreadPct,
+                    selected == null ? null : selected.maxQueuedBytes,
+                    selected == null ? null : selected.sentToDeliveredBytesRatio,
+                    selected == null ? null : selected.nackOutPerSecond,
+                    best == null ? null : best.benchmarkName,
+                    best == null ? null : best.targetMbps,
+                    best == null ? null : best.deliveredGbps,
+                    best == null ? null : best.probeRttP99Millis,
+                    best == null ? "" : String.join(";", best.rejectionReasons)
+            );
+        }
     }
 
     @JsonPropertyOrder({

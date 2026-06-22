@@ -2747,8 +2747,13 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(Files.exists(directory.resolve("timeseries.csv")));
         Assertions.assertTrue(Files.exists(directory.resolve("latency.hdr")));
         Assertions.assertTrue(Files.exists(directory.resolve("report.md")));
+        Assertions.assertTrue(Files.exists(directory.resolve("bandwidth-capacity.jsonl")));
+        Assertions.assertTrue(Files.exists(directory.resolve("bandwidth-capacity.csv")));
+        Assertions.assertTrue(Files.exists(directory.resolve("bandwidth-capacity.md")));
         Assertions.assertTrue(Files.readString(directory.resolve("report.md"), StandardCharsets.UTF_8)
                 .contains("| unit | 1 | 0.000000% | 0.000000% | true | `insufficient-iterations` |"));
+        Assertions.assertTrue(Files.readString(directory.resolve("report.md"), StandardCharsets.UTF_8)
+                .contains("Direct capacity artifacts are written to"));
         JsonNode summary = JSON.readTree(Files.readString(directory.resolve("summary.json"), StandardCharsets.UTF_8));
         Assertions.assertEquals("baseline-bandwidth", summary.path("scenario").asText());
         Assertions.assertEquals("unit", summary.path("runId").asText());
@@ -2836,6 +2841,61 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_in"));
         Assertions.assertEquals("1", rows.get(0).get("blackholed_datagrams_out"));
         Assertions.assertTrue(rows.get(0).containsKey("max_queued_bytes"));
+
+        JsonNode capacity = readJsonLines(directory.resolve("bandwidth-capacity.jsonl")).get(0);
+        Assertions.assertEquals("direct-bandwidth-capacity", capacity.path("summaryKind").asText());
+        Assertions.assertFalse(capacity.path("selected").asBoolean());
+        Assertions.assertEquals("unit", capacity.path("bestObservedCandidate").path("benchmarkName").asText());
+        Assertions.assertTrue(capacity.path("bestObservedCandidate").path("rejectionReasons").toString()
+                .contains("insufficient-iterations"));
+    }
+
+    @Test
+    public void testDirectCurveResultWriterSelectsStableCapacity() throws Exception {
+        Path output = Files.createTempDirectory("raknet-benchmark-capacity-test");
+        BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
+                "bandwidth-latency-curve",
+                "--out", output.toString(),
+                "--run-id", "capacity",
+                "--duration", "1s",
+                "--warmup", "0ms",
+                "--iterations", "3",
+                "--payload-size", "1200",
+                "--rates-mbps", "100,250",
+                "--packet-limit", "100000",
+                "--global-packet-limit", "1000000",
+                "--max-queued-bytes", "67108864"
+        });
+        BenchmarkRunResult run = new BenchmarkRunResult(config, EnvironmentInfo.capture());
+        for (int iteration = 1; iteration <= 3; iteration++) {
+            addCapacityIteration(run, "curve-100_0mbps", iteration, 100.0D, 12_500_000);
+            addCapacityIteration(run, "curve-250_0mbps", iteration, 250.0D, 31_250_000);
+        }
+
+        Path directory = new BenchmarkResultWriter().write(run).toPath();
+        List<JsonNode> capacityRows = readJsonLines(directory.resolve("bandwidth-capacity.jsonl"));
+        Assertions.assertEquals(1, capacityRows.size());
+        JsonNode capacity = capacityRows.get(0);
+        Assertions.assertEquals("direct-bandwidth-capacity", capacity.path("summaryKind").asText());
+        Assertions.assertTrue(capacity.path("selected").asBoolean());
+        Assertions.assertEquals(2, capacity.path("candidateCount").asInt());
+        Assertions.assertEquals(2, capacity.path("eligibleCandidateCount").asInt());
+        Assertions.assertEquals("capacity", capacity.path("caseName").asText());
+        Assertions.assertEquals("curve-250_0mbps", capacity.path("selectedCandidate").path("benchmarkName").asText());
+        Assertions.assertEquals(0.25D, capacity.path("selectedCandidate").path("deliveredGbps").asDouble(), 0.000001D);
+        Assertions.assertEquals("curve-250_0mbps", capacity.path("bestObservedCandidate").path("benchmarkName").asText());
+
+        List<Map<String, String>> rows = CSV
+                .readerFor(new TypeReference<Map<String, String>>() {
+                })
+                .with(CsvSchema.emptySchema().withHeader())
+                .<Map<String, String>>readValues(directory.resolve("bandwidth-capacity.csv").toFile())
+                .readAll();
+        Assertions.assertEquals(1, rows.size());
+        Assertions.assertEquals("true", rows.get(0).get("selected"));
+        Assertions.assertEquals("curve-250_0mbps", rows.get(0).get("selected_benchmark"));
+        Assertions.assertTrue(Files.readString(directory.resolve("bandwidth-capacity.md"), StandardCharsets.UTF_8)
+                .contains("| `capacity` | 1200 | `RELIABLE_ORDERED` | true | 0.250000 | 250.000000 |"));
     }
 
     private static void writeReadinessLabBaseline(Path labBaseline, int... payloadSizes) throws Exception {
@@ -3418,6 +3478,34 @@ public class BenchmarkKitTests {
             }
         }
         return rows;
+    }
+
+    private static void addCapacityIteration(BenchmarkRunResult run, String name, int iteration,
+                                             double targetMbps, int deliveredBytes) {
+        LatencyHistogram histogram = new LatencyHistogram();
+        histogram.record(10_000_000L);
+        PeerStats peer = new PeerStats(0, false);
+        peer.addBulkSent(deliveredBytes);
+        peer.addBulkReceived(deliveredBytes);
+        peer.addServerBytesOut(deliveredBytes);
+        peer.addServerDatagramsOut(1);
+        run.add(new BenchmarkIterationResult(
+                name,
+                iteration,
+                1,
+                1200,
+                RakReliability.RELIABLE_ORDERED,
+                targetMbps,
+                targetMbps,
+                DisappearanceMode.CLOSE,
+                false,
+                20,
+                8,
+                1,
+                1000,
+                histogram.snapshot(),
+                Arrays.asList(peer.snapshot(true, true))
+        ));
     }
 
     private static void restoreProperty(String key, String value) {
