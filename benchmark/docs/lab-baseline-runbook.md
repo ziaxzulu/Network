@@ -111,6 +111,7 @@ benchmark/scripts/check-lab-handoff.sh \
 ```
 
 The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, and contention row client-count/per-client-rate consistency. By default it also requires at least `500` planned contention clients and at least `5Mbps` per client; use explicit lower `--required-min-contention-*` overrides only for smoke handoffs that will not become the baseline of record. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
+It also rejects handoffs that omit the required production-shape batch intervals or resource-pack chunk/interval rows, so these mistakes are caught before the lab run rather than at final readiness.
 
 Before host capture or worker startup, run the local prereq check on every server and receiver host:
 

@@ -397,10 +397,16 @@ public class BenchmarkKitTests {
         List<String> manifest = Files.readAllLines(plan.resolve("manifest.jsonl"), StandardCharsets.UTF_8);
         Assertions.assertEquals(3, manifest.size());
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"benchmarkName\":\"batched-game-traffic\"")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"benchmarkName\":\"batched-game-traffic\"")
+                && row.contains("\"batchIntervalMillis\":20")
+                && row.contains("\"logicalPacketsPerBatch\":8")
+                && row.contains("\"batchGroups\":4")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"payloadSize\":8192")
-                && row.contains("\"perClientMbps\":0.327680000")));
+                && row.contains("\"perClientMbps\":0.327680000")
+                && row.contains("\"batchIntervalMillis\":200")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")
-                && row.contains("\"perClientMbps\":10.485760000")));
+                && row.contains("\"perClientMbps\":10.485760000")
+                && row.contains("\"batchIntervalMillis\":200")));
 
         String serverCommands = Files.readString(plan.resolve("server-commands.sh"), StandardCharsets.UTF_8);
         Assertions.assertTrue(serverCommands.contains("batched-game-traffic --role server"));
@@ -739,6 +745,9 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(5.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(500, handoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(3, handoffCheckJson.path("requiredBatchIntervalsMillis").size());
+        Assertions.assertEquals(2, handoffCheckJson.path("requiredResourcePackPayloadSizes").size());
+        Assertions.assertEquals(1, handoffCheckJson.path("requiredResourcePackIntervalsMillis").size());
         Assertions.assertEquals(56, handoffCheckJson.path("actualPerfectCurveRows").asInt());
         Assertions.assertEquals(56, handoffCheckJson.path("actualPerfectRaisedCurveRows").asInt());
         Assertions.assertEquals(8, handoffCheckJson.path("actualPerfectContentionRows").asInt());
@@ -748,6 +757,28 @@ public class BenchmarkKitTests {
                 .contains("\"batched-game-traffic\""));
         Assertions.assertTrue(handoffCheckJson.path("expectedContentionScenarios").toString()
                 .contains("\"resource-pack-transfer\""));
+
+        ProcessResult strictShapeCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-strict-shape").toString(),
+                "--required-batch-intervals-ms", "10,20,50,75",
+                "--required-resource-pack-chunk-sizes", "8192,262144,524288",
+                "--required-resource-pack-intervals-ms", "200,500"
+        );
+        Assertions.assertEquals(1, strictShapeCheck.exitCode, strictShapeCheck.output);
+        JsonNode strictShapeJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-strict-shape/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(strictShapeJson.findValuesAsText("code")
+                .contains("handoff-missing-required-batch-interval"));
+        Assertions.assertTrue(strictShapeJson.findValuesAsText("code")
+                .contains("handoff-missing-required-resource-pack-payload"));
+        Assertions.assertTrue(strictShapeJson.findValuesAsText("code")
+                .contains("handoff-missing-required-resource-pack-interval"));
+        Assertions.assertTrue(strictShapeJson.findValuesAsText("code")
+                .contains("contention-missing-resource-pack-shape"));
     }
 
     @Test

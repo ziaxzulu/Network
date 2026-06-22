@@ -662,6 +662,9 @@ for selected_case in "${case_array[@]}"; do
   receiver_case_args=()
   manifest_payload_size="$payload_size"
   manifest_per_client_mbps="$per_client_mbps"
+  manifest_batch_interval_millis="0"
+  manifest_logical_packets_per_batch="1"
+  manifest_batch_groups="1"
   affected_total=0
   affected_kind="none"
 
@@ -705,6 +708,9 @@ for selected_case in "${case_array[@]}"; do
       benchmark_name="batched-game-traffic"
       run_suffix="batch-${clients}-$(safe_name "$batch_interval")"
       server_case_args="--batch-interval $batch_interval --logical-packets-per-batch $logical_packets_per_batch --batch-payload-sizes $batch_payload_sizes --batch-groups $batch_groups"
+      manifest_batch_interval_millis="$(duration_millis "$batch_interval")"
+      manifest_logical_packets_per_batch="$logical_packets_per_batch"
+      manifest_batch_groups="$batch_groups"
       affected_total=0
       affected_kind="none"
       ;;
@@ -715,6 +721,7 @@ for selected_case in "${case_array[@]}"; do
       server_case_args="--chunk-size $chunk_size --chunk-interval $resource_pack_interval"
       manifest_payload_size="$chunk_size"
       manifest_per_client_mbps="$(resource_pack_client_mbps "$chunk_size")"
+      manifest_batch_interval_millis="$resource_pack_interval_ms"
       affected_total=0
       affected_kind="none"
       ;;
@@ -774,13 +781,16 @@ for selected_case in "${case_array[@]}"; do
   echo "benchmark/scripts/merge-worker-results.sh --server \"\$SERVER_OUT/$run_id\" ${merge_args[*]} --out \"\$MERGED_OUT/$run_id\" --case \"$case_name\" --benchmark-name \"$benchmark_name\"" >>"$merge_script"
   echo "cat \"\$MERGED_OUT/$run_id/suite-aggregate.jsonl\" >>\"\$MERGED_OUT/suite-aggregate.jsonl\"" >>"$merge_script"
 
-  printf '{"case":"%s","benchmarkName":"%s","runId":"%s","clients":%s,"payloadSize":%s,"perClientMbps":%s,"configuredMaxQueuedBytes":%s,"affectedKind":"%s","affectedClients":%s,"startAtEpochMillis":%s,"receiverDistribution":[%s],"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
+  printf '{"case":"%s","benchmarkName":"%s","runId":"%s","clients":%s,"payloadSize":%s,"perClientMbps":%s,"batchIntervalMillis":%s,"logicalPacketsPerBatch":%s,"batchGroups":%s,"configuredMaxQueuedBytes":%s,"affectedKind":"%s","affectedClients":%s,"startAtEpochMillis":%s,"receiverDistribution":[%s],"serverArtifact":"%s","mergedArtifact":"%s"}\n' \
     "$(json_escape "$case_name")" \
     "$(json_escape "$benchmark_name")" \
     "$(json_escape "$run_id")" \
     "$clients" \
     "$manifest_payload_size" \
     "$manifest_per_client_mbps" \
+    "$manifest_batch_interval_millis" \
+    "$manifest_logical_packets_per_batch" \
+    "$manifest_batch_groups" \
     "${max_queued_bytes:-null}" \
     "$(json_escape "$affected_kind")" \
     "$affected_total" \

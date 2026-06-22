@@ -112,6 +112,7 @@ benchmark/scripts/check-lab-handoff.sh --handoff benchmark/build/benchmark-resul
 ```
 
 That preflight checks handoff structure, generated scripts, profile plans, curve matrix coverage, contention scenario coverage, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. By default it also rejects handoffs below `500` contention clients or below `5Mbps` per client, matching the baseline readiness gate. The underlying perfect-network baseline plan is equivalent to:
+The same preflight now checks that generated contention plans include the production-shape batch/resource rows before operators spend lab time on them.
 
 ```bash
 benchmark/scripts/plan-lab-baseline.sh \

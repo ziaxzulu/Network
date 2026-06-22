@@ -5,6 +5,9 @@ handoff_root=""
 out_dir=""
 required_min_contention_clients="500"
 required_min_contention_target_client_mbps="5"
+required_batch_intervals_ms="10,20,50"
+required_resource_pack_chunk_sizes="8192,262144"
+required_resource_pack_intervals_ms="200"
 
 usage() {
   cat <<'USAGE'
@@ -21,6 +24,9 @@ Options:
   --out DIR                        Output directory. Default: <handoff>/preflight.
   --required-min-contention-clients N Required handoff contention client count. Default: 500.
   --required-min-contention-target-client-mbps N Required handoff per-client Mbps target. Default: 5.
+  --required-batch-intervals-ms CSV Required batched-game-traffic intervals in milliseconds. Default: 10,20,50.
+  --required-resource-pack-chunk-sizes CSV Required resource-pack chunk payload sizes. Default: 8192,262144.
+  --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
   --help                           Show this help.
 
 Outputs:
@@ -45,6 +51,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --required-min-contention-target-client-mbps)
       required_min_contention_target_client_mbps="$2"
+      shift 2
+      ;;
+    --required-batch-intervals-ms)
+      required_batch_intervals_ms="$2"
+      shift 2
+      ;;
+    --required-resource-pack-chunk-sizes)
+      required_resource_pack_chunk_sizes="$2"
+      shift 2
+      ;;
+    --required-resource-pack-intervals-ms)
+      required_resource_pack_intervals_ms="$2"
       shift 2
       ;;
     --help|-h)
@@ -87,6 +105,49 @@ resolve_path() {
     printf '%s\n' "$repo_root/$path"
   fi
 }
+
+duration_millis() {
+  local value="${1,,}"
+  if [[ "$value" =~ ^([0-9]+)ms$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "$value" =~ ^([0-9]+)s$ ]]; then
+    echo "$((BASH_REMATCH[1] * 1000))"
+  elif [[ "$value" =~ ^([0-9]+)m$ ]]; then
+    echo "$((BASH_REMATCH[1] * 60000))"
+  elif [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "$value"
+  else
+    echo "Invalid duration: $1" >&2
+    exit 2
+  fi
+}
+
+csv_json_number_array() {
+  printf '%s\n' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R -s 'split("\n") | map(select(length > 0) | tonumber)'
+}
+
+csv_json_duration_millis_array() {
+  local value
+  local -a values=()
+  IFS=',' read -r -a values <<<"$1"
+  for value in "${values[@]}"; do
+    value="${value//[[:space:]]/}"
+    [[ -n "$value" ]] || continue
+    duration_millis "$value"
+  done | jq -R -s 'split("\n") | map(select(length > 0) | tonumber)'
+}
+
+json_duration_millis_array_from_values() {
+  local value
+  while IFS= read -r value; do
+    [[ -n "$value" ]] || continue
+    duration_millis "$value"
+  done | jq -R -s 'split("\n") | map(select(length > 0) | tonumber)'
+}
+
+required_batch_intervals_millis_json="$(csv_json_duration_millis_array "$required_batch_intervals_ms")"
+required_resource_pack_payloads_json="$(csv_json_number_array "$required_resource_pack_chunk_sizes")"
+required_resource_pack_intervals_millis_json="$(csv_json_duration_millis_array "$required_resource_pack_intervals_ms")"
 
 handoff_root="$(resolve_path "$handoff_root")"
 if [[ -z "$out_dir" ]]; then
@@ -166,6 +227,9 @@ impairment_plan="$(jq -r '.impairmentPlan // ""' "$manifest")"
 curve_payloads_json="$(jq -c '.curvePayloadSizes // []' "$manifest")"
 curve_rates_json="$(jq -c '.curveRatesMbps // []' "$manifest")"
 profiles_json="$(jq -c '.profiles // []' "$manifest")"
+batch_intervals="$(jq -r '(.batchIntervals // []) | join(",")' "$manifest")"
+resource_pack_chunk_sizes="$(jq -r '(.resourcePackChunkSizes // []) | join(",")' "$manifest")"
+resource_pack_interval="$(jq -r '.resourcePackInterval // ""' "$manifest")"
 expected_curve_rows="$(jq -r '((.curvePayloadSizes // []) | length) * ((.curveRatesMbps // []) | length)' "$manifest")"
 expected_mtu="$(jq -r '.expectedMtu // empty' "$manifest")"
 expected_min_cpus="$(jq -r '.expectedMinCpus // empty' "$manifest")"
@@ -214,6 +278,8 @@ expected_contention_scenarios_json="$(jq -c '
   [(.contentionCases // [])[] | scenario(.)] | unique
 ' "$manifest")"
 expected_resource_pack_payloads_json="$(jq -c '.resourcePackChunkSizes // []' "$manifest")"
+expected_batch_intervals_millis_json="$(jq -r '.batchIntervals[]? // empty' "$manifest" | json_duration_millis_array_from_values)"
+expected_resource_pack_intervals_millis_json="$(jq -r '.resourcePackInterval // empty' "$manifest" | json_duration_millis_array_from_values)"
 
 if [[ "$expected_contention_clients" != "$computed_contention_clients" ]]; then
   append_issue "handoff-contention-client-total-mismatch" "handoff" "handoff contentionClientTotal does not match contention receiver distribution" \
@@ -238,6 +304,41 @@ fi
 if ! jq -e '(.productionEvidence.document // "") != "" and (.productionEvidence.exists == true) and ((.productionEvidence.sha256 // "") | test("^[0-9a-f]{64}$"))' "$manifest" >/dev/null; then
   append_issue "handoff-missing-production-evidence" "handoff" "handoff manifest does not include a concrete production evidence document fingerprint" \
     "$(jq -n --arg path "$manifest" '{path:$path}')"
+fi
+if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("batched-game-traffic") != null' >/dev/null; then
+  missing_required_batch_intervals="$(jq -r -n --argjson actual "$expected_batch_intervals_millis_json" --argjson required "$required_batch_intervals_millis_json" '
+    $required[] as $interval
+    | select(($actual | index($interval)) == null)
+    | $interval
+  ')"
+  while IFS= read -r interval; do
+    [[ -z "$interval" ]] && continue
+    append_issue "handoff-missing-required-batch-interval" "handoff" "handoff batch intervals do not include a required production-shape interval" \
+      "$(jq -n --argjson batchIntervalMillis "$interval" '{batchIntervalMillis:$batchIntervalMillis}')"
+  done <<<"$missing_required_batch_intervals"
+fi
+if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("resource-pack-transfer") != null' >/dev/null; then
+  missing_required_resource_payloads="$(jq -r -n --argjson actual "$expected_resource_pack_payloads_json" --argjson required "$required_resource_pack_payloads_json" '
+    $required[] as $payload
+    | select(($actual | index($payload)) == null)
+    | $payload
+  ')"
+  while IFS= read -r payload; do
+    [[ -z "$payload" ]] && continue
+    append_issue "handoff-missing-required-resource-pack-payload" "handoff" "handoff resource-pack chunk sizes do not include a required production-shape payload" \
+      "$(jq -n --argjson payloadSize "$payload" '{payloadSize:$payloadSize}')"
+  done <<<"$missing_required_resource_payloads"
+
+  missing_required_resource_intervals="$(jq -r -n --argjson actual "$expected_resource_pack_intervals_millis_json" --argjson required "$required_resource_pack_intervals_millis_json" '
+    $required[] as $interval
+    | select(($actual | index($interval)) == null)
+    | $interval
+  ')"
+  while IFS= read -r interval; do
+    [[ -z "$interval" ]] && continue
+    append_issue "handoff-missing-required-resource-pack-interval" "handoff" "handoff resource-pack intervals do not include a required production-shape interval" \
+      "$(jq -n --argjson batchIntervalMillis "$interval" '{batchIntervalMillis:$batchIntervalMillis}')"
+  done <<<"$missing_required_resource_intervals"
 fi
 
 check_path "$handoff_root/README.md" "handoff"
@@ -268,6 +369,9 @@ check_readme_contains "benchmark/scripts/promote-lab-impairment.sh" "handoff REA
 check_readme_contains "benchmark/scripts/check-baseline-readiness.sh" "handoff README does not show the final readiness command"
 check_readme_contains "--required-min-contention-clients \"$expected_contention_clients\"" "handoff README readiness command does not enforce the handoff contention client count"
 check_readme_contains "--required-min-contention-target-client-mbps \"$expected_per_client_mbps\"" "handoff README readiness command does not enforce the handoff per-client Mbps target"
+check_readme_contains "--required-batch-intervals-ms \"$batch_intervals\"" "handoff README readiness command does not enforce the handoff batch intervals"
+check_readme_contains "--required-resource-pack-chunk-sizes \"$resource_pack_chunk_sizes\"" "handoff README readiness command does not enforce the handoff resource-pack chunk sizes"
+check_readme_contains "--required-resource-pack-intervals-ms \"$resource_pack_interval\"" "handoff README readiness command does not enforce the handoff resource-pack interval"
 check_path "$perfect_plan/check-plan-freshness.sh" "perfect-plan" true
 check_path "$perfect_plan/host-capture-commands.sh" "perfect-plan" true
 check_path "$perfect_plan/merge-all.sh" "perfect-plan" true
@@ -340,6 +444,21 @@ check_contention_manifest() {
       "$(jq -n --arg path "$path" --arg scenario "$scenario" '{path:$path,scenario:$scenario}')"
   done <<<"$missing_scenarios"
 
+  if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("batched-game-traffic") != null' >/dev/null; then
+    local missing_batch_intervals
+    missing_batch_intervals="$(jq -r -s --argjson expected "$required_batch_intervals_millis_json" '
+      ([.[] | select((.benchmarkName // "") == "batched-game-traffic") | (.batchIntervalMillis // empty | tonumber)] | unique) as $actual
+      | $expected[] as $interval
+      | select(($actual | index($interval)) == null)
+      | $interval
+    ' "$path")"
+    while IFS= read -r interval; do
+      [[ -z "$interval" ]] && continue
+      append_issue "contention-missing-batch-interval" "$label" "contention manifest is missing a required batched-game-traffic interval" \
+        "$(jq -n --arg path "$path" --argjson batchIntervalMillis "$interval" '{path:$path,batchIntervalMillis:$batchIntervalMillis}')"
+    done <<<"$missing_batch_intervals"
+  fi
+
   local client_mismatches
   client_mismatches="$(jq -r -s --argjson expected "$expected_contention_clients" '
     .[]
@@ -370,6 +489,23 @@ check_contention_manifest() {
       append_issue "contention-missing-resource-pack-payload" "$label" "contention manifest is missing a required resource-pack payload size" \
         "$(jq -n --arg path "$path" --argjson payloadSize "$payload" '{path:$path,payloadSize:$payloadSize}')"
     done <<<"$missing_resource_payloads"
+
+    local missing_resource_shapes
+    missing_resource_shapes="$(jq -r -s --argjson expectedPayloads "$required_resource_pack_payloads_json" --argjson expectedIntervals "$required_resource_pack_intervals_millis_json" '
+      ([.[] | select((.benchmarkName // "") == "resource-pack-transfer") | {
+        payloadSize: (.payloadSize // empty | tonumber),
+        batchIntervalMillis: (.batchIntervalMillis // empty | tonumber)
+      }]) as $actual
+      | $expectedPayloads[] as $payload
+      | $expectedIntervals[] as $interval
+      | select((any($actual[]; .payloadSize == $payload and .batchIntervalMillis == $interval)) | not)
+      | [$payload, $interval] | @tsv
+    ' "$path")"
+    while IFS=$'\t' read -r payload interval; do
+      [[ -z "$payload" || -z "$interval" ]] && continue
+      append_issue "contention-missing-resource-pack-shape" "$label" "contention manifest is missing a required resource-pack payload and interval shape" \
+        "$(jq -n --arg path "$path" --argjson payloadSize "$payload" --argjson batchIntervalMillis "$interval" '{path:$path,payloadSize:$payloadSize,batchIntervalMillis:$batchIntervalMillis}')"
+    done <<<"$missing_resource_shapes"
   fi
 
   local rate_mismatches
@@ -453,6 +589,11 @@ jq -n \
   --argjson expectedProfiles "$profiles_json" \
   --argjson expectedContentionScenarios "$expected_contention_scenarios_json" \
   --argjson expectedResourcePackPayloadSizes "$expected_resource_pack_payloads_json" \
+  --argjson expectedBatchIntervalsMillis "$expected_batch_intervals_millis_json" \
+  --argjson expectedResourcePackIntervalsMillis "$expected_resource_pack_intervals_millis_json" \
+  --argjson requiredBatchIntervalsMillis "$required_batch_intervals_millis_json" \
+  --argjson requiredResourcePackPayloadSizes "$required_resource_pack_payloads_json" \
+  --argjson requiredResourcePackIntervalsMillis "$required_resource_pack_intervals_millis_json" \
   --argjson expectedContentionClients "$expected_contention_clients" \
   --argjson expectedPerClientMbps "$expected_per_client_mbps" \
   --argjson expectedMtu "$expected_mtu_json" \
@@ -483,6 +624,11 @@ jq -n \
     expectedProfiles: $expectedProfiles,
     expectedContentionScenarios: $expectedContentionScenarios,
     expectedResourcePackPayloadSizes: $expectedResourcePackPayloadSizes,
+    expectedBatchIntervalsMillis: $expectedBatchIntervalsMillis,
+    expectedResourcePackIntervalsMillis: $expectedResourcePackIntervalsMillis,
+    requiredBatchIntervalsMillis: $requiredBatchIntervalsMillis,
+    requiredResourcePackPayloadSizes: $requiredResourcePackPayloadSizes,
+    requiredResourcePackIntervalsMillis: $requiredResourcePackIntervalsMillis,
     expectedContentionClients: $expectedContentionClients,
     expectedPerClientMbps: $expectedPerClientMbps,
     expectedMtu: $expectedMtu,
@@ -507,6 +653,9 @@ jq -n \
   echo "- Actual perfect contention rows: \`$(jq -r '.actualPerfectContentionRows' "$check_json")\`"
   echo "- Expected contention clients: \`$(jq -r '.expectedContentionClients' "$check_json")\`"
   echo "- Expected per-client Mbps: \`$(jq -r '.expectedPerClientMbps' "$check_json")\`"
+  echo "- Required batch intervals ms: \`$required_batch_intervals_ms\`"
+  echo "- Required resource-pack chunk sizes: \`$required_resource_pack_chunk_sizes\`"
+  echo "- Required resource-pack intervals ms: \`$required_resource_pack_intervals_ms\`"
   echo "- Expected MTU: \`$(jq -r '.expectedMtu' "$check_json")\`"
   echo "- Expected minimum CPUs: \`$(jq -r '.expectedMinCpus' "$check_json")\`"
   echo "- Require CPU performance governor: \`$(jq -r '.requireCpuPerformance' "$check_json")\`"

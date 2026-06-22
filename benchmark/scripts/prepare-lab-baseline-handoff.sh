@@ -715,6 +715,9 @@ benchmark/scripts/check-baseline-readiness.sh \\
   --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \\
   --required-min-contention-clients "$contention_client_total" \\
   --required-min-contention-target-client-mbps "$per_client_mbps" \\
+  --required-batch-intervals-ms "$batch_intervals" \\
+  --required-resource-pack-chunk-sizes "$resource_pack_chunk_sizes" \\
+  --required-resource-pack-intervals-ms "$resource_pack_interval" \\
   --out benchmark/build/benchmark-results/baseline-readiness
 \`\`\`
 
