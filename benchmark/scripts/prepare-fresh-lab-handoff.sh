@@ -35,6 +35,7 @@ Wrapper options:
   --include-paths                   Include local source paths in the private source audit artifact.
   --required-min-contention-clients N       Preflight minimum contention clients. Default: check-lab-handoff default.
   --required-min-contention-target-client-mbps N Preflight minimum per-client Mbps. Default: check-lab-handoff default.
+  --required-min-iterations N               Preflight minimum measured iterations. Default: check-lab-handoff default.
   --required-batch-intervals-ms CSV          Preflight required batch intervals.
   --required-resource-pack-chunk-sizes CSV   Preflight required resource-pack chunk sizes.
   --required-resource-pack-intervals-ms CSV  Preflight required resource-pack intervals.
@@ -89,7 +90,7 @@ while [[ $# -gt 0 ]]; do
       include_paths=true
       shift
       ;;
-    --required-min-contention-clients|--required-min-contention-target-client-mbps|--required-batch-intervals-ms|--required-resource-pack-chunk-sizes|--required-resource-pack-intervals-ms|--required-disappearance-modes)
+    --required-min-contention-clients|--required-min-contention-target-client-mbps|--required-min-iterations|--required-batch-intervals-ms|--required-resource-pack-chunk-sizes|--required-resource-pack-intervals-ms|--required-disappearance-modes)
       preflight_args+=("$1" "$2")
       shift 2
       ;;
@@ -245,6 +246,8 @@ jq -n \
         expectedContentionClients: ($preflight.expectedContentionClients // null),
         expectedPerClientMbps: ($preflight.expectedPerClientMbps // null),
         expectedImmediatePerClientMbps: ($preflight.expectedImmediatePerClientMbps // null),
+        expectedIterations: ($preflight.expectedIterations // null),
+        requiredMinIterations: ($preflight.requiredMinIterations // null),
         requiredBatchIntervalsMillis: ($preflight.requiredBatchIntervalsMillis // []),
         requiredResourcePackPayloadSizes: ($preflight.requiredResourcePackPayloadSizes // []),
         requiredResourcePackIntervalsMillis: ($preflight.requiredResourcePackIntervalsMillis // []),

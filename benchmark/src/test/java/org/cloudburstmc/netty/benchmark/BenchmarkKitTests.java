@@ -693,6 +693,8 @@ public class BenchmarkKitTests {
                 .contains("handoff-contention-clients-below-threshold"));
         Assertions.assertTrue(defaultHandoffCheckJson.findValuesAsText("code")
                 .contains("handoff-contention-target-client-mbps-below-threshold"));
+        Assertions.assertTrue(defaultHandoffCheckJson.findValuesAsText("code")
+                .contains("handoff-iterations-below-threshold"));
 
         Path handoffPreflight = output.resolve("handoff-preflight");
         ProcessResult handoffCheck = runProcess(root, Duration.ofSeconds(20),
@@ -702,6 +704,7 @@ public class BenchmarkKitTests {
                 "--out", handoffPreflight.toString(),
                 "--required-min-contention-clients", "2",
                 "--required-min-contention-target-client-mbps", "1",
+                "--required-min-iterations", "1",
                 "--require-source-audit"
         );
         Assertions.assertEquals(0, handoffCheck.exitCode, handoffCheck.output);
@@ -717,6 +720,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(2, handoffCheckJson.path("expectedContentionClients").asInt());
         Assertions.assertEquals("reliable_ordered", handoffCheckJson.path("expectedReliability").asText());
         Assertions.assertEquals(1.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(1, handoffCheckJson.path("expectedIterations").asInt());
+        Assertions.assertEquals(1, handoffCheckJson.path("requiredMinIterations").asInt());
         Assertions.assertEquals(1500, handoffCheckJson.path("expectedMtu").asInt());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedMinCpus").asInt());
         Assertions.assertEquals("benchmark/docs/production-usage-evidence.md",
@@ -746,6 +751,7 @@ public class BenchmarkKitTests {
                 "--out", currentRevisionPreflight.toString(),
                 "--required-min-contention-clients", "2",
                 "--required-min-contention-target-client-mbps", "1",
+                "--required-min-iterations", "1",
                 "--require-source-audit",
                 "--require-current-revision"
         );
@@ -1030,7 +1036,7 @@ public class BenchmarkKitTests {
                 "--profiles", "perfect",
                 "--warmup", "1s",
                 "--duration", "60s",
-                "--iterations", "1",
+                "--iterations", "3",
                 "--start-delay", "1s",
                 "--start-offset", "300s"
         );
@@ -1102,6 +1108,8 @@ public class BenchmarkKitTests {
                 0.001D);
         Assertions.assertEquals(1.0D, summaryJson.path("requirements")
                 .path("expectedImmediatePerClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(3, summaryJson.path("requirements").path("expectedIterations").asInt());
+        Assertions.assertEquals(3, summaryJson.path("requirements").path("requiredMinIterations").asInt());
         Assertions.assertEquals(500, summaryJson.path("requirements")
                 .path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, summaryJson.path("requirements")
@@ -1140,7 +1148,7 @@ public class BenchmarkKitTests {
                 "--profiles", "perfect",
                 "--warmup", "1s",
                 "--duration", "60s",
-                "--iterations", "1",
+                "--iterations", "3",
                 "--start-delay", "1s",
                 "--start-offset", "180s"
         );
@@ -1173,6 +1181,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(500, handoffCheckJson.path("expectedContentionClients").asInt());
         Assertions.assertEquals("reliable_ordered", handoffCheckJson.path("expectedReliability").asText());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(3, handoffCheckJson.path("expectedIterations").asInt());
+        Assertions.assertEquals(3, handoffCheckJson.path("requiredMinIterations").asInt());
         Assertions.assertEquals(500, handoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(3, handoffCheckJson.path("requiredBatchIntervalsMillis").size());
@@ -2547,6 +2557,27 @@ public class BenchmarkKitTests {
                 .contains("lab-contention-target-client-mbps-gate-too-low"));
 
         writeReadinessLabBaseline(labBaseline, 500, 5.0D, 64, 256, 512, 1200, 1340, 1400, 262144);
+        Path validationJson = labBaseline.resolve("validation.json");
+        Files.writeString(validationJson,
+                Files.readString(validationJson, StandardCharsets.UTF_8)
+                        .replace("\"minIterations\":3", "\"minIterations\":2"),
+                StandardCharsets.UTF_8);
+        ProcessResult weakIterations = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, weakIterations.exitCode, weakIterations.output);
+        JsonNode weakIterationsReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(weakIterationsReadiness.path("ready").asBoolean());
+        Assertions.assertEquals(3, weakIterationsReadiness.path("requiredMinIterations").asInt());
+        Assertions.assertTrue(weakIterationsReadiness.findValuesAsText("code")
+                .contains("lab-iteration-gate-too-low"));
+
+        writeReadinessLabBaseline(labBaseline, 500, 5.0D, 64, 256, 512, 1200, 1340, 1400, 262144);
         ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
                 "bash",
                 root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
@@ -3160,6 +3191,7 @@ public class BenchmarkKitTests {
                         + ",\"strictPrereqReportCount\":" + readyPrereqReportCount
                         + ",\"prereqDistinctHostnameCount\":" + prereqDistinctHostnameCount
                         + ",\"strictPrereqDistinctHostnameCount\":" + Math.min(readyPrereqReportCount, prereqDistinctHostnameCount)
+                        + ",\"minIterations\":3"
                         + ",\"minContentionClients\":" + minContentionClients
                         + ",\"minContentionTargetClientMbps\":" + minContentionTargetClientMbps
                         + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length

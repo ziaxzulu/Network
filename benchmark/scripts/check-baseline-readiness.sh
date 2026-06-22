@@ -14,6 +14,7 @@ required_resource_pack_chunk_sizes="8192,262144"
 required_resource_pack_intervals_ms="200"
 required_disappearance_modes="blackhole"
 required_retry_pressure_fields="undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond"
+required_min_iterations="3"
 required_min_contention_clients="500"
 required_min_contention_target_client_mbps="5"
 required_min_prereq_reports="2"
@@ -42,6 +43,7 @@ Options:
   --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
   --required-disappearance-modes CSV Required disappearing-client modes. Default: blackhole.
   --required-retry-pressure-fields CSV Required aggregate fields for send-work/retry-pressure comparison. Default: undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond.
+  --required-min-iterations N     Required lab validation iteration gate. Default: 3.
   --required-min-contention-clients N Required lab validation contention-client gate. Default: 500.
   --required-min-contention-target-client-mbps N Required lab validation per-client Mbps gate. Default: 5.
   --required-min-prereq-reports N Required lab prereq reports. Default: 2.
@@ -108,6 +110,10 @@ while [[ $# -gt 0 ]]; do
       required_retry_pressure_fields="$2"
       shift 2
       ;;
+    --required-min-iterations)
+      required_min_iterations="$2"
+      shift 2
+      ;;
     --required-min-contention-clients)
       required_min_contention_clients="$2"
       shift 2
@@ -166,6 +172,10 @@ if ! [[ "$required_min_contention_target_client_mbps" =~ ^[0-9]+([.][0-9]+)?$ ]]
 fi
 if ! [[ "$required_immediate_target_client_mbps" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "--required-immediate-target-client-mbps must be a non-negative number" >&2
+  exit 2
+fi
+if ! [[ "$required_min_iterations" =~ ^[0-9]+$ ]]; then
+  echo "--required-min-iterations must be a non-negative integer" >&2
   exit 2
 fi
 if ! [[ "$required_min_prereq_reports" =~ ^[0-9]+$ ]]; then
@@ -394,6 +404,10 @@ if [[ -s "$lab_validation" ]]; then
   done
   if ! jq -e '.capacityRowCount > 0' "$lab_validation" >/dev/null; then
     append_issue "lab-missing-capacity-rows" "lab-baseline" "lab baseline has no capacity selector rows" "{\"path\":\"$lab_validation\"}"
+  fi
+  if ! jq -e --argjson required "$required_min_iterations" '(.minIterations // -1) >= $required' "$lab_validation" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_iterations" --argjson actual "$(jq -r '.minIterations // -1' "$lab_validation")" '{requiredMinIterations:$required,actualMinIterations:$actual}')"
+    append_issue "lab-iteration-gate-too-low" "lab-baseline" "lab validation did not enforce the required measured iteration count" "$extra"
   fi
   if ! jq -e --argjson required "$required_min_contention_clients" '(.minContentionClients // -1) >= $required' "$lab_validation" >/dev/null; then
     extra="$(jq -n --argjson required "$required_min_contention_clients" --argjson actual "$(jq -r '.minContentionClients // -1' "$lab_validation")" '{requiredMinContentionClients:$required,actualMinContentionClients:$actual}')"
@@ -799,6 +813,7 @@ next_actions_json="$(jq -s '
       command: "benchmark/scripts/validate-lab-baseline.sh --input <perfect-artifacts>/combined --manifest <curve-manifest.jsonl> --manifest <raised-curve-manifest.jsonl> --manifest <contention-manifest.jsonl>"
     } else empty end,
     if has_prefix("lab-missing-") or has_any_code([
+      "lab-iteration-gate-too-low",
       "lab-contention-client-gate-too-low",
       "lab-contention-target-client-mbps-gate-too-low",
       "lab-unselected-capacity"
@@ -841,6 +856,7 @@ jq -n \
   --argjson requiredResourcePackIntervalsMillis "$required_resource_pack_intervals_json" \
   --argjson requiredDisappearanceModes "$required_disappearance_modes_json" \
   --argjson requiredRetryPressureFields "$required_retry_pressure_fields_json" \
+  --argjson requiredMinIterations "$required_min_iterations" \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson requiredMinPrereqReports "$required_min_prereq_reports" \
@@ -875,6 +891,7 @@ jq -n \
     requiredResourcePackIntervalsMillis: $requiredResourcePackIntervalsMillis,
     requiredDisappearanceModes: $requiredDisappearanceModes,
     requiredRetryPressureFields: $requiredRetryPressureFields,
+    requiredMinIterations: $requiredMinIterations,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     requiredMinPrereqReports: $requiredMinPrereqReports,
@@ -904,6 +921,7 @@ jq -n \
   echo "- Required resource-pack intervals ms: \`$required_resource_pack_intervals_ms\`"
   echo "- Required disappearance modes: \`$required_disappearance_modes\`"
   echo "- Required retry-pressure fields: \`$required_retry_pressure_fields\`"
+  echo "- Required minimum measured iterations: \`$required_min_iterations\`"
   echo "- Required minimum contention clients: \`$required_min_contention_clients\`"
   echo "- Required minimum contention target/client Mbps: \`$required_min_contention_target_client_mbps\`"
   echo "- Required prereq reports: \`$required_min_prereq_reports\`"
@@ -924,6 +942,7 @@ jq -n \
     echo "- Strict prereq reports: \`$(jq -r '.strictPrereqReportCount // 0' "$lab_validation")\`"
     echo "- Distinct prereq hostnames: \`$(jq -r '.prereqDistinctHostnameCount // 0' "$lab_validation")\`"
     echo "- Strict prereq hostnames: \`$(jq -r '.strictPrereqDistinctHostnameCount // 0' "$lab_validation")\`"
+    echo "- Validated minimum iterations: \`$(jq -r '.minIterations // "missing"' "$lab_validation")\`"
     echo "- Validated minimum contention clients: \`$(jq -r '.minContentionClients // "missing"' "$lab_validation")\`"
     echo "- Validated minimum contention target/client Mbps: \`$(jq -r '.minContentionTargetClientMbps // "missing"' "$lab_validation")\`"
   else

@@ -5,6 +5,7 @@ handoff_root=""
 out_dir=""
 required_min_contention_clients="500"
 required_min_contention_target_client_mbps="5"
+required_min_iterations="3"
 required_batch_intervals_ms="10,20,50"
 required_resource_pack_chunk_sizes="8192,262144"
 required_resource_pack_intervals_ms="200"
@@ -27,6 +28,7 @@ Options:
   --out DIR                        Output directory. Default: <handoff>/preflight.
   --required-min-contention-clients N Required handoff contention client count. Default: 500.
   --required-min-contention-target-client-mbps N Required handoff per-client Mbps target. Default: 5.
+  --required-min-iterations N       Required measured iterations. Default: 3.
   --required-batch-intervals-ms CSV Required batched-game-traffic intervals in milliseconds. Default: 10,20,50.
   --required-resource-pack-chunk-sizes CSV Required resource-pack chunk payload sizes. Default: 8192,262144.
   --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
@@ -57,6 +59,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --required-min-contention-target-client-mbps)
       required_min_contention_target_client_mbps="$2"
+      shift 2
+      ;;
+    --required-min-iterations)
+      required_min_iterations="$2"
       shift 2
       ;;
     --required-batch-intervals-ms)
@@ -109,6 +115,10 @@ if ! [[ "$required_min_contention_clients" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$required_min_contention_target_client_mbps" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "--required-min-contention-target-client-mbps must be a non-negative number" >&2
+  exit 2
+fi
+if ! [[ "$required_min_iterations" =~ ^[0-9]+$ ]]; then
+  echo "--required-min-iterations must be a non-negative integer" >&2
   exit 2
 fi
 
@@ -288,6 +298,7 @@ expected_reliability="$(jq -r '.reliability // ""' "$manifest")"
 expected_curve_rows="$(jq -r '((.curvePayloadSizes // []) | length) * ((.curveRatesMbps // []) | length)' "$manifest")"
 expected_mtu="$(jq -r '.expectedMtu // empty' "$manifest")"
 expected_min_cpus="$(jq -r '.expectedMinCpus // empty' "$manifest")"
+expected_iterations="$(jq -r '.iterations // empty' "$manifest")"
 require_cpu_performance="$(jq -r '.requireCpuPerformance // false' "$manifest")"
 if [[ "$require_cpu_performance" != "true" ]]; then
   require_cpu_performance="false"
@@ -299,6 +310,10 @@ fi
 expected_min_cpus_json="$expected_min_cpus"
 if ! [[ "$expected_min_cpus_json" =~ ^[0-9]+$ ]]; then
   expected_min_cpus_json="0"
+fi
+expected_iterations_json="$expected_iterations"
+if ! [[ "$expected_iterations_json" =~ ^[0-9]+$ ]]; then
+  expected_iterations_json="0"
 fi
 expected_contention_clients="$(jq -r '
   def receiver_clients($spec):
@@ -361,6 +376,13 @@ fi
 if ! [[ "$expected_min_cpus" =~ ^[0-9]+$ && "$expected_min_cpus" -gt 0 ]]; then
   append_issue "handoff-missing-expected-min-cpus" "handoff" "handoff manifest does not include a concrete expected minimum CPU count" \
     "$(jq -n --arg path "$manifest" '{path:$path}')"
+fi
+if ! [[ "$expected_iterations" =~ ^[0-9]+$ && "$expected_iterations" -gt 0 ]]; then
+  append_issue "handoff-missing-iterations" "handoff" "handoff manifest does not include a concrete measured iteration count" \
+    "$(jq -n --arg path "$manifest" '{path:$path}')"
+elif (( expected_iterations < required_min_iterations )); then
+  append_issue "handoff-iterations-below-threshold" "handoff" "handoff measured iteration count is below the required baseline threshold" \
+    "$(jq -n --argjson required "$required_min_iterations" --argjson actual "$expected_iterations" '{requiredMinIterations:$required,actualIterations:$actual}')"
 fi
 if (( expected_contention_clients < required_min_contention_clients )); then
   append_issue "handoff-contention-clients-below-threshold" "handoff" "handoff contention client count is below the required baseline threshold" \
@@ -870,6 +892,8 @@ jq -n \
   --argjson expectedMtu "$expected_mtu_json" \
   --argjson expectedMinCpus "$expected_min_cpus_json" \
   --argjson requireCpuPerformance "$require_cpu_performance" \
+  --argjson expectedIterations "$expected_iterations_json" \
+  --argjson requiredMinIterations "$required_min_iterations" \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson productionEvidence "$production_evidence_json" \
@@ -918,6 +942,8 @@ jq -n \
     expectedMtu: $expectedMtu,
     expectedMinCpus: $expectedMinCpus,
     requireCpuPerformance: $requireCpuPerformance,
+    expectedIterations: $expectedIterations,
+    requiredMinIterations: $requiredMinIterations,
     productionEvidence: $productionEvidence,
     productionEvidencePath: $productionEvidencePath,
     productionEvidenceActualSha256: $productionEvidenceActualSha256,
@@ -955,6 +981,8 @@ jq -n \
   echo "- Expected MTU: \`$(jq -r '.expectedMtu' "$check_json")\`"
   echo "- Expected minimum CPUs: \`$(jq -r '.expectedMinCpus' "$check_json")\`"
   echo "- Require CPU performance governor: \`$(jq -r '.requireCpuPerformance' "$check_json")\`"
+  echo "- Expected measured iterations: \`$(jq -r '.expectedIterations' "$check_json")\`"
+  echo "- Required minimum iterations: \`$(jq -r '.requiredMinIterations' "$check_json")\`"
   echo "- Require source audit: \`$(jq -r '.requireSourceAudit' "$check_json")\`"
   echo "- Require current revision: \`$(jq -r '.requireCurrentRevision' "$check_json")\`"
   echo "- Current Network revision: \`$(jq -r '.currentNetworkShortRevision' "$check_json")\`"
