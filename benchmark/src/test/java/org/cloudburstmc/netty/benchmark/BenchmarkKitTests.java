@@ -36,6 +36,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -306,6 +307,53 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-disappear-100-blackhole\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-batch-100-20ms\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-resource-100-8k-200ms\"")));
+    }
+
+    @Test
+    public void testBaselineMatrixAggregatesMockBenchmarkArtifacts() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-matrix-aggregate-test");
+        Path suite = output.resolve("suite");
+        Path mockGradle = output.resolve("mock-gradle.sh");
+        Files.writeString(mockGradle, mockGradleScript(), StandardCharsets.UTF_8);
+        Assertions.assertTrue(mockGradle.toFile().setExecutable(true));
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/run-baseline-matrix.sh").toString(),
+                "--profile", "smoke",
+                "--out", suite.toString(),
+                "--gradle", mockGradle.toString()
+        );
+        Assertions.assertEquals(0, result.exitCode, result.output);
+
+        List<JsonNode> summaryRows = readJsonLines(suite.resolve("suite-summary.jsonl"));
+        Assertions.assertEquals(9, summaryRows.size());
+        Assertions.assertTrue(summaryRows.stream().allMatch(JsonNode::isObject));
+        Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("multi-client-fanout")));
+        Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("fairness")));
+        Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("disappearing-clients")));
+        Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("batched-game-traffic")));
+        Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("resource-pack-transfer")));
+
+        List<JsonNode> aggregateRows = readJsonLines(suite.resolve("suite-aggregate.jsonl"));
+        Assertions.assertEquals(9, aggregateRows.size());
+        Assertions.assertTrue(aggregateRows.stream().allMatch(JsonNode::isObject));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("summaryKind").asText().equals("aggregate")));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("unstableReasons").toString()
+                .contains("insufficient-iterations")));
+        Assertions.assertTrue(aggregateRows.stream().anyMatch(row -> row.path("case").asText().equals("curve-1c-mtu")
+                && row.path("benchmarkName").asText().equals("curve-100_0mbps")
+                && row.path("deliveredGbps").asDouble() > 0.09D));
+
+        List<JsonNode> capacityRows = readJsonLines(suite.resolve("bandwidth-capacity.jsonl"));
+        Assertions.assertEquals(1, capacityRows.size());
+        JsonNode capacity = capacityRows.get(0);
+        Assertions.assertEquals("bandwidth-capacity", capacity.path("summaryKind").asText());
+        Assertions.assertFalse(capacity.path("selected").asBoolean());
+        Assertions.assertTrue(capacity.path("selectedCandidate").isNull());
+        Assertions.assertEquals("curve-100_0mbps", capacity.path("bestObservedCandidate").path("benchmarkName").asText());
     }
 
     @Test
@@ -1893,6 +1941,117 @@ public class BenchmarkKitTests {
                 histogram.snapshot(),
                 Arrays.asList(peer.snapshot())
         );
+    }
+
+    private static List<JsonNode> readJsonLines(Path path) throws Exception {
+        List<JsonNode> rows = new ArrayList<>();
+        for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
+            if (!line.isBlank()) {
+                rows.add(JSON.readTree(line));
+            }
+        }
+        return rows;
+    }
+
+    private static String mockGradleScript() {
+        return """
+                #!/usr/bin/env bash
+                set -euo pipefail
+
+                benchmark_args=""
+                for arg in "$@"; do
+                  case "$arg" in
+                    -PbenchmarkArgs=*)
+                      benchmark_args="${arg#-PbenchmarkArgs=}"
+                      ;;
+                  esac
+                done
+                if [[ -z "$benchmark_args" ]]; then
+                  echo "missing -PbenchmarkArgs" >&2
+                  exit 2
+                fi
+
+                arg_value() {
+                  local flag="$1"
+                  local fallback="$2"
+                  if [[ "$benchmark_args" =~ (^|[[:space:]])${flag}[[:space:]]([^[:space:]]+) ]]; then
+                    printf '%s' "${BASH_REMATCH[2]}"
+                  else
+                    printf '%s' "$fallback"
+                  fi
+                }
+
+                scenario="${benchmark_args%% *}"
+                output_root="$(arg_value --out "")"
+                run_id="$(arg_value --run-id "")"
+                clients="$(arg_value --clients 1)"
+                payload_size="$(arg_value --payload-size "$(arg_value --chunk-size 512)")"
+                target_client_mbps="$(arg_value --per-client-mbps "$(arg_value --rate-mbps 1)")"
+                impairment_latency="$(arg_value --impairment-latency 0ms)"
+                impairment_jitter="$(arg_value --impairment-jitter 0ms)"
+                impairment_loss="$(arg_value --impairment-loss 0)"
+                if [[ -z "$output_root" || -z "$run_id" ]]; then
+                  echo "mock benchmark requires --out and --run-id in benchmark args: $benchmark_args" >&2
+                  exit 2
+                fi
+
+                artifact="$output_root/$run_id"
+                mkdir -p "$artifact"
+                impairment_latency="${impairment_latency%ms}"
+                impairment_jitter="${impairment_jitter%ms}"
+                batched=false
+                batch_interval=0
+                logical_packets=1
+                batch_groups=1
+                if [[ "$scenario" == "batched-game-traffic" ]]; then
+                  batched=true
+                  batch_interval="$(arg_value --batch-interval 20ms)"
+                  batch_interval="${batch_interval%ms}"
+                  logical_packets="$(arg_value --logical-packets-per-batch 4)"
+                  batch_groups="$(arg_value --batch-groups 2)"
+                fi
+
+                iteration_json() {
+                  local name="$1"
+                  local delivered_gbps="$2"
+                  local p99="$3"
+                  local affected_clients="${4:-0}"
+                  local stale="${5:-0}"
+                  local nack_out="${6:-0}"
+                  cat <<JSON
+                {"name":"$name","iteration":1,"clients":$clients,"payloadSize":$payload_size,"reliability":"RELIABLE_ORDERED","targetMbps":1.0,"targetClientMbps":$target_client_mbps,"disappearanceMode":"close","batched":$batched,"batchIntervalMillis":$batch_interval,"logicalPacketsPerBatch":$logical_packets,"batchGroups":$batch_groups,"elapsedMillis":1000,"offeredGbps":$delivered_gbps,"deliveredGbps":$delivered_gbps,"healthyDeliveredGbps":$delivered_gbps,"affectedDeliveredGbps":0.0,"serverBytesOut":1024,"serverDatagramsOut":10,"serverDatagramsOutPerSecond":10.0,"sentToDeliveredBytesRatio":1.0,"healthySentToDeliveredBytesRatio":1.0,"affectedSentToDeliveredBytesRatio":1.0,"perClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"healthyClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"affectedClientThroughput":{"minMbps":0.5,"p50Mbps":0.5,"p95Mbps":0.5,"p99Mbps":0.5,"maxMbps":0.5},"deliveredMessagesPerSecond":1000.0,"deliveredLogicalPacketsPerSecond":1000.0,"probeRttP95Millis":$p99,"probeRttP99Millis":$p99,"fairnessIndex":1.0,"healthyFairnessIndex":1.0,"affectedFairnessIndex":1.0,"affectedClients":$affected_clients,"disconnects":0,"blackholedDatagramsIn":0,"blackholedDatagramsOut":0,"staleDatagrams":$stale,"staleDatagramsPerSecond":$stale,"nackIn":0,"nackInPerSecond":0.0,"nackOut":$nack_out,"nackOutPerSecond":$nack_out,"maxQueuedBytes":1024}
+                JSON
+                }
+
+                case "$scenario" in
+                  bandwidth-latency-curve)
+                    iterations="$(iteration_json curve-50_0mbps 0.05 10.0),$(iteration_json curve-100_0mbps 0.10 11.0)"
+                    ;;
+                  fairness)
+                    iterations="$(iteration_json fairness 0.002 25.0 2 1 1)"
+                    ;;
+                  disappearing-clients)
+                    iterations="$(iteration_json disappearing-clients 0.002 20.0 1 2 0)"
+                    ;;
+                  multi-client-fanout)
+                    iterations="$(iteration_json multi-client-fanout 0.002 12.0)"
+                    ;;
+                  batched-game-traffic)
+                    iterations="$(iteration_json batched-game-traffic 0.002 13.0)"
+                    ;;
+                  resource-pack-transfer)
+                    iterations="$(iteration_json resource-pack-transfer 0.003 14.0)"
+                    ;;
+                  *)
+                    iterations="$(iteration_json "$scenario" 0.05 10.0)"
+                    ;;
+                esac
+
+                cat >"$artifact/summary.json" <<JSON
+                {"runId":"$run_id","scenario":"$scenario","impairmentLatencyMillis":$impairment_latency,"impairmentJitterMillis":$impairment_jitter,"impairmentLossPercent":$impairment_loss,"iterations":[$iterations]}
+                JSON
+                printf 'mock benchmark wrote %s\\n' "$artifact"
+                """;
     }
 
     private static void assumeShellTooling() throws Exception {
