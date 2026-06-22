@@ -89,7 +89,7 @@ The handoff writes the perfect-network plan, impairment campaign plan, top-level
 benchmark/scripts/check-lab-handoff.sh --handoff benchmark/build/benchmark-results/lab-handoff-current
 ```
 
-That preflight checks handoff structure, generated scripts, profile plans, curve matrix coverage, contention scenario coverage, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. By default it also rejects handoffs below `100` contention clients or below `5Mbps` per client, matching the baseline readiness gate. The underlying perfect-network baseline plan is equivalent to:
+That preflight checks handoff structure, generated scripts, profile plans, curve matrix coverage, contention scenario coverage, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. By default it also rejects handoffs below `500` contention clients or below `5Mbps` per client, matching the baseline readiness gate. The underlying perfect-network baseline plan is equivalent to:
 
 ```bash
 benchmark/scripts/plan-lab-baseline.sh \

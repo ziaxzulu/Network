@@ -142,7 +142,7 @@ benchmark/scripts/promote-lab-baseline.sh \
   --min-healthy-fairness 0.95 \
   --max-healthy-send-deliver-ratio 1.2 \
   --max-affected-send-deliver-ratio 5 \
-  --min-contention-clients 100 \
+  --min-contention-clients 500 \
   --min-contention-target-client-mbps 5
 ```
 
@@ -176,7 +176,8 @@ benchmark/scripts/plan-lab-impairment.sh \
   -- \
   --server-host <server-ip> \
   --curve-receiver receiver-a=1 \
-  --contention-receiver receiver-a=100 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
   --raised-packet-limit 100000 \
   --raised-global-packet-limit 1000000
 ```

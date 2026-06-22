@@ -3,7 +3,7 @@ set -euo pipefail
 
 handoff_root=""
 out_dir=""
-required_min_contention_clients="100"
+required_min_contention_clients="500"
 required_min_contention_target_client_mbps="5"
 
 usage() {
@@ -19,7 +19,7 @@ lab validation, promotion, or final baseline readiness checks.
 Options:
   --handoff DIR                    Handoff directory containing handoff-manifest.json. Required.
   --out DIR                        Output directory. Default: <handoff>/preflight.
-  --required-min-contention-clients N Required handoff contention client count. Default: 100.
+  --required-min-contention-clients N Required handoff contention client count. Default: 500.
   --required-min-contention-target-client-mbps N Required handoff per-client Mbps target. Default: 5.
   --help                           Show this help.
 

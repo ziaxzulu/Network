@@ -428,7 +428,7 @@ public class BenchmarkKitTests {
                 defaultHandoffPreflight.resolve("handoff-check.json"),
                 StandardCharsets.UTF_8));
         Assertions.assertFalse(defaultHandoffCheckJson.path("ready").asBoolean());
-        Assertions.assertEquals(100, defaultHandoffCheckJson.path("requiredMinContentionClients").asInt());
+        Assertions.assertEquals(500, defaultHandoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, defaultHandoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
         Assertions.assertTrue(defaultHandoffCheckJson.findValuesAsText("code")
                 .contains("handoff-contention-clients-below-threshold"));
@@ -566,7 +566,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, handoffCheckJson.path("issueCount").asInt());
         Assertions.assertEquals(500, handoffCheckJson.path("expectedContentionClients").asInt());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
-        Assertions.assertEquals(100, handoffCheckJson.path("requiredMinContentionClients").asInt());
+        Assertions.assertEquals(500, handoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
     }
 
@@ -1043,7 +1043,7 @@ public class BenchmarkKitTests {
         Path impairmentBaseline = output.resolve("impairment");
         Path readiness = output.resolve("readiness");
 
-        writeReadinessLabBaseline(labBaseline, 99, 5.0D, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessLabBaseline(labBaseline, 499, 5.0D, 64, 256, 512, 1200, 1340, 1400, 262144);
         writeReadinessImpairmentBaseline(impairmentBaseline);
 
         ProcessResult weakClients = runProcess(root, Duration.ofSeconds(10),
@@ -1057,11 +1057,11 @@ public class BenchmarkKitTests {
         JsonNode weakClientsReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
                 StandardCharsets.UTF_8));
         Assertions.assertFalse(weakClientsReadiness.path("ready").asBoolean());
-        Assertions.assertEquals(100, weakClientsReadiness.path("requiredMinContentionClients").asInt());
+        Assertions.assertEquals(500, weakClientsReadiness.path("requiredMinContentionClients").asInt());
         Assertions.assertTrue(weakClientsReadiness.findValuesAsText("code")
                 .contains("lab-contention-client-gate-too-low"));
 
-        writeReadinessLabBaseline(labBaseline, 100, 4.9D, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessLabBaseline(labBaseline, 500, 4.9D, 64, 256, 512, 1200, 1340, 1400, 262144);
         ProcessResult weakRate = runProcess(root, Duration.ofSeconds(10),
                 "bash",
                 root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
@@ -1077,7 +1077,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(weakRateReadiness.findValuesAsText("code")
                 .contains("lab-contention-target-client-mbps-gate-too-low"));
 
-        writeReadinessLabBaseline(labBaseline, 100, 5.0D, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessLabBaseline(labBaseline, 500, 5.0D, 64, 256, 512, 1200, 1340, 1400, 262144);
         ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
                 "bash",
                 root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
@@ -1097,7 +1097,7 @@ public class BenchmarkKitTests {
         Path impairmentBaseline = output.resolve("impairment");
         Path readiness = output.resolve("readiness");
 
-        writeReadinessLabBaselineWithMetadata(labBaseline, 100, 5.0D, 1, 1, 1,
+        writeReadinessLabBaselineWithMetadata(labBaseline, 500, 5.0D, 1, 1, 1,
                 64, 256, 512, 1200, 1340, 1400, 262144);
         writeReadinessImpairmentBaseline(impairmentBaseline);
 
@@ -1120,7 +1120,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(missingPrereqsReadiness.findValuesAsText("code")
                 .contains("lab-prereq-not-separate-hosts"));
 
-        writeReadinessLabBaselineWithMetadata(labBaseline, 100, 5.0D, 2, 1, 2,
+        writeReadinessLabBaselineWithMetadata(labBaseline, 500, 5.0D, 2, 1, 2,
                 64, 256, 512, 1200, 1340, 1400, 262144);
         ProcessResult notReadyPrereq = runProcess(root, Duration.ofSeconds(10),
                 "bash",
@@ -1137,7 +1137,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(notReadyPrereqReadiness.findValuesAsText("code")
                 .contains("lab-prereq-report-failed"));
 
-        writeReadinessLabBaselineWithMetadata(labBaseline, 100, 5.0D, 2, 2, 2,
+        writeReadinessLabBaselineWithMetadata(labBaseline, 500, 5.0D, 2, 2, 2,
                 64, 256, 512, 1200, 1340, 1400, 262144);
         ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
                 "bash",
@@ -1275,7 +1275,7 @@ public class BenchmarkKitTests {
     }
 
     private static void writeReadinessLabBaseline(Path labBaseline, int... payloadSizes) throws Exception {
-        writeReadinessLabBaseline(labBaseline, 100, 5.0D, payloadSizes);
+        writeReadinessLabBaseline(labBaseline, 500, 5.0D, payloadSizes);
     }
 
     private static void writeReadinessLabBaseline(Path labBaseline,

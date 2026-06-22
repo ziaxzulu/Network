@@ -101,7 +101,7 @@ benchmark/scripts/check-lab-handoff.sh \
   --handoff benchmark/build/benchmark-results/lab-handoff-<date>-<topology>
 ```
 
-The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, and contention row client-count/per-client-rate consistency. By default it also requires at least `100` planned contention clients and at least `5Mbps` per client; use explicit `--required-min-contention-*` overrides only for smoke handoffs that will not become the baseline of record. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
+The preflight writes `preflight/handoff-check.json` and `preflight/handoff-check.md`. It checks the handoff manifest, generated scripts, perfect-network and impairment profile manifests, curve payload/rate coverage, contention scenario coverage, and contention row client-count/per-client-rate consistency. By default it also requires at least `500` planned contention clients and at least `5Mbps` per client; use explicit lower `--required-min-contention-*` overrides only for smoke handoffs that will not become the baseline of record. Run the generated freshness checks after this and shortly before execution so stale scheduled start times are still caught.
 
 Before host capture or worker startup, run the local prereq check on every server and receiver host:
 
@@ -117,7 +117,7 @@ HOST_ROLE=server benchmark/scripts/check-lab-host-prereqs.sh \
 
 Use the matching `HOST_ROLE` for receiver hosts, and add `--require-sudo-netem` on hosts that will run generated sudo netem scripts. Add `--require-cpu-performance` when the lab hosts have been pinned to the performance governor; leave it advisory on hosts where the governor is unavailable but document that in `topology.md`. The check is read-only and writes `prereq.json` plus `prereq.md`; it fails early for missing Java/JDK 17+, missing Gradle wrapper, missing `ip`/`tc`, a missing selected interface, qdisc inspection failures, strict clock/MTU/CPU-count/no-netem mismatches, or strict CPU-governor mismatches. Keep those directories under the lab artifact root. Baseline validation requires at least two ready strict `prereq.json` files from at least two distinct hostnames unless `--allow-missing-prereq-context` or `--allow-loose-prereq-gates` is used for a non-baseline smoke run.
 
-For a baseline-of-record campaign, start with the lab planner. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
+For a baseline-of-record campaign, prefer the top-level handoff above. If you need to use the lower-level lab planner directly, keep the same `500`-client contention shape. It generates a remote bandwidth-curve plan, a remote contention plan, host-capture commands, a topology template, and a combined merge script:
 
 ```bash
 benchmark/scripts/plan-lab-baseline.sh \
@@ -126,7 +126,8 @@ benchmark/scripts/plan-lab-baseline.sh \
   --server-host <server-ip> \
   --interface <nic> \
   --curve-receiver receiver-a=1 \
-  --contention-receiver receiver-a=100 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
   --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --curve-rates-mbps 100,250,500,750,1000,1500,2000,unlimited \
   --contention-cases fanout,fairness,disappear-blackhole \
@@ -147,7 +148,8 @@ benchmark/scripts/plan-lab-baseline.sh \
   --server-host <server-ip> \
   --interface <nic> \
   --curve-receiver receiver-a=1 \
-  --contention-receiver receiver-a=100 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
   --raised-packet-limit 100000 \
   --raised-global-packet-limit 1000000
 ```
@@ -291,7 +293,8 @@ benchmark/scripts/plan-lab-impairment.sh \
   -- \
   --server-host <server-ip> \
   --curve-receiver receiver-a=1 \
-  --contention-receiver receiver-a=100 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
   --raised-packet-limit 100000 \
   --raised-global-packet-limit 1000000
 ```
@@ -364,7 +367,7 @@ benchmark/scripts/promote-lab-baseline.sh \
   --min-healthy-fairness 0.95 \
   --max-healthy-send-deliver-ratio 1.2 \
   --max-affected-send-deliver-ratio 5 \
-  --min-contention-clients 100 \
+  --min-contention-clients 500 \
   --min-contention-target-client-mbps 5
 ```
 

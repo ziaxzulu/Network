@@ -7,7 +7,7 @@ out_dir=""
 expected_impairment_profiles="perfect,near-loss,regional-loss,poor,severe"
 required_curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 required_impairment_contention_scenarios="multi-client-fanout,fairness,disappearing-clients"
-required_min_contention_clients="100"
+required_min_contention_clients="500"
 required_min_contention_target_client_mbps="5"
 required_min_prereq_reports="2"
 required_min_ready_prereq_reports="2"
@@ -27,7 +27,7 @@ Options:
   --expected-impairment-profiles CSV Required impairment profiles. Default: perfect,near-loss,regional-loss,poor,severe.
   --required-curve-payload-sizes CSV Required perfect-network curve payload sizes. Default: 64,256,512,1200,1340,1400,262144.
   --required-impairment-contention-scenarios CSV Required contention scenarios per impairment profile. Default: multi-client-fanout,fairness,disappearing-clients.
-  --required-min-contention-clients N Required lab validation contention-client gate. Default: 100.
+  --required-min-contention-clients N Required lab validation contention-client gate. Default: 500.
   --required-min-contention-target-client-mbps N Required lab validation per-client Mbps gate. Default: 5.
   --required-min-prereq-reports N Required lab prereq reports. Default: 2.
   --required-min-ready-prereq-reports N Required ready lab prereq reports. Default: 2.
