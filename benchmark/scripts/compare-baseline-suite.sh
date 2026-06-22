@@ -6,8 +6,12 @@ candidate_path=""
 report_path=""
 jsonl_path=""
 throughput_regression_pct="10"
+healthy_throughput_regression_pct="10"
 latency_regression_pct="10"
 queue_regression_pct="50"
+healthy_fairness_regression="0.02"
+send_work_regression_pct="50"
+retry_pressure_regression_pct="50"
 allow_failed_validation=false
 require_validation=false
 allow_validation_bypasses=false
@@ -25,8 +29,14 @@ Options:
   --out FILE                      Markdown report path. Default: stdout.
   --jsonl FILE                    Raw comparison JSONL path. Default: next to --out, or temporary for stdout.
   --throughput-regression-pct N   Fail when delivered Gbps falls by more than N percent. Default: 10.
+  --healthy-throughput-regression-pct N
+                                  Fail when healthy-client delivered Gbps or p50 Mbps falls by more than N percent. Default: 10.
   --latency-regression-pct N      Fail when p99 probe RTT rises by more than N percent. Default: 10.
   --queue-regression-pct N        Fail when max queued bytes rises by more than N percent. Default: 50.
+  --healthy-fairness-regression N Fail when healthy-client Jain fairness drops by more than this absolute value. Default: 0.02.
+  --send-work-regression-pct N    Fail when send/deliver byte ratio grows by more than N percent. Default: 50.
+  --retry-pressure-regression-pct N
+                                  Fail when undelivered, affected datagram, stale, or NACK pressure grows by more than N percent. Default: 50.
   --require-validation            Fail when either input does not have validation.json.
   --allow-failed-validation       Do not fail when baseline or candidate validation.json exists and is failed.
   --allow-validation-bypasses     Allow validation files that used baseline bypass flags. Smoke only.
@@ -69,12 +79,28 @@ while [[ $# -gt 0 ]]; do
       throughput_regression_pct="$2"
       shift 2
       ;;
+    --healthy-throughput-regression-pct)
+      healthy_throughput_regression_pct="$2"
+      shift 2
+      ;;
     --latency-regression-pct)
       latency_regression_pct="$2"
       shift 2
       ;;
     --queue-regression-pct)
       queue_regression_pct="$2"
+      shift 2
+      ;;
+    --healthy-fairness-regression)
+      healthy_fairness_regression="$2"
+      shift 2
+      ;;
+    --send-work-regression-pct)
+      send_work_regression_pct="$2"
+      shift 2
+      ;;
+    --retry-pressure-regression-pct)
+      retry_pressure_regression_pct="$2"
       shift 2
       ;;
     --allow-failed-validation)
@@ -159,7 +185,14 @@ is_number() {
   [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
 }
 
-for value in "$throughput_regression_pct" "$latency_regression_pct" "$queue_regression_pct"; do
+for value in \
+  "$throughput_regression_pct" \
+  "$healthy_throughput_regression_pct" \
+  "$latency_regression_pct" \
+  "$queue_regression_pct" \
+  "$healthy_fairness_regression" \
+  "$send_work_regression_pct" \
+  "$retry_pressure_regression_pct"; do
   if ! is_number "$value"; then
     echo "Threshold values must be non-negative numbers: $value" >&2
     exit 2
@@ -258,8 +291,12 @@ jq -c -n \
   --slurpfile baseline "$baseline_summary" \
   --slurpfile candidate "$candidate_summary" \
   --argjson throughputThreshold "$throughput_regression_pct" \
+  --argjson healthyThroughputThreshold "$healthy_throughput_regression_pct" \
   --argjson latencyThreshold "$latency_regression_pct" \
-  --argjson queueThreshold "$queue_regression_pct" '
+  --argjson queueThreshold "$queue_regression_pct" \
+  --argjson healthyFairnessThreshold "$healthy_fairness_regression" \
+  --argjson sendWorkThreshold "$send_work_regression_pct" \
+  --argjson retryPressureThreshold "$retry_pressure_regression_pct" '
   def suite_key($row):
     if ($row.summaryKind // "") == "aggregate" or (($row.iteration // "") | tostring) == "aggregate" then
       [$row.case, $row.benchmarkName] | join("|")
@@ -273,6 +310,15 @@ jq -c -n \
   def pct_delta($base; $candidate):
     if $base == null or $candidate == null or ($base | tonumber) == 0 then
       null
+    else
+      (((($candidate | tonumber) - ($base | tonumber)) / ($base | tonumber)) * 100)
+    end;
+
+  def pct_increase($base; $candidate):
+    if $base == null or $candidate == null then
+      null
+    elif ($base | tonumber) == 0 then
+      if ($candidate | tonumber) > 0 then 1000000000 else 0 end
     else
       (((($candidate | tonumber) - ($base | tonumber)) / ($base | tonumber)) * 100)
     end;
@@ -356,8 +402,19 @@ jq -c -n \
 
   def compare_rows($base; $cand):
     (pct_delta(n($base.deliveredGbps); n($cand.deliveredGbps))) as $throughputDeltaPct |
+    (pct_delta(n($base.healthyDeliveredGbps); n($cand.healthyDeliveredGbps))) as $healthyThroughputDeltaPct |
+    (pct_delta(n($base.healthyClientMbpsP50); n($cand.healthyClientMbpsP50))) as $healthyClientP50DeltaPct |
     (pct_delta(n($base.probeRttP99Millis); n($cand.probeRttP99Millis))) as $latencyDeltaPct |
     (pct_delta(n($base.maxQueuedBytes); n($cand.maxQueuedBytes))) as $queueDeltaPct |
+    (((n($cand.healthyFairnessIndex) // 0) - (n($base.healthyFairnessIndex) // 0))) as $healthyFairnessDelta |
+    (pct_increase(n($base.sentToDeliveredBytesRatio); n($cand.sentToDeliveredBytesRatio))) as $sendDeliverIncreasePct |
+    (pct_increase(n($base.healthySentToDeliveredBytesRatio); n($cand.healthySentToDeliveredBytesRatio))) as $healthySendDeliverIncreasePct |
+    (pct_increase(n($base.affectedSentToDeliveredBytesRatio); n($cand.affectedSentToDeliveredBytesRatio))) as $affectedSendDeliverIncreasePct |
+    (pct_increase(n($base.undeliveredServerGbps); n($cand.undeliveredServerGbps))) as $undeliveredIncreasePct |
+    (pct_increase(n($base.affectedUndeliveredServerGbps); n($cand.affectedUndeliveredServerGbps))) as $affectedUndeliveredIncreasePct |
+    (pct_increase(n($base.affectedServerDatagramsOutPerSecond); n($cand.affectedServerDatagramsOutPerSecond))) as $affectedDatagramIncreasePct |
+    (pct_increase(n($base.staleDatagramsPerSecond); n($cand.staleDatagramsPerSecond))) as $staleRateIncreasePct |
+    (pct_increase(n($base.nackOutPerSecond); n($cand.nackOutPerSecond))) as $nackRateIncreasePct |
     (($base.clients // null) != ($cand.clients // null)) as $clientCountMismatch |
     (($base.payloadSize // null) != ($cand.payloadSize // null)) as $payloadSizeMismatch |
     (($base.reliability // null) != ($cand.reliability // null)) as $reliabilityMismatch |
@@ -389,8 +446,19 @@ jq -c -n \
       + (if $globalPacketLimitMismatch then ["global-packet-limit-mismatch"] else [] end)
       + (if $configuredMaxQueuedBytesMismatch then ["configured-max-queued-bytes-mismatch"] else [] end)
       + (if $throughputDeltaPct != null and $throughputDeltaPct < (-1 * $throughputThreshold) then ["throughput-regression"] else [] end)
+      + (if $healthyThroughputDeltaPct != null and $healthyThroughputDeltaPct < (-1 * $healthyThroughputThreshold) then ["healthy-throughput-regression"] else [] end)
+      + (if $healthyClientP50DeltaPct != null and $healthyClientP50DeltaPct < (-1 * $healthyThroughputThreshold) then ["healthy-client-throughput-regression"] else [] end)
       + (if $latencyDeltaPct != null and $latencyDeltaPct > $latencyThreshold then ["p99-latency-regression"] else [] end)
       + (if $queueDeltaPct != null and $queueDeltaPct > $queueThreshold then ["queue-regression"] else [] end)
+      + (if $healthyFairnessThreshold > 0 and $healthyFairnessDelta < (-1 * $healthyFairnessThreshold) then ["healthy-fairness-regression"] else [] end)
+      + (if $sendWorkThreshold > 0 and $sendDeliverIncreasePct != null and $sendDeliverIncreasePct > $sendWorkThreshold then ["send-deliver-regression"] else [] end)
+      + (if $sendWorkThreshold > 0 and $healthySendDeliverIncreasePct != null and $healthySendDeliverIncreasePct > $sendWorkThreshold then ["healthy-send-deliver-regression"] else [] end)
+      + (if $sendWorkThreshold > 0 and $affectedSendDeliverIncreasePct != null and $affectedSendDeliverIncreasePct > $sendWorkThreshold then ["affected-send-deliver-regression"] else [] end)
+      + (if $retryPressureThreshold > 0 and $undeliveredIncreasePct != null and $undeliveredIncreasePct > $retryPressureThreshold then ["undelivered-send-work-regression"] else [] end)
+      + (if $retryPressureThreshold > 0 and $affectedUndeliveredIncreasePct != null and $affectedUndeliveredIncreasePct > $retryPressureThreshold then ["affected-undelivered-send-work-regression"] else [] end)
+      + (if $retryPressureThreshold > 0 and $affectedDatagramIncreasePct != null and $affectedDatagramIncreasePct > $retryPressureThreshold then ["affected-datagram-rate-regression"] else [] end)
+      + (if $retryPressureThreshold > 0 and $staleRateIncreasePct != null and $staleRateIncreasePct > $retryPressureThreshold then ["stale-rate-regression"] else [] end)
+      + (if $retryPressureThreshold > 0 and $nackRateIncreasePct != null and $nackRateIncreasePct > $retryPressureThreshold then ["nack-rate-regression"] else [] end)
     ) as $reasons |
     {
       status: (if ($reasons | length) == 0 then "ok" else "regression" end),
@@ -405,22 +473,23 @@ jq -c -n \
         probeRttP99MillisPct: $latencyDeltaPct,
         maxQueuedBytesPct: $queueDeltaPct,
         fairnessIndex: ((n($cand.fairnessIndex) // 0) - (n($base.fairnessIndex) // 0)),
-        healthyFairnessIndex: ((n($cand.healthyFairnessIndex) // 0) - (n($base.healthyFairnessIndex) // 0)),
+        healthyFairnessIndex: $healthyFairnessDelta,
         affectedFairnessIndex: ((n($cand.affectedFairnessIndex) // 0) - (n($base.affectedFairnessIndex) // 0)),
-        healthyDeliveredGbpsPct: pct_delta(n($base.healthyDeliveredGbps); n($cand.healthyDeliveredGbps)),
+        healthyDeliveredGbpsPct: $healthyThroughputDeltaPct,
         affectedDeliveredGbpsPct: pct_delta(n($base.affectedDeliveredGbps); n($cand.affectedDeliveredGbps)),
-        undeliveredServerGbpsPct: pct_delta(n($base.undeliveredServerGbps); n($cand.undeliveredServerGbps)),
-        affectedUndeliveredServerGbpsPct: pct_delta(n($base.affectedUndeliveredServerGbps); n($cand.affectedUndeliveredServerGbps)),
+        undeliveredServerGbpsPct: $undeliveredIncreasePct,
+        affectedUndeliveredServerGbpsPct: $affectedUndeliveredIncreasePct,
         clientMbpsP50Pct: pct_delta(n($base.clientMbpsP50); n($cand.clientMbpsP50)),
         clientMbpsP99Pct: pct_delta(n($base.clientMbpsP99); n($cand.clientMbpsP99)),
-        healthyClientMbpsP50Pct: pct_delta(n($base.healthyClientMbpsP50); n($cand.healthyClientMbpsP50)),
+        healthyClientMbpsP50Pct: $healthyClientP50DeltaPct,
         affectedClientMbpsP50Pct: pct_delta(n($base.affectedClientMbpsP50); n($cand.affectedClientMbpsP50)),
         serverDatagramsOutPerSecondPct: pct_delta(n($base.serverDatagramsOutPerSecond); n($cand.serverDatagramsOutPerSecond)),
-        affectedServerDatagramsOutPerSecondPct: pct_delta(n($base.affectedServerDatagramsOutPerSecond); n($cand.affectedServerDatagramsOutPerSecond)),
-        sentToDeliveredBytesRatioPct: pct_delta(n($base.sentToDeliveredBytesRatio); n($cand.sentToDeliveredBytesRatio)),
-        affectedSentToDeliveredBytesRatioPct: pct_delta(n($base.affectedSentToDeliveredBytesRatio); n($cand.affectedSentToDeliveredBytesRatio)),
-        staleDatagramsPerSecondPct: pct_delta(n($base.staleDatagramsPerSecond); n($cand.staleDatagramsPerSecond)),
-        nackOutPerSecondPct: pct_delta(n($base.nackOutPerSecond); n($cand.nackOutPerSecond)),
+        affectedServerDatagramsOutPerSecondPct: $affectedDatagramIncreasePct,
+        sentToDeliveredBytesRatioPct: $sendDeliverIncreasePct,
+        healthySentToDeliveredBytesRatioPct: $healthySendDeliverIncreasePct,
+        affectedSentToDeliveredBytesRatioPct: $affectedSendDeliverIncreasePct,
+        staleDatagramsPerSecondPct: $staleRateIncreasePct,
+        nackOutPerSecondPct: $nackRateIncreasePct,
         disconnects: ((n($cand.disconnects) // 0) - (n($base.disconnects) // 0)),
         blackholedDatagramsIn: ((n($cand.blackholedDatagramsIn) // 0) - (n($base.blackholedDatagramsIn) // 0)),
         blackholedDatagramsOut: ((n($cand.blackholedDatagramsOut) // 0) - (n($base.blackholedDatagramsOut) // 0)),
@@ -499,8 +568,12 @@ write_report() {
     fi
     echo "- Raw comparison JSONL: \`$jsonl_path\` ($jsonl_retention_note)"
     echo "- Throughput regression threshold: \`$throughput_regression_pct%\`"
+    echo "- Healthy throughput regression threshold: \`$healthy_throughput_regression_pct%\`"
     echo "- p99 latency regression threshold: \`$latency_regression_pct%\`"
     echo "- Queue regression threshold: \`$queue_regression_pct%\`"
+    echo "- Healthy fairness regression threshold: \`$healthy_fairness_regression\`"
+    echo "- Send-work regression threshold: \`$send_work_regression_pct%\`"
+    echo "- Retry-pressure regression threshold: \`$retry_pressure_regression_pct%\`"
     echo "- Require validation: \`$require_validation\`"
     echo "- Allow failed validation: \`$allow_failed_validation\`"
     echo "- Allow validation bypasses: \`$allow_validation_bypasses\`"

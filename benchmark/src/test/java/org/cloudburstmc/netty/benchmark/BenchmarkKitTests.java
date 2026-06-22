@@ -1932,6 +1932,57 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testComparisonRejectsHealthyFairnessAndRetryPressureRegressions() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-compare-fairness-retry-test");
+        Path baseline = output.resolve("baseline");
+        Path candidate = output.resolve("candidate");
+        writeComparableSuite(baseline, false);
+        writeComparableSuite(candidate, false);
+        Files.writeString(candidate.resolve("suite-aggregate.jsonl"),
+                Files.readString(candidate.resolve("suite-aggregate.jsonl"), StandardCharsets.UTF_8)
+                        .replace("\"healthyDeliveredGbps\":1,", "\"healthyDeliveredGbps\":0.8,")
+                        .replace("\"healthyClientMbpsP50\":5,", "\"healthyClientMbpsP50\":4,")
+                        .replace("\"healthyFairnessIndex\":1,", "\"healthyFairnessIndex\":0.95,")
+                        .replace("\"sentToDeliveredBytesRatio\":1,", "\"sentToDeliveredBytesRatio\":2,")
+                        .replace("\"healthySentToDeliveredBytesRatio\":1,", "\"healthySentToDeliveredBytesRatio\":2,")
+                        .replace("\"affectedSentToDeliveredBytesRatio\":0,", "\"affectedSentToDeliveredBytesRatio\":1,")
+                        .replace("\"staleDatagramsPerSecond\":0,", "\"staleDatagramsPerSecond\":10,")
+                        .replace("\"nackOutPerSecond\":0,", "\"nackOutPerSecond\":5,")
+                        .replace("\"affectedUndeliveredServerGbps\":0,", "\"affectedUndeliveredServerGbps\":0.2,")
+                        .replace("\"affectedServerDatagramsOutPerSecond\":0", "\"affectedServerDatagramsOutPerSecond\":100"),
+                StandardCharsets.UTF_8);
+
+        ProcessResult comparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-baseline-suite.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("comparison.md").toString()
+        );
+        Assertions.assertEquals(1, comparison.exitCode, comparison.output);
+        JsonNode row = readJsonLines(output.resolve("comparison.jsonl")).get(0);
+        List<String> reasons = JSON.convertValue(row.path("statusReasons"), new TypeReference<>() {
+        });
+        Assertions.assertTrue(reasons.contains("healthy-throughput-regression"));
+        Assertions.assertTrue(reasons.contains("healthy-client-throughput-regression"));
+        Assertions.assertTrue(reasons.contains("healthy-fairness-regression"));
+        Assertions.assertTrue(reasons.contains("send-deliver-regression"));
+        Assertions.assertTrue(reasons.contains("healthy-send-deliver-regression"));
+        Assertions.assertTrue(reasons.contains("affected-send-deliver-regression"));
+        Assertions.assertTrue(reasons.contains("affected-undelivered-send-work-regression"));
+        Assertions.assertTrue(reasons.contains("affected-datagram-rate-regression"));
+        Assertions.assertTrue(reasons.contains("stale-rate-regression"));
+        Assertions.assertTrue(reasons.contains("nack-rate-regression"));
+        String report = Files.readString(output.resolve("comparison.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(report.contains("- Healthy throughput regression threshold: `10%`"));
+        Assertions.assertTrue(report.contains("- Healthy fairness regression threshold: `0.02`"));
+        Assertions.assertTrue(report.contains("- Send-work regression threshold: `50%`"));
+        Assertions.assertTrue(report.contains("- Retry-pressure regression threshold: `50%`"));
+    }
+
+    @Test
     public void testComparisonTreatsBatchShapeAsMatrixShape() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
