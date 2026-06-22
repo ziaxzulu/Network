@@ -255,6 +255,9 @@ jq -c -n \
         payloadSize: $row.payloadSize,
         reliability: $row.reliability,
         batched: $row.batched,
+        batchIntervalMillis: ($row.batchIntervalMillis // 0),
+        logicalPacketsPerBatch: ($row.logicalPacketsPerBatch // 1),
+        batchGroups: ($row.batchGroups // 1),
         targetMbps: $row.targetMbps,
         targetClientMbps: $row.targetClientMbps,
         packetLimit: ($row.packetLimit // null),
@@ -309,6 +312,9 @@ jq -c -n \
     (($base.payloadSize // null) != ($cand.payloadSize // null)) as $payloadSizeMismatch |
     (($base.reliability // null) != ($cand.reliability // null)) as $reliabilityMismatch |
     (($base.batched // null) != ($cand.batched // null)) as $batchedMismatch |
+    (numeric_mismatch(($base.batchIntervalMillis // 0); ($cand.batchIntervalMillis // 0))) as $batchIntervalMismatch |
+    (numeric_mismatch(($base.logicalPacketsPerBatch // 1); ($cand.logicalPacketsPerBatch // 1))) as $logicalPacketsPerBatchMismatch |
+    (numeric_mismatch(($base.batchGroups // 1); ($cand.batchGroups // 1))) as $batchGroupsMismatch |
     (numeric_mismatch($base.targetMbps; $cand.targetMbps)) as $targetMbpsMismatch |
     (numeric_mismatch($base.targetClientMbps; $cand.targetClientMbps)) as $targetClientMbpsMismatch |
     (($base.impairmentProfile // "0ms/0ms/0%") != ($cand.impairmentProfile // "0ms/0ms/0%")) as $impairmentMismatch |
@@ -321,6 +327,9 @@ jq -c -n \
       + (if $payloadSizeMismatch then ["payload-size-mismatch"] else [] end)
       + (if $reliabilityMismatch then ["reliability-mismatch"] else [] end)
       + (if $batchedMismatch then ["batched-mode-mismatch"] else [] end)
+      + (if $batchIntervalMismatch then ["batch-interval-mismatch"] else [] end)
+      + (if $logicalPacketsPerBatchMismatch then ["logical-packets-per-batch-mismatch"] else [] end)
+      + (if $batchGroupsMismatch then ["batch-groups-mismatch"] else [] end)
       + (if $targetMbpsMismatch then ["target-mbps-mismatch"] else [] end)
       + (if $targetClientMbpsMismatch then ["target-client-mbps-mismatch"] else [] end)
       + (if $impairmentMismatch then ["impairment-profile-mismatch"] else [] end)
@@ -487,8 +496,8 @@ write_report() {
       done
       echo
     fi
-    echo "| Status | Case | Scenario | Impairment | Iteration | Iterations | Delivered Gbps | Delta | Healthy Gbps Delta | Affected Gbps Delta | Client Mbps p50 | Delta | Client Mbps p99 | Delta | Send/Deliver | Delta | Affected Send/Deliver Delta | Datagram Out/s | Delta | Stale/s Delta | NACK Out/s Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Healthy fairness delta | Affected fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
-    echo "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
+    echo "| Status | Case | Scenario | Impairment | Batch shape | Iteration | Iterations | Delivered Gbps | Delta | Healthy Gbps Delta | Affected Gbps Delta | Client Mbps p50 | Delta | Client Mbps p99 | Delta | Send/Deliver | Delta | Affected Send/Deliver Delta | Datagram Out/s | Delta | Stale/s Delta | NACK Out/s Delta | p99 RTT ms | Delta | Throughput Spread | p99 Spread | Max queue bytes | Delta | Fairness delta | Healthy fairness delta | Affected fairness delta | Candidate unstable | Blackhole in delta | Blackhole out delta | NACK out delta | Stale datagram delta | Reasons |"
+    echo "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -505,11 +514,16 @@ write_report() {
         elif ($side.unstable // false) then "true:" + (($side.unstableReasons // []) | join(","))
         else "false"
         end;
+      def batch_shape($side):
+        if $side == null then "n/a"
+        else ((($side.batchIntervalMillis // 0) | tostring) + "ms/" + (($side.logicalPacketsPerBatch // 1) | tostring) + "lp/" + (($side.batchGroups // 1) | tostring) + "g")
+        end;
       [
         "`" + .status + "`",
         "`" + .case + "`",
         "`" + .benchmarkName + "`",
         (metric(.candidate; "impairmentProfile") + " / " + metric(.baseline; "impairmentProfile")),
+        (batch_shape(.candidate) + " / " + batch_shape(.baseline)),
         (.iteration | tostring),
         (metric(.candidate; "measuredIterations") + " / " + metric(.baseline; "measuredIterations")),
         (metric(.candidate; "deliveredGbps") + " / " + metric(.baseline; "deliveredGbps")),
@@ -543,8 +557,8 @@ write_report() {
         fmt(.deltas.staleDatagrams),
         "`" + ((.statusReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario impairment iteration iterations delivered delivered_delta healthy_delta affected_delta client_p50 client_p50_delta client_p99 client_p99_delta send_ratio send_ratio_delta affected_send_ratio_delta datagram_out_s datagram_out_s_delta stale_s_delta nack_out_s_delta p99 p99_delta throughput_spread p99_spread queue queue_delta fairness_delta healthy_fairness_delta affected_fairness_delta candidate_unstable blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
-      echo "| $status | $case_name | $scenario | $impairment | $iteration | $iterations | $delivered | $delivered_delta | $healthy_delta | $affected_delta | $client_p50 | $client_p50_delta | $client_p99 | $client_p99_delta | $send_ratio | $send_ratio_delta | $affected_send_ratio_delta | $datagram_out_s | $datagram_out_s_delta | $stale_s_delta | $nack_out_s_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $healthy_fairness_delta | $affected_fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
+    ' "$jsonl_path" | while IFS=$'\t' read -r status case_name scenario impairment batch_shape iteration iterations delivered delivered_delta healthy_delta affected_delta client_p50 client_p50_delta client_p99 client_p99_delta send_ratio send_ratio_delta affected_send_ratio_delta datagram_out_s datagram_out_s_delta stale_s_delta nack_out_s_delta p99 p99_delta throughput_spread p99_spread queue queue_delta fairness_delta healthy_fairness_delta affected_fairness_delta candidate_unstable blackhole_in_delta blackhole_out_delta nack_delta stale_delta reasons; do
+      echo "| $status | $case_name | $scenario | $impairment | $batch_shape | $iteration | $iterations | $delivered | $delivered_delta | $healthy_delta | $affected_delta | $client_p50 | $client_p50_delta | $client_p99 | $client_p99_delta | $send_ratio | $send_ratio_delta | $affected_send_ratio_delta | $datagram_out_s | $datagram_out_s_delta | $stale_s_delta | $nack_out_s_delta | $p99 | $p99_delta | $throughput_spread | $p99_spread | $queue | $queue_delta | $fairness_delta | $healthy_fairness_delta | $affected_fairness_delta | $candidate_unstable | $blackhole_in_delta | $blackhole_out_delta | $nack_delta | $stale_delta | $reasons |"
     done
     echo
     if [[ "$failure_rows" -gt 0 || "$validation_failure_rows" -gt 0 || "$validation_missing_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then

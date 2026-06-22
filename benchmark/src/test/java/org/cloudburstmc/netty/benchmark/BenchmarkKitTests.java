@@ -932,6 +932,57 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testLabValidationRejectsPlannedBatchShapeMismatch() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-lab-validation-batch-shape-test");
+        Path lab = output.resolve("lab");
+        writeValidationLabArtifacts(lab, 2, 2);
+        Path manifest = output.resolve("manifest.jsonl");
+        Files.writeString(manifest,
+                "{\"case\":\"batched-game-traffic\","
+                        + "\"benchmarkName\":\"batched-game-traffic\","
+                        + "\"clients\":100,"
+                        + "\"payloadSize\":512,"
+                        + "\"perClientMbps\":5,"
+                        + "\"batchIntervalMillis\":20,"
+                        + "\"logicalPacketsPerBatch\":8,"
+                        + "\"batchGroups\":4}\n",
+                StandardCharsets.UTF_8);
+
+        ProcessResult mismatched = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/validate-lab-baseline.sh").toString(),
+                "--input", lab.toString(),
+                "--manifest", manifest.toString(),
+                "--out", output.resolve("validation-mismatched").toString()
+        );
+        Assertions.assertEquals(1, mismatched.exitCode, mismatched.output);
+        JsonNode mismatchedJson = JSON.readTree(Files.readString(
+                output.resolve("validation-mismatched/validation.json"), StandardCharsets.UTF_8));
+        List<String> issueCodes = mismatchedJson.findValuesAsText("code");
+        Assertions.assertTrue(issueCodes.contains("planned-batch-interval-mismatch"));
+        Assertions.assertTrue(issueCodes.contains("planned-logical-packets-per-batch-mismatch"));
+        Assertions.assertTrue(issueCodes.contains("planned-batch-groups-mismatch"));
+
+        String aggregate = Files.readString(lab.resolve("suite-aggregate.jsonl"), StandardCharsets.UTF_8)
+                .replace("\"benchmarkName\":\"batched-game-traffic\",",
+                        "\"benchmarkName\":\"batched-game-traffic\","
+                                + "\"batchIntervalMillis\":20,"
+                                + "\"logicalPacketsPerBatch\":8,"
+                                + "\"batchGroups\":4,");
+        Files.writeString(lab.resolve("suite-aggregate.jsonl"), aggregate, StandardCharsets.UTF_8);
+        ProcessResult matched = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/validate-lab-baseline.sh").toString(),
+                "--input", lab.toString(),
+                "--manifest", manifest.toString(),
+                "--out", output.resolve("validation-matched").toString()
+        );
+        Assertions.assertEquals(0, matched.exitCode, matched.output);
+    }
+
+    @Test
     public void testLabValidationRequiresConcreteSelectedCapacityCandidate() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1064,6 +1115,34 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testComparisonTreatsBatchShapeAsMatrixShape() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-compare-batch-shape-test");
+        Path baseline = output.resolve("baseline");
+        Path candidate = output.resolve("candidate");
+        writeComparableBatchShapeSuite(baseline, 20, 8, 4);
+        writeComparableBatchShapeSuite(candidate, 50, 4, 2);
+
+        ProcessResult comparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-baseline-suite.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("comparison.md").toString()
+        );
+        Assertions.assertEquals(1, comparison.exitCode, comparison.output);
+        JsonNode row = readJsonLines(output.resolve("comparison.jsonl")).get(0);
+        List<String> reasons = JSON.convertValue(row.path("statusReasons"), new TypeReference<>() {
+        });
+        Assertions.assertTrue(reasons.contains("batch-interval-mismatch"));
+        Assertions.assertTrue(reasons.contains("logical-packets-per-batch-mismatch"));
+        Assertions.assertTrue(reasons.contains("batch-groups-mismatch"));
+        String report = Files.readString(output.resolve("comparison.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(report.contains("50ms/4lp/2g / 20ms/8lp/4g"));
+    }
+
+    @Test
     public void testImpairmentSummaryAndPromotionRejectValidationBypasses() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1185,6 +1264,31 @@ public class BenchmarkKitTests {
         String smokeReport = Files.readString(output.resolve("impairment-comparison-smoke.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(smokeReport.contains("- Allow validation bypasses: `true`"));
         Assertions.assertTrue(smokeReport.contains("Comparison passed."));
+    }
+
+    @Test
+    public void testImpairmentComparisonSeparatesBatchShapeRows() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-impairment-compare-batch-shape-test");
+        Path baseline = output.resolve("baseline");
+        Path candidate = output.resolve("candidate");
+        writeComparableImpairmentBatchShapeSummary(baseline, 20, 50);
+        writeComparableImpairmentBatchShapeSummary(candidate, 50);
+
+        ProcessResult comparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-lab-impairment.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("impairment-comparison.md").toString()
+        );
+        Assertions.assertEquals(1, comparison.exitCode, comparison.output);
+        List<JsonNode> rows = readJsonLines(output.resolve("impairment-comparison.jsonl"));
+        Assertions.assertTrue(rows.stream().anyMatch(row -> row.path("status").asText().equals("missing-candidate")
+                && row.path("baseline").path("batchIntervalMillis").asInt() == 20));
+        String report = Files.readString(output.resolve("impairment-comparison.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(report.contains("n/a / 20ms/8lp/4g"));
     }
 
     @Test
@@ -2063,6 +2167,62 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8);
     }
 
+    private static void writeComparableBatchShapeSuite(Path suiteRoot,
+                                                       int batchIntervalMillis,
+                                                       int logicalPacketsPerBatch,
+                                                       int batchGroups) throws Exception {
+        Files.createDirectories(suiteRoot);
+        Files.writeString(suiteRoot.resolve("suite-aggregate.jsonl"),
+                "{\"summaryKind\":\"aggregate\","
+                        + "\"case\":\"batch\","
+                        + "\"benchmarkName\":\"batched-game-traffic\","
+                        + "\"iteration\":\"aggregate\","
+                        + "\"measuredIterations\":3,"
+                        + "\"clients\":100,"
+                        + "\"payloadSize\":512,"
+                        + "\"reliability\":\"RELIABLE_ORDERED\","
+                        + "\"batched\":true,"
+                        + "\"batchIntervalMillis\":" + batchIntervalMillis + ","
+                        + "\"logicalPacketsPerBatch\":" + logicalPacketsPerBatch + ","
+                        + "\"batchGroups\":" + batchGroups + ","
+                        + "\"targetMbps\":500,"
+                        + "\"targetClientMbps\":5,"
+                        + "\"impairmentProfile\":\"0ms/0ms/0%\","
+                        + "\"deliveredGbps\":1,"
+                        + "\"healthyDeliveredGbps\":1,"
+                        + "\"affectedDeliveredGbps\":0,"
+                        + "\"serverDatagramsOutPerSecond\":1,"
+                        + "\"sentToDeliveredBytesRatio\":1,"
+                        + "\"healthySentToDeliveredBytesRatio\":1,"
+                        + "\"affectedSentToDeliveredBytesRatio\":0,"
+                        + "\"clientMbpsP50\":5,"
+                        + "\"clientMbpsP99\":5,"
+                        + "\"healthyClientMbpsP50\":5,"
+                        + "\"healthyClientMbpsP99\":5,"
+                        + "\"affectedClientMbpsP50\":0,"
+                        + "\"affectedClientMbpsP99\":0,"
+                        + "\"deliveredGbpsSpreadPct\":0,"
+                        + "\"probeRttP99Millis\":1,"
+                        + "\"probeRttP99MillisSpreadPct\":0,"
+                        + "\"fairnessIndex\":1,"
+                        + "\"healthyFairnessIndex\":1,"
+                        + "\"affectedFairnessIndex\":1,"
+                        + "\"disconnects\":0,"
+                        + "\"staleDatagrams\":0,"
+                        + "\"staleDatagramsPerSecond\":0,"
+                        + "\"nackIn\":0,"
+                        + "\"nackOut\":0,"
+                        + "\"nackOutPerSecond\":0,"
+                        + "\"maxQueuedBytes\":0,"
+                        + "\"unstable\":false,"
+                        + "\"unstableReasons\":[],"
+                        + "\"artifact\":\"" + suiteRoot.resolve("batch") + "\"}\n",
+                StandardCharsets.UTF_8);
+        Files.writeString(suiteRoot.resolve("validation.json"),
+                "{\"passed\":true,\"issues\":[]}\n",
+                StandardCharsets.UTF_8);
+    }
+
     private static void writeComparableImpairmentSummary(Path summaryRoot, boolean validationBypass) throws Exception {
         Files.createDirectories(summaryRoot);
         Files.writeString(summaryRoot.resolve("impairment-summary.json"),
@@ -2108,6 +2268,65 @@ public class BenchmarkKitTests {
                         + "\"unstable\":false,"
                         + "\"unstableReasons\":[]"
                         + "}]}}]}\n",
+                StandardCharsets.UTF_8);
+    }
+
+    private static void writeComparableImpairmentBatchShapeSummary(Path summaryRoot,
+                                                                   int... batchIntervalsMillis) throws Exception {
+        Files.createDirectories(summaryRoot);
+        StringBuilder rows = new StringBuilder();
+        for (int i = 0; i < batchIntervalsMillis.length; i++) {
+            if (i > 0) {
+                rows.append(',');
+            }
+            int interval = batchIntervalsMillis[i];
+            rows.append("{\"case\":\"batch-")
+                    .append(interval)
+                    .append("ms\",")
+                    .append("\"benchmarkName\":\"batched-game-traffic\",")
+                    .append("\"clients\":100,")
+                    .append("\"payloadSize\":512,")
+                    .append("\"reliability\":\"RELIABLE_ORDERED\",")
+                    .append("\"targetClientMbps\":5,")
+                    .append("\"batchIntervalMillis\":")
+                    .append(interval)
+                    .append(",\"logicalPacketsPerBatch\":8,\"batchGroups\":4,")
+                    .append("\"deliveredGbps\":1,")
+                    .append("\"probeRttP99Millis\":1,")
+                    .append("\"maxQueuedBytes\":0,")
+                    .append("\"healthyFairnessIndex\":1,")
+                    .append("\"healthySentToDeliveredBytesRatio\":1,")
+                    .append("\"affectedSentToDeliveredBytesRatio\":0,")
+                    .append("\"unstable\":false,")
+                    .append("\"unstableReasons\":[]}");
+        }
+        Files.writeString(summaryRoot.resolve("impairment-summary.json"),
+                "{\"summaryKind\":\"raknet-lab-impairment-campaign\","
+                        + "\"passed\":true,"
+                        + "\"requireNetemEvidence\":true,"
+                        + "\"allowValidationBypasses\":false,"
+                        + "\"profileCount\":1,"
+                        + "\"validationPassedCount\":1,"
+                        + "\"aggregateRowCount\":" + batchIntervalsMillis.length + ","
+                        + "\"capacityRowCount\":1,"
+                        + "\"netemStatusEvidenceCount\":1,"
+                        + "\"profiles\":[{\"profile\":\"perfect\","
+                        + "\"latency\":\"0ms\","
+                        + "\"jitter\":\"0ms\","
+                        + "\"loss\":\"0%\","
+                        + "\"validation\":{\"passed\":true,\"bypassFlags\":[]},"
+                        + "\"netem\":{\"statusEvidenceCount\":1},"
+                        + "\"capacity\":{\"rowCount\":1,\"selectedCount\":1,\"rows\":[{"
+                        + "\"case\":\"perfect-curve\","
+                        + "\"payloadSize\":512,"
+                        + "\"reliability\":\"RELIABLE_ORDERED\","
+                        + "\"selected\":true,"
+                        + "\"selectedBenchmarkName\":\"curve-100_0mbps\","
+                        + "\"selectedDeliveredGbps\":1,"
+                        + "\"selectedProbeRttP99Millis\":1"
+                        + "}]},"
+                        + "\"aggregate\":{\"rowCount\":" + batchIntervalsMillis.length
+                        + ",\"contentionRows\":[" + rows + "]}}]}\n",
                 StandardCharsets.UTF_8);
     }
 

@@ -227,6 +227,9 @@ jq -c -n \
       ($row.payloadSize // "null" | tostring),
       ($row.reliability // "null" | tostring),
       ($row.targetClientMbps // "null" | tostring),
+      ($row.batchIntervalMillis // "0" | tostring),
+      ($row.logicalPacketsPerBatch // "1" | tostring),
+      ($row.batchGroups // "1" | tostring),
       ($row.packetLimit // "null" | tostring),
       ($row.globalPacketLimit // "null" | tostring),
       ($row.configuredMaxQueuedBytes // "null" | tostring)
@@ -276,6 +279,9 @@ jq -c -n \
       packetLimit: ($row.packetLimit // null),
       globalPacketLimit: ($row.globalPacketLimit // null),
       configuredMaxQueuedBytes: ($row.configuredMaxQueuedBytes // null),
+      batchIntervalMillis: ($row.batchIntervalMillis // 0),
+      logicalPacketsPerBatch: ($row.logicalPacketsPerBatch // 1),
+      batchGroups: ($row.batchGroups // 1),
       targetClientMbps: ($row.targetClientMbps // null),
       deliveredGbps: ($row.deliveredGbps // null),
       probeRttP99Millis: ($row.probeRttP99Millis // null),
@@ -451,8 +457,8 @@ write_report() {
     fi
     echo "## Rows"
     echo
-    echo "| Status | Kind | Profile | Network | Case | Benchmark | Delivered Gbps | Delta | p99 RTT ms | Delta | Max queue | Delta | Healthy fairness delta | Reasons |"
-    echo "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+    echo "| Status | Kind | Profile | Network | Case | Benchmark | Batch shape | Delivered Gbps | Delta | p99 RTT ms | Delta | Max queue | Delta | Healthy fairness delta | Reasons |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -462,6 +468,10 @@ write_report() {
         end;
       def pct($value): if $value == null then "n/a" else (((($value * 100) | round) / 100) | tostring) + "%" end;
       def side($row; $field): if $row == null then "n/a" else fmt($row[$field]) end;
+      def batch_shape($row):
+        if $row == null or ($row.kind // "") != "contention" then "n/a"
+        else ((($row.batchIntervalMillis // 0) | tostring) + "ms/" + (($row.logicalPacketsPerBatch // 1) | tostring) + "lp/" + (($row.batchGroups // 1) | tostring) + "g")
+        end;
       [
         "`" + .status + "`",
         "`" + .kind + "`",
@@ -469,6 +479,7 @@ write_report() {
         "`" + (.network // "-") + "`",
         "`" + (.case // "-") + "`",
         "`" + (.benchmarkName // "-") + "`",
+        (batch_shape(.candidate) + " / " + batch_shape(.baseline)),
         (side(.candidate; "deliveredGbps") + " / " + side(.baseline; "deliveredGbps")),
         pct(.deltas.deliveredGbpsPct),
         (side(.candidate; "probeRttP99Millis") + " / " + side(.baseline; "probeRttP99Millis")),
@@ -478,8 +489,8 @@ write_report() {
         fmt(.deltas.healthyFairnessIndex),
         "`" + ((.statusReasons // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_path" | while IFS=$'\t' read -r status kind profile network case_name benchmark delivered delivered_delta p99 p99_delta queue queue_delta fairness_delta reasons; do
-      echo "| $status | $kind | $profile | $network | $case_name | $benchmark | $delivered | $delivered_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $reasons |"
+    ' "$jsonl_path" | while IFS=$'\t' read -r status kind profile network case_name benchmark batch_shape delivered delivered_delta p99 p99_delta queue queue_delta fairness_delta reasons; do
+      echo "| $status | $kind | $profile | $network | $case_name | $benchmark | $batch_shape | $delivered | $delivered_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $reasons |"
     done
     echo
     if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then

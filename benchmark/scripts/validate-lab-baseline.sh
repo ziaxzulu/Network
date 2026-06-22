@@ -637,6 +637,15 @@ jq -n \
           + (if (($planned | has("configuredMaxQueuedBytes")) and n($matched.configuredMaxQueuedBytes) != n($planned.configuredMaxQueuedBytes)) then
               [issue("planned-max-queued-bytes-mismatch"; "aggregate row configured max queued bytes differs from planned manifest"; $matched; {plannedMaxQueuedBytes: n($planned.configuredMaxQueuedBytes), actualConfiguredMaxQueuedBytes: n($matched.configuredMaxQueuedBytes)})]
             else [] end)
+          + (if (($planned | has("batchIntervalMillis")) and n($matched.batchIntervalMillis) != n($planned.batchIntervalMillis)) then
+              [issue("planned-batch-interval-mismatch"; "aggregate row batch interval differs from planned manifest"; $matched; {plannedBatchIntervalMillis: n($planned.batchIntervalMillis), actualBatchIntervalMillis: n($matched.batchIntervalMillis)})]
+            else [] end)
+          + (if (($planned | has("logicalPacketsPerBatch")) and n($matched.logicalPacketsPerBatch) != n($planned.logicalPacketsPerBatch)) then
+              [issue("planned-logical-packets-per-batch-mismatch"; "aggregate row logical packets per batch differs from planned manifest"; $matched; {plannedLogicalPacketsPerBatch: n($planned.logicalPacketsPerBatch), actualLogicalPacketsPerBatch: n($matched.logicalPacketsPerBatch)})]
+            else [] end)
+          + (if (($planned | has("batchGroups")) and n($matched.batchGroups) != n($planned.batchGroups)) then
+              [issue("planned-batch-groups-mismatch"; "aggregate row batch groups differ from planned manifest"; $matched; {plannedBatchGroups: n($planned.batchGroups), actualBatchGroups: n($matched.batchGroups)})]
+            else [] end)
         end
       ) | add // []
     )
