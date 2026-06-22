@@ -387,6 +387,19 @@ Treat a lab baseline as usable only when:
 - healthy-client throughput, per-client delivered Mbps percentiles, send/deliver ratios, and p99 latency are reviewed separately from affected-client metrics
 - generated plans keep the planned contention client count and per-client offered Mbps, healthy-client Jain fairness at or above `0.95`, healthy-client send/deliver byte ratio at or below `1.2`, and affected-client send/deliver byte ratio at or below `5` unless the topology notes justify different validation gates
 
+Before the lab campaign is executed and promoted, `check-baseline-readiness.sh` should remain `not-ready`. The expected first-run blockers are the missing promoted perfect-network and impairment packages, not a problem with the generated handoff. Use them as the closure checklist:
+
+| Readiness issue | Required lab evidence |
+| --- | --- |
+| `missing-lab-baseline-manifest` | `promote-lab-baseline.sh` has produced `baseline-manifest.json` in the promoted perfect-network package. |
+| `missing-lab-validation` | The promoted perfect-network package contains passing `validation.json`/`validation.md` from `validate-lab-baseline.sh`. |
+| `missing-lab-aggregate` | The promoted perfect-network package contains merged `suite-aggregate.jsonl` rows from `perfect-plan/merge-all.sh`. |
+| `missing-lab-capacity` | The promoted perfect-network package contains `bandwidth-capacity.jsonl` from the capacity selector. |
+| `missing-impairment-baseline-manifest` | `promote-lab-impairment.sh` has produced `impairment-baseline-manifest.json`. |
+| `missing-impairment-summary` | The promoted impairment package contains `impairment-summary.json` from `impairment-plan/summarize-campaign.sh`. |
+
+After those promoted artifacts exist, rerun the readiness gate. Any remaining issues should be treated as baseline blockers rather than warnings, because they mean the package set cannot yet support reliable performance-engineering comparisons.
+
 Run the validator before promoting a lab run to the saved baseline:
 
 ```bash
