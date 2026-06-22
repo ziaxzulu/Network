@@ -342,7 +342,14 @@ benchmark/scripts/promote-lab-baseline.sh \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-raised-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/contention-plan/manifest.jsonl \
   --out benchmark/build/benchmark-baselines \
-  --name lab-<date>-<topology>
+  --name lab-<date>-<topology> \
+  -- \
+  --min-iterations 3 \
+  --min-healthy-fairness 0.95 \
+  --max-healthy-send-deliver-ratio 1.2 \
+  --max-affected-send-deliver-ratio 5 \
+  --min-contention-clients 100 \
+  --min-contention-target-client-mbps 5
 ```
 
 The promoted baseline directory contains the comparable `suite-aggregate.jsonl`, validation reports, capacity selector artifacts, copied host/topology evidence, copied planning manifests, and a `baseline-manifest.json` with source paths and validation metadata. Use that promoted directory, or the `benchmark/build/benchmark-baselines/latest` symlink, as the `--baseline` input for future candidate comparisons, and pass `--require-validation` so unvalidated candidates fail comparison.
@@ -357,5 +364,6 @@ benchmark/scripts/check-baseline-readiness.sh \
 ```
 
 The readiness report is the final artifact-level gate for accepting the baseline package set. It requires passing lab validation, separate-host evidence, required scenario families, selected capacity groups, passing impairment profile validation, required netem status evidence, and the expected impairment profiles.
+By default it also requires the promoted perfect-network validation to have enforced at least `100` contention clients and `5Mbps` per client; pass explicit readiness overrides only when a smaller campaign is intentionally not the production comparison baseline.
 
 Keep local smoke results out of external line-rate claims. Use them only to catch regressions in runner behavior and output shape.

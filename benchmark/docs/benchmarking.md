@@ -135,7 +135,14 @@ benchmark/scripts/promote-lab-baseline.sh \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-raised-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/contention-plan/manifest.jsonl \
   --out benchmark/build/benchmark-baselines \
-  --name lab-<date>-<topology>
+  --name lab-<date>-<topology> \
+  -- \
+  --min-iterations 3 \
+  --min-healthy-fairness 0.95 \
+  --max-healthy-send-deliver-ratio 1.2 \
+  --max-affected-send-deliver-ratio 5 \
+  --min-contention-clients 100 \
+  --min-contention-target-client-mbps 5
 ```
 
 The promotion script reruns validation, then writes `BASELINE.md`, `baseline-manifest.json`, `suite-aggregate.jsonl`, `validation.*`, capacity selector files, topology metadata, host reports, and copied planning manifests under the promoted baseline directory. It also updates `benchmark/build/benchmark-baselines/latest` unless `--no-latest` is supplied.
@@ -236,7 +243,7 @@ benchmark/scripts/check-baseline-readiness.sh \
   --out benchmark/build/benchmark-results/baseline-readiness
 ```
 
-The readiness gate fails when promoted artifacts are missing, validation did not pass, separate host evidence is absent, required scenario families are missing, required curve payload sizes are absent from either aggregate or capacity-selector rows, capacity groups are unselected, required impairment profiles are missing, impairment profiles lack required curve payload or contention-scenario coverage, or netem status evidence was not captured.
+The readiness gate fails when promoted artifacts are missing, validation did not pass, separate host evidence is absent, required scenario families are missing, required curve payload sizes are absent from either aggregate or capacity-selector rows, capacity groups are unselected, required impairment profiles are missing, impairment profiles lack required curve payload or contention-scenario coverage, netem status evidence was not captured, or the promoted perfect-network validation did not enforce the default `100` client and `5Mbps` per-client contention gates.
 
 ## Single-Host Namespace Smoke
 

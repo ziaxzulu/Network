@@ -135,7 +135,14 @@ benchmark/scripts/promote-lab-baseline.sh \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan-current/curve-raised-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan-current/contention-plan/manifest.jsonl \
   --out benchmark/build/benchmark-baselines \
-  --name lab-<date>-<topology>
+  --name lab-<date>-<topology> \
+  -- \
+  --min-iterations 3 \
+  --min-healthy-fairness 0.95 \
+  --max-healthy-send-deliver-ratio 1.2 \
+  --max-affected-send-deliver-ratio 5 \
+  --min-contention-clients 500 \
+  --min-contention-target-client-mbps 5
 ```
 
 Use the promoted directory, or `benchmark/build/benchmark-baselines/latest`, as the baseline input for candidate comparisons with `--require-validation`.
@@ -150,6 +157,7 @@ benchmark/scripts/check-baseline-readiness.sh \
 ```
 
 The baseline is not accepted as the comparison baseline until this readiness check passes.
+Readiness also checks that the promoted perfect-network validation enforced at least `100` contention clients and at least `5Mbps` per client by default. The recommended handoff uses `500` clients split across two receiver hosts, so a promoted baseline created without the validation arguments above will be rejected.
 
 ## Adverse-Network Lab Plan
 

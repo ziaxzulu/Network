@@ -7,6 +7,8 @@ out_dir=""
 expected_impairment_profiles="perfect,near-loss,regional-loss,poor,severe"
 required_curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 required_impairment_contention_scenarios="multi-client-fanout,fairness,disappearing-clients"
+required_min_contention_clients="100"
+required_min_contention_target_client_mbps="5"
 
 usage() {
   cat <<'USAGE'
@@ -22,6 +24,8 @@ Options:
   --expected-impairment-profiles CSV Required impairment profiles. Default: perfect,near-loss,regional-loss,poor,severe.
   --required-curve-payload-sizes CSV Required perfect-network curve payload sizes. Default: 64,256,512,1200,1340,1400,262144.
   --required-impairment-contention-scenarios CSV Required contention scenarios per impairment profile. Default: multi-client-fanout,fairness,disappearing-clients.
+  --required-min-contention-clients N Required lab validation contention-client gate. Default: 100.
+  --required-min-contention-target-client-mbps N Required lab validation per-client Mbps gate. Default: 5.
   --out DIR                        Output directory. Default: directory containing the lab baseline, or benchmark/build/benchmark-results/baseline-readiness.
   --help                           Show this help.
 
@@ -53,6 +57,14 @@ while [[ $# -gt 0 ]]; do
       required_impairment_contention_scenarios="$2"
       shift 2
       ;;
+    --required-min-contention-clients)
+      required_min_contention_clients="$2"
+      shift 2
+      ;;
+    --required-min-contention-target-client-mbps)
+      required_min_contention_target_client_mbps="$2"
+      shift 2
+      ;;
     --out)
       out_dir="$2"
       shift 2
@@ -71,6 +83,14 @@ done
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required to check baseline readiness" >&2
+  exit 2
+fi
+if ! [[ "$required_min_contention_clients" =~ ^[0-9]+$ ]]; then
+  echo "--required-min-contention-clients must be a non-negative integer" >&2
+  exit 2
+fi
+if ! [[ "$required_min_contention_target_client_mbps" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--required-min-contention-target-client-mbps must be a non-negative number" >&2
   exit 2
 fi
 
@@ -172,6 +192,14 @@ if [[ -s "$lab_validation" ]]; then
   done
   if ! jq -e '.capacityRowCount > 0' "$lab_validation" >/dev/null; then
     append_issue "lab-missing-capacity-rows" "lab-baseline" "lab baseline has no capacity selector rows" "{\"path\":\"$lab_validation\"}"
+  fi
+  if ! jq -e --argjson required "$required_min_contention_clients" '(.minContentionClients // -1) >= $required' "$lab_validation" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_contention_clients" --argjson actual "$(jq -r '.minContentionClients // -1' "$lab_validation")" '{requiredMinContentionClients:$required,actualMinContentionClients:$actual}')"
+    append_issue "lab-contention-client-gate-too-low" "lab-baseline" "lab validation did not enforce the required contention client count" "$extra"
+  fi
+  if ! jq -e --argjson required "$required_min_contention_target_client_mbps" '(.minContentionTargetClientMbps // -1) >= $required' "$lab_validation" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_contention_target_client_mbps" --argjson actual "$(jq -r '.minContentionTargetClientMbps // -1' "$lab_validation")" '{requiredMinContentionTargetClientMbps:$required,actualMinContentionTargetClientMbps:$actual}')"
+    append_issue "lab-contention-target-client-mbps-gate-too-low" "lab-baseline" "lab validation did not enforce the required contention per-client Mbps target" "$extra"
   fi
 fi
 
@@ -314,6 +342,8 @@ jq -n \
   --argjson expectedImpairmentProfiles "$(csv_json_array "$expected_impairment_profiles")" \
   --argjson requiredCurvePayloadSizes "$required_curve_payloads_json" \
   --argjson requiredImpairmentContentionScenarios "$required_impairment_contention_json" \
+  --argjson requiredMinContentionClients "$required_min_contention_clients" \
+  --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson issues "$issues_array" \
   --slurpfile labValidation "$([[ -s "$lab_validation" ]] && printf '%s' "$lab_validation" || printf '%s' /dev/null)" \
   --slurpfile impairmentSummary "$([[ -s "$impairment_summary" ]] && printf '%s' "$impairment_summary" || printf '%s' /dev/null)" \
@@ -332,6 +362,8 @@ jq -n \
     expectedImpairmentProfiles: $expectedImpairmentProfiles,
     requiredCurvePayloadSizes: $requiredCurvePayloadSizes,
     requiredImpairmentContentionScenarios: $requiredImpairmentContentionScenarios,
+    requiredMinContentionClients: $requiredMinContentionClients,
+    requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     issues: $issues
   }' >"$readiness_json"
 
@@ -345,6 +377,8 @@ jq -n \
   echo "- Impairment baseline: \`$impairment_baseline\`"
   echo "- Required curve payload sizes: \`$required_curve_payload_sizes\`"
   echo "- Required impairment contention scenarios: \`$required_impairment_contention_scenarios\`"
+  echo "- Required minimum contention clients: \`$required_min_contention_clients\`"
+  echo "- Required minimum contention target/client Mbps: \`$required_min_contention_target_client_mbps\`"
   echo
   echo "## Lab Baseline"
   echo
@@ -354,6 +388,8 @@ jq -n \
     echo "- Capacity rows: \`$(jq -r '.capacityRowCount // 0' "$lab_validation")\`"
     echo "- Host reports: \`$(jq -r '.hostReportCount // 0' "$lab_validation")\`"
     echo "- Distinct hostnames: \`$(jq -r '.distinctHostnameCount // 0' "$lab_validation")\`"
+    echo "- Validated minimum contention clients: \`$(jq -r '.minContentionClients // "missing"' "$lab_validation")\`"
+    echo "- Validated minimum contention target/client Mbps: \`$(jq -r '.minContentionTargetClientMbps // "missing"' "$lab_validation")\`"
   else
     echo "No lab validation file found."
   fi

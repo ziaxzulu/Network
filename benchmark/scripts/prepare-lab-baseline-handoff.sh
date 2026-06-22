@@ -221,6 +221,20 @@ positive_int() {
   [[ "$1" =~ ^[0-9]+$ && "$1" -gt 0 ]]
 }
 
+receiver_client_count() {
+  local spec="$1"
+  local clients=""
+  if [[ "$spec" == *"="* ]]; then
+    clients="${spec##*=}"
+  elif [[ "$spec" == *":"* ]]; then
+    clients="${spec##*:}"
+  else
+    return 1
+  fi
+  positive_int "$clients" || return 1
+  printf '%s\n' "$clients"
+}
+
 non_empty_csv() {
   [[ -n "$1" && "$1" != *, && "$1" != ,* ]]
 }
@@ -242,6 +256,15 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required to write the lab handoff manifest" >&2
   exit 2
 fi
+
+contention_client_total=0
+for receiver in "${contention_receivers[@]}"; do
+  receiver_clients="$(receiver_client_count "$receiver")" || {
+    echo "--contention-receiver must be NAME=CLIENTS or NAME:CLIENTS with a positive integer client count: $receiver" >&2
+    exit 2
+  }
+  contention_client_total=$((contention_client_total + receiver_clients))
+done
 
 if [[ -z "$output_root" ]]; then
   output_root="$repo_root/benchmark/build/benchmark-results/lab-handoff-$timestamp"
@@ -361,6 +384,7 @@ jq -n \
   --arg targetHostRole "$target_host_role" \
   --arg casePrefix "$case_prefix" \
   --arg contentionPayloadSize "$contention_payload_size" \
+  --arg contentionClientTotal "$contention_client_total" \
   --arg perClientMbps "$per_client_mbps" \
   --arg raisedPacketLimit "$raised_packet_limit" \
   --arg raisedGlobalPacketLimit "$raised_global_packet_limit" \
@@ -403,6 +427,7 @@ jq -n \
     contentionCases: $contentionCases,
     casePrefix: $casePrefix,
     contentionPayloadSize: ($contentionPayloadSize | tonumber),
+    contentionClientTotal: ($contentionClientTotal | tonumber),
     perClientMbps: ($perClientMbps | tonumber),
     raisedPacketLimit: ($raisedPacketLimit | tonumber),
     raisedGlobalPacketLimit: ($raisedGlobalPacketLimit | tonumber),
@@ -434,6 +459,7 @@ cat >"$readme" <<EOF
 - Curve payload sizes: \`$curve_payload_sizes\`
 - Curve rates Mbps: \`$curve_rates_mbps\`
 - Contention receivers: \`$(IFS=,; echo "${contention_receivers[*]}")\`
+- Contention clients: \`$contention_client_total\`
 - Contention cases: \`$contention_cases\`
 - Per-client Mbps: \`$per_client_mbps\`
 - Raised packet limits: \`$raised_packet_limit/$raised_global_packet_limit\`
@@ -466,7 +492,14 @@ benchmark/scripts/promote-lab-baseline.sh \\
   --manifest "$perfect_plan/curve-raised-plan/manifest.jsonl" \\
   --manifest "$perfect_plan/contention-plan/manifest.jsonl" \\
   --out benchmark/build/benchmark-baselines \\
-  --name lab-<date>-<topology>
+  --name lab-<date>-<topology> \\
+  -- \\
+  --min-iterations "$iterations" \\
+  --min-healthy-fairness 0.95 \\
+  --max-healthy-send-deliver-ratio 1.2 \\
+  --max-affected-send-deliver-ratio 5 \\
+  --min-contention-clients "$contention_client_total" \\
+  --min-contention-target-client-mbps "$per_client_mbps"
 
 benchmark/scripts/promote-lab-impairment.sh \\
   --input "$impairment_artifacts/campaign-summary" \\

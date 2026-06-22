@@ -312,6 +312,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("check-lab-handoff.sh"));
         Assertions.assertTrue(readme.contains("handoff-manifest.json"));
         Assertions.assertTrue(readme.contains("promote-lab-baseline.sh"));
+        Assertions.assertTrue(readme.contains("--min-contention-clients \"2\""));
+        Assertions.assertTrue(readme.contains("--min-contention-target-client-mbps \"1\""));
         Assertions.assertTrue(readme.contains("check-baseline-readiness.sh"));
 
         JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
@@ -345,6 +347,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("unlimited", handoffManifest.path("curveRatesMbps").get(7).asText());
         Assertions.assertEquals(1, handoffManifest.path("contentionReceivers").size());
         Assertions.assertEquals("receiver-a=2", handoffManifest.path("contentionReceivers").get(0).asText());
+        Assertions.assertEquals(2, handoffManifest.path("contentionClientTotal").asInt());
         Assertions.assertEquals(1, handoffManifest.path("contentionCases").size());
         Assertions.assertEquals("fanout", handoffManifest.path("contentionCases").get(0).asText());
         Assertions.assertEquals(64, handoffManifest.path("contentionPayloadSize").asInt());
@@ -579,6 +582,60 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresContentionValidationGates() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-contention-gate-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 99, 5.0D, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+
+        ProcessResult weakClients = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, weakClients.exitCode, weakClients.output);
+        JsonNode weakClientsReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(weakClientsReadiness.path("ready").asBoolean());
+        Assertions.assertEquals(100, weakClientsReadiness.path("requiredMinContentionClients").asInt());
+        Assertions.assertTrue(weakClientsReadiness.findValuesAsText("code")
+                .contains("lab-contention-client-gate-too-low"));
+
+        writeReadinessLabBaseline(labBaseline, 100, 4.9D, 64, 256, 512, 1200, 1340, 1400, 262144);
+        ProcessResult weakRate = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, weakRate.exitCode, weakRate.output);
+        JsonNode weakRateReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(weakRateReadiness.path("ready").asBoolean());
+        Assertions.assertEquals(5.0D, weakRateReadiness.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+        Assertions.assertTrue(weakRateReadiness.findValuesAsText("code")
+                .contains("lab-contention-target-client-mbps-gate-too-low"));
+
+        writeReadinessLabBaseline(labBaseline, 100, 5.0D, 64, 256, 512, 1200, 1340, 1400, 262144);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+    }
+
+    @Test
     public void testResultWriterProducesArtifacts() throws Exception {
         Path output = Files.createTempDirectory("raknet-benchmark-test");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
@@ -704,6 +761,13 @@ public class BenchmarkKitTests {
     }
 
     private static void writeReadinessLabBaseline(Path labBaseline, int... payloadSizes) throws Exception {
+        writeReadinessLabBaseline(labBaseline, 100, 5.0D, payloadSizes);
+    }
+
+    private static void writeReadinessLabBaseline(Path labBaseline,
+                                                  int minContentionClients,
+                                                  double minContentionTargetClientMbps,
+                                                  int... payloadSizes) throws Exception {
         Files.createDirectories(labBaseline);
         Files.writeString(labBaseline.resolve("baseline-manifest.json"),
                 "{\"baselineKind\":\"raknet-lab-baseline\"}\n",
@@ -712,6 +776,8 @@ public class BenchmarkKitTests {
                 "{\"passed\":true,\"distinctHostnameCount\":2,\"hostReportCount\":2,\"rowCount\":"
                         + (payloadSizes.length + 3)
                         + ",\"capacityRowCount\":" + payloadSizes.length
+                        + ",\"minContentionClients\":" + minContentionClients
+                        + ",\"minContentionTargetClientMbps\":" + minContentionTargetClientMbps
                         + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length
                         + ",\"multi-client-fanout\":1,\"fairness\":1,\"disappearing-clients\":1}}\n",
                 StandardCharsets.UTF_8);
