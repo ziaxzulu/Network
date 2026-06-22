@@ -992,6 +992,44 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testImpairmentComparisonRejectsValidationBypassesByDefault() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-impairment-compare-bypass-test");
+        Path baseline = output.resolve("baseline");
+        Path candidate = output.resolve("candidate");
+        writeComparableImpairmentSummary(baseline, false);
+        writeComparableImpairmentSummary(candidate, true);
+
+        ProcessResult rejectedComparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-lab-impairment.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("impairment-comparison.md").toString()
+        );
+        Assertions.assertEquals(1, rejectedComparison.exitCode, rejectedComparison.output);
+        String rejectedReport = Files.readString(output.resolve("impairment-comparison.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(rejectedReport.contains("| Validation bypass summaries | 1 |"));
+        Assertions.assertTrue(rejectedReport.contains("allowValidationBypasses"));
+        Assertions.assertTrue(rejectedReport.contains("allowUnstable"));
+        Assertions.assertTrue(rejectedReport.contains("1 validation bypass summary input(s)"));
+
+        ProcessResult smokeComparison = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/compare-lab-impairment.sh").toString(),
+                "--baseline", baseline.toString(),
+                "--candidate", candidate.toString(),
+                "--out", output.resolve("impairment-comparison-smoke.md").toString(),
+                "--allow-validation-bypasses"
+        );
+        Assertions.assertEquals(0, smokeComparison.exitCode, smokeComparison.output);
+        String smokeReport = Files.readString(output.resolve("impairment-comparison-smoke.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(smokeReport.contains("- Allow validation bypasses: `true`"));
+        Assertions.assertTrue(smokeReport.contains("Comparison passed."));
+    }
+
+    @Test
     public void testNetnsWorkerSmokeDryRunProducesManifest() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1635,6 +1673,54 @@ public class BenchmarkKitTests {
                 validationBypass
                         ? "{\"passed\":true,\"allowUnstable\":true,\"issues\":[]}\n"
                         : "{\"passed\":true,\"issues\":[]}\n",
+                StandardCharsets.UTF_8);
+    }
+
+    private static void writeComparableImpairmentSummary(Path summaryRoot, boolean validationBypass) throws Exception {
+        Files.createDirectories(summaryRoot);
+        Files.writeString(summaryRoot.resolve("impairment-summary.json"),
+                "{\"summaryKind\":\"raknet-lab-impairment-campaign\","
+                        + "\"passed\":true,"
+                        + "\"requireNetemEvidence\":true,"
+                        + "\"allowValidationBypasses\":" + validationBypass + ","
+                        + "\"profileCount\":1,"
+                        + "\"validationPassedCount\":1,"
+                        + "\"aggregateRowCount\":1,"
+                        + "\"capacityRowCount\":1,"
+                        + "\"netemStatusEvidenceCount\":1,"
+                        + "\"profiles\":[{\"profile\":\"perfect\","
+                        + "\"latency\":\"0ms\","
+                        + "\"jitter\":\"0ms\","
+                        + "\"loss\":\"0%\","
+                        + "\"validation\":{\"passed\":true,\"bypassFlags\":"
+                        + (validationBypass ? "[\"allowUnstable\"]" : "[]")
+                        + "},"
+                        + "\"netem\":{\"statusEvidenceCount\":1},"
+                        + "\"capacity\":{\"rowCount\":1,\"selectedCount\":1,\"rows\":[{"
+                        + "\"case\":\"perfect-curve\","
+                        + "\"payloadSize\":512,"
+                        + "\"reliability\":\"RELIABLE_ORDERED\","
+                        + "\"selected\":true,"
+                        + "\"selectedBenchmarkName\":\"curve-100_0mbps\","
+                        + "\"selectedDeliveredGbps\":1,"
+                        + "\"selectedProbeRttP99Millis\":1"
+                        + "}]},"
+                        + "\"aggregate\":{\"rowCount\":1,\"contentionRows\":[{"
+                        + "\"case\":\"fanout\","
+                        + "\"benchmarkName\":\"multi-client-fanout\","
+                        + "\"clients\":100,"
+                        + "\"payloadSize\":512,"
+                        + "\"reliability\":\"RELIABLE_ORDERED\","
+                        + "\"targetClientMbps\":5,"
+                        + "\"deliveredGbps\":1,"
+                        + "\"probeRttP99Millis\":1,"
+                        + "\"maxQueuedBytes\":0,"
+                        + "\"healthyFairnessIndex\":1,"
+                        + "\"healthySentToDeliveredBytesRatio\":1,"
+                        + "\"affectedSentToDeliveredBytesRatio\":0,"
+                        + "\"unstable\":false,"
+                        + "\"unstableReasons\":[]"
+                        + "}]}}]}\n",
                 StandardCharsets.UTF_8);
     }
 

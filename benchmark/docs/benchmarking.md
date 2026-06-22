@@ -239,7 +239,7 @@ benchmark/scripts/compare-lab-impairment.sh \
   --out benchmark/build/benchmark-results/lab-impairment-comparison.md
 ```
 
-The promotion script refuses failed campaign summaries, summaries generated without required netem evidence, and summaries that allowed profile validation bypass flags by default. The campaign comparator fails when a candidate profile or planned capacity/contention row is missing, when profile network shape differs, when either campaign summary failed, when netem status evidence was not required, or when delivered throughput, p99 probe RTT, or max queued bytes breaches the configured thresholds. Extra candidate rows are reported but do not fail the comparison.
+The promotion script refuses failed campaign summaries, summaries generated without required netem evidence, and summaries that allowed profile validation bypass flags by default. The campaign comparator fails when a candidate profile or planned capacity/contention row is missing, when profile network shape differs, when either campaign summary failed, when netem status evidence was not required, when either summary allowed profile validation bypass flags, or when delivered throughput, p99 probe RTT, or max queued bytes breaches the configured thresholds. Extra candidate rows are reported but do not fail the comparison. Use `--allow-validation-bypasses` only for non-baseline smoke comparisons.
 
 After promoting both the perfect-network lab baseline and adverse-network impairment campaign, run the readiness gate before treating the package set as the baseline of record:
 

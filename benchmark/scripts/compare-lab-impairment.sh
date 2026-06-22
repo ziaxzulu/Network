@@ -10,6 +10,7 @@ latency_regression_pct="10"
 queue_regression_pct="50"
 allow_failed_summary=false
 allow_missing_netem_evidence=false
+allow_validation_bypasses=false
 
 usage() {
   cat <<'USAGE'
@@ -29,6 +30,7 @@ Options:
   --queue-regression-pct N        Fail when max queued bytes rises by more than N percent. Default: 50.
   --allow-failed-summary          Do not fail when either campaign summary is failed.
   --allow-missing-netem-evidence  Do not fail when a summary was generated without required netem evidence.
+  --allow-validation-bypasses     Allow summaries that used profile validation bypass flags. Smoke only.
   --help                          Show this help.
 USAGE
 }
@@ -69,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-missing-netem-evidence)
       allow_missing_netem_evidence=true
+      shift
+      ;;
+    --allow-validation-bypasses)
+      allow_validation_bypasses=true
       shift
       ;;
     --help|-h)
@@ -151,6 +157,20 @@ if [[ "$allow_missing_netem_evidence" != "true" ]]; then
     path="${label_and_path#*:}"
     if ! jq -e '.requireNetemEvidence == true' "$path" >/dev/null; then
       netem_evidence_failures+=("$label:$path")
+    fi
+  done
+fi
+
+validation_bypass_failures=()
+if [[ "$allow_validation_bypasses" != "true" ]]; then
+  for label_and_path in "baseline:$baseline_summary" "candidate:$candidate_summary"; do
+    label="${label_and_path%%:*}"
+    path="${label_and_path#*:}"
+    if jq -e '
+      (.allowValidationBypasses == true)
+      or any((.profiles // [])[]; ((.validation.bypassFlags // []) | length) > 0)
+    ' "$path" >/dev/null; then
+      validation_bypass_failures+=("$label:$path")
     fi
   done
 fi
@@ -358,6 +378,7 @@ if [[ "$allow_failed_summary" == "true" ]]; then
   summary_failure_rows=0
 fi
 netem_failure_rows="${#netem_evidence_failures[@]}"
+validation_bypass_rows="${#validation_bypass_failures[@]}"
 
 write_report() {
   {
@@ -371,6 +392,7 @@ write_report() {
     echo "- Queue regression threshold: \`$queue_regression_pct%\`"
     echo "- Allow failed summary: \`$allow_failed_summary\`"
     echo "- Allow missing netem evidence: \`$allow_missing_netem_evidence\`"
+    echo "- Allow validation bypasses: \`$allow_validation_bypasses\`"
     echo
     echo "| Result | Count |"
     echo "| --- | ---: |"
@@ -381,6 +403,7 @@ write_report() {
     echo "| Extra candidate rows | $extra_rows |"
     echo "| Failed campaign summaries | ${#summary_failures[@]} |"
     echo "| Missing netem-evidence policy | ${#netem_evidence_failures[@]} |"
+    echo "| Validation bypass summaries | ${#validation_bypass_failures[@]} |"
     echo
     if [[ "${#summary_failures[@]}" -gt 0 ]]; then
       echo "## Summary Failures"
@@ -403,6 +426,26 @@ write_report() {
         failure_label="${failure%%:*}"
         failure_path="${failure#*:}"
         echo "| $failure_label | \`$failure_path\` |"
+      done
+      echo
+    fi
+    if [[ "${#validation_bypass_failures[@]}" -gt 0 ]]; then
+      echo "## Validation Bypasses"
+      echo
+      echo "| Input | Summary | Bypass flags |"
+      echo "| --- | --- | --- |"
+      for failure in "${validation_bypass_failures[@]}"; do
+        failure_label="${failure%%:*}"
+        failure_path="${failure#*:}"
+        flags="$(jq -r '
+          (
+            [if .allowValidationBypasses == true then "allowValidationBypasses" else empty end]
+            + [(.profiles // [])[] | (.validation.bypassFlags // [])[]]
+          )
+          | unique
+          | join(",")
+        ' "$failure_path")"
+        echo "| $failure_label | \`$failure_path\` | \`$flags\` |"
       done
       echo
     fi
@@ -439,8 +482,8 @@ write_report() {
       echo "| $status | $kind | $profile | $network | $case_name | $benchmark | $delivered | $delivered_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $reasons |"
     done
     echo
-    if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 ]]; then
-      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $summary_failure_rows failed campaign summary input(s), $netem_failure_rows netem evidence policy issue(s)."
+    if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then
+      echo "Comparison failed: $regression_rows regression row(s), $missing_rows missing candidate row(s), $summary_failure_rows failed campaign summary input(s), $netem_failure_rows netem evidence policy issue(s), $validation_bypass_rows validation bypass summary input(s)."
     else
       echo "Comparison passed."
     fi
@@ -459,6 +502,6 @@ else
   write_report
 fi
 
-if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 ]]; then
+if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then
   exit 1
 fi
