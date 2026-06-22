@@ -6,7 +6,7 @@ impairment_baseline="benchmark/build/benchmark-baselines/latest-impairment"
 out_dir=""
 expected_impairment_profiles="perfect,near-loss,regional-loss,poor,severe"
 required_curve_payload_sizes="64,256,512,1200,1340,1400,262144"
-required_impairment_contention_scenarios="multi-client-fanout,fairness,disappearing-clients,resource-pack-transfer"
+required_impairment_contention_scenarios="multi-client-fanout,fairness,disappearing-clients,batched-game-traffic,resource-pack-transfer"
 required_min_contention_clients="500"
 required_min_contention_target_client_mbps="5"
 required_min_prereq_reports="2"
@@ -26,7 +26,7 @@ Options:
   --impairment-baseline PATH       Promoted impairment campaign baseline directory. Default: benchmark/build/benchmark-baselines/latest-impairment.
   --expected-impairment-profiles CSV Required impairment profiles. Default: perfect,near-loss,regional-loss,poor,severe.
   --required-curve-payload-sizes CSV Required perfect-network curve payload sizes. Default: 64,256,512,1200,1340,1400,262144.
-  --required-impairment-contention-scenarios CSV Required contention scenarios per impairment profile. Default: multi-client-fanout,fairness,disappearing-clients,resource-pack-transfer.
+  --required-impairment-contention-scenarios CSV Required contention scenarios per impairment profile. Default: multi-client-fanout,fairness,disappearing-clients,batched-game-traffic,resource-pack-transfer.
   --required-min-contention-clients N Required lab validation contention-client gate. Default: 500.
   --required-min-contention-target-client-mbps N Required lab validation per-client Mbps gate. Default: 5.
   --required-min-prereq-reports N Required lab prereq reports. Default: 2.
@@ -262,7 +262,7 @@ if [[ -s "$lab_validation" ]]; then
     extra="$(jq -n --argjson required "$required_min_prereq_distinct_hostnames" --argjson actual "$(jq -r '.strictPrereqDistinctHostnameCount // 0' "$lab_validation")" '{requiredMinStrictPrereqDistinctHostnames:$required,actualStrictPrereqDistinctHostnameCount:$actual}')"
     append_issue "lab-prereq-strict-gates-not-separate-hosts" "lab-baseline" "lab baseline does not prove strict prerequisite gates from enough distinct hostnames" "$extra"
   fi
-  for scenario in curve multi-client-fanout fairness disappearing-clients resource-pack-transfer; do
+  for scenario in curve multi-client-fanout fairness disappearing-clients batched-game-traffic resource-pack-transfer; do
     if ! jq -e --arg scenario "$scenario" '(.scenarioCounts[$scenario] // 0) > 0' "$lab_validation" >/dev/null; then
       append_issue "lab-missing-scenario" "lab-baseline" "lab baseline is missing a required scenario family" "{\"scenario\":\"$scenario\"}"
     fi

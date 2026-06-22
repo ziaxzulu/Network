@@ -323,9 +323,13 @@ public class BenchmarkKitTests {
                 "--artifact-root", artifacts.toString(),
                 "--server-host", "127.0.0.1",
                 "--clients", "4",
-                "--cases", "resource-pack",
+                "--cases", "resource-pack,batched",
                 "--resource-pack-chunk-sizes", "8192,262144",
                 "--resource-pack-interval", "200ms",
+                "--batch-intervals", "20ms",
+                "--batch-payload-sizes", "128,512,1200",
+                "--logical-packets-per-batch", "8",
+                "--batch-groups", "4",
                 "--warmup", "1s",
                 "--duration", "1s",
                 "--iterations", "1",
@@ -335,14 +339,17 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, result.exitCode, result.output);
 
         List<String> manifest = Files.readAllLines(plan.resolve("manifest.jsonl"), StandardCharsets.UTF_8);
-        Assertions.assertEquals(2, manifest.size());
-        Assertions.assertTrue(manifest.stream().allMatch(row -> row.contains("\"benchmarkName\":\"resource-pack-transfer\"")));
+        Assertions.assertEquals(3, manifest.size());
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"benchmarkName\":\"batched-game-traffic\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"payloadSize\":8192")
                 && row.contains("\"perClientMbps\":0.327680000")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")
                 && row.contains("\"perClientMbps\":10.485760000")));
 
         String serverCommands = Files.readString(plan.resolve("server-commands.sh"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(serverCommands.contains("batched-game-traffic --role server"));
+        Assertions.assertTrue(serverCommands.contains("--batch-interval 20ms --logical-packets-per-batch 8"));
+        Assertions.assertTrue(serverCommands.contains("resource-pack-transfer --role server"));
         Assertions.assertTrue(serverCommands.contains("--chunk-size 8192 --chunk-interval 200ms"));
         Assertions.assertTrue(serverCommands.contains("--chunk-size 262144 --chunk-interval 200ms"));
     }
@@ -443,6 +450,12 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(2, handoffManifest.path("contentionClientTotal").asInt());
         Assertions.assertEquals(1, handoffManifest.path("contentionCases").size());
         Assertions.assertEquals("fanout", handoffManifest.path("contentionCases").get(0).asText());
+        Assertions.assertEquals(3, handoffManifest.path("batchIntervals").size());
+        Assertions.assertEquals("10ms", handoffManifest.path("batchIntervals").get(0).asText());
+        Assertions.assertEquals(3, handoffManifest.path("batchPayloadSizes").size());
+        Assertions.assertEquals(128, handoffManifest.path("batchPayloadSizes").get(0).asInt());
+        Assertions.assertEquals(8, handoffManifest.path("logicalPacketsPerBatch").asInt());
+        Assertions.assertEquals(4, handoffManifest.path("batchGroups").asInt());
         Assertions.assertEquals(2, handoffManifest.path("resourcePackChunkSizes").size());
         Assertions.assertEquals(8192, handoffManifest.path("resourcePackChunkSizes").get(0).asInt());
         Assertions.assertEquals(262144, handoffManifest.path("resourcePackChunkSizes").get(1).asInt());
@@ -598,7 +611,7 @@ public class BenchmarkKitTests {
                 "--expect-min-cpus", "2",
                 "--profiles", "perfect",
                 "--warmup", "1s",
-                "--duration", "1s",
+                "--duration", "60s",
                 "--iterations", "1",
                 "--start-delay", "1s",
                 "--start-offset", "180s"
@@ -628,6 +641,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(5.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(500, handoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+        Assertions.assertTrue(handoffCheckJson.path("expectedContentionScenarios").toString()
+                .contains("\"batched-game-traffic\""));
         Assertions.assertTrue(handoffCheckJson.path("expectedContentionScenarios").toString()
                 .contains("\"resource-pack-transfer\""));
     }
@@ -1404,7 +1419,7 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("validation.json"),
                 "{\"passed\":true,\"distinctHostnameCount\":2,\"hostReportCount\":2,\"rowCount\":"
-                        + (payloadSizes.length + 4)
+                        + (payloadSizes.length + 5)
                         + ",\"capacityRowCount\":" + payloadSizes.length
                         + ",\"prereqReportCount\":" + prereqReportCount
                         + ",\"readyPrereqReportCount\":" + readyPrereqReportCount
@@ -1416,7 +1431,7 @@ public class BenchmarkKitTests {
                         + ",\"minContentionTargetClientMbps\":" + minContentionTargetClientMbps
                         + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length
                         + ",\"multi-client-fanout\":1,\"fairness\":1,\"disappearing-clients\":1,"
-                        + "\"resource-pack-transfer\":1}}\n",
+                        + "\"batched-game-traffic\":1,\"resource-pack-transfer\":1}}\n",
                 StandardCharsets.UTF_8);
 
         StringBuilder aggregate = new StringBuilder();
@@ -1436,6 +1451,7 @@ public class BenchmarkKitTests {
         aggregate.append("{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"fairness\",\"benchmarkName\":\"fairness\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"disappear\",\"benchmarkName\":\"disappearing-clients\",\"payloadSize\":512}\n");
+        aggregate.append("{\"case\":\"batch\",\"benchmarkName\":\"batched-game-traffic\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"resource-pack\",\"benchmarkName\":\"resource-pack-transfer\",\"payloadSize\":8192}\n");
         Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("bandwidth-capacity.jsonl"), capacity.toString(), StandardCharsets.UTF_8);
@@ -1477,7 +1493,7 @@ public class BenchmarkKitTests {
         }
 
         String[] benchmarks = {"curve-100_0mbps", "multi-client-fanout", "fairness", "disappearing-clients",
-                "resource-pack-transfer"};
+                "batched-game-traffic", "resource-pack-transfer"};
         StringBuilder aggregate = new StringBuilder();
         for (String benchmark : benchmarks) {
             Path artifact = labRoot.resolve("artifacts").resolve(benchmark);
@@ -1550,6 +1566,7 @@ public class BenchmarkKitTests {
             if (includeDisappearingContention) {
                 profiles.append(",{\"benchmarkName\":\"disappearing-clients\"}");
             }
+            profiles.append(",{\"benchmarkName\":\"batched-game-traffic\"}");
             profiles.append(",{\"benchmarkName\":\"resource-pack-transfer\"}");
             profiles.append("]},\"capacity\":{\"rowCount\":").append(payloadSizes.length)
                     .append(",\"selectedCount\":").append(payloadSizes.length)

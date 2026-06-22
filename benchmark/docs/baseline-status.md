@@ -23,6 +23,7 @@ Use [`baseline-matrix.md`](baseline-matrix.md) as the source of truth. The first
 - `100+` client contention rows at `5Mbps` per client
 - fanout, fairness, and disappearing-client rows
 - `10ms`, `20ms`, and `50ms` batched-game-traffic rows
+- paced resource-pack rows for `8KiB` and `256KiB` chunks
 - host-level impairment campaigns for selected curve and contention rows
 
 The executable local/lab profiles in `benchmark/scripts/run-baseline-matrix.sh` and the remote lab planner in `benchmark/scripts/plan-lab-baseline.sh` are aligned with that matrix.
@@ -100,7 +101,7 @@ benchmark/scripts/plan-lab-baseline.sh \
   --curve-receiver receiver-a=1 \
   --contention-receiver receiver-a=250 \
   --contention-receiver receiver-b=250 \
-  --contention-cases fanout,fairness,disappear-blackhole,resource-pack \
+  --contention-cases fanout,fairness,disappear-blackhole,batched,resource-pack \
   --contention-payload-size 512 \
   --per-client-mbps 5 \
   --raised-packet-limit 100000 \
@@ -116,7 +117,7 @@ The generated plan schedules:
 
 - `56` default-limiter curve rows across payloads `64,256,512,1200,1340,1400,262144`
 - `56` raised-limiter curve rows across the same payloads
-- `3` contention rows at `500` clients split across two receiver hosts
+- `8` contention/workload rows at `500` clients split across two receiver hosts: fanout, fairness, blackhole disappearance, three batched cadences, and two resource-pack transfers
 
 Before promotion, the lab output must include:
 
@@ -182,7 +183,7 @@ benchmark/scripts/plan-lab-impairment.sh \
   --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --contention-receiver receiver-a=250 \
   --contention-receiver receiver-b=250 \
-  --contention-cases fanout,fairness,disappear-blackhole,resource-pack \
+  --contention-cases fanout,fairness,disappear-blackhole,batched,resource-pack \
   --contention-payload-size 512 \
   --per-client-mbps 5 \
   --raised-packet-limit 100000 \
@@ -214,6 +215,6 @@ Each profile schedules:
 
 - `56` default-limiter one-client bandwidth curve rows
 - `56` raised-limiter one-client bandwidth curve rows
-- `3` contention rows at `500` clients split across two receiver hosts
+- `8` contention/workload rows at `500` clients split across two receiver hosts
 
 The impairment planner also writes `check-plan-freshness.sh`, `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, `netem/<profile>-clear.sh`, and `summarize-campaign.sh`. Run the campaign freshness check before starting profile workers, then run the netem scripts on the shaped receiver host or network namespace before and after the matching profile plan. Keep the generated `<profile>-status-*.txt` files with the copied benchmark artifacts; `validate-all.sh` requires that evidence by default. After profile merge and validation, keep `campaign-summary/impairment-summary.json`, `impairment-summary.jsonl`, and `impairment-summary.md` with the baseline package so adverse-network capacity and contention behavior are reviewed as one campaign. Campaign summary and promotion reject profile validation bypass flags by default; `--allow-validation-bypasses` is only for non-baseline smoke packages. Promote that campaign with `benchmark/scripts/promote-lab-impairment.sh`, then compare future candidate campaigns with `benchmark/scripts/compare-lab-impairment.sh`. The `perfect` profile is the no-impairment companion and should still capture qdisc status so later comparisons can prove the baseline host was unshaped.

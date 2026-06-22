@@ -130,7 +130,7 @@ benchmark/scripts/plan-lab-baseline.sh \
   --contention-receiver receiver-b=250 \
   --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --curve-rates-mbps 100,250,500,750,1000,1500,2000,unlimited \
-  --contention-cases fanout,fairness,disappear-blackhole,resource-pack \
+  --contention-cases fanout,fairness,disappear-blackhole,batched,resource-pack \
   --contention-payload-size 512 \
   --per-client-mbps 5 \
   --warmup 10s \
@@ -161,21 +161,21 @@ Start the server worker first:
 ```bash
 start_at_ms=$((($(date +%s) + 60) * 1000))
 echo "$start_at_ms"
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-1000x5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="multi-client-fanout --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-1000x5"
 ```
 
 Start receivers on one or more receiver hosts:
 
 ```bash
 start_at_ms=<same-value-used-by-server>
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --disappearing-clients 0 --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="multi-client-fanout --role client --host <server-ip> --port 19132 --clients 250 --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --disappearing-clients 0 --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
 ```
 
 When using `--disappear-mode blackhole`, pass matching affected-client settings to receiver workers and server worker so reports label the same client set:
 
 ```bash
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 100 --start-delay 30s --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-blackhole-100x5"
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 100 --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-receiver --run-id receiver-blackhole-100x5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --role server --bind-host 0.0.0.0 --port 19132 --clients 100 --start-delay 30s --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-blackhole-100x5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="disappearing-clients --role client --host <server-ip> --port 19132 --clients 100 --start-at-epoch-ms $start_at_ms --warmup 10s --duration 60s --iterations 3 --disappearing-clients 10 --disappear-after 30s --disappear-mode blackhole --out $(pwd)/benchmark/build/benchmark-results/lab-receiver --run-id receiver-blackhole-100x5"
 ```
 
 Direct `raknetBenchmark` runs should use absolute `--out` paths. The Gradle task runs from the benchmark module directory, so relative output paths can otherwise land under `benchmark/benchmark/...`. Keep `--iterations`, `--warmup`, `--duration`, and `--start-at-epoch-ms` aligned between server and receiver workers; the merge script warns when iteration counts or coordinated start timestamps differ. Hosts should be NTP-synchronized, and the start timestamp should be far enough in the future for all receiver clients to establish before warmup begins.
@@ -221,7 +221,7 @@ benchmark/scripts/plan-remote-worker-curve.sh \
 
 Run `server-commands.sh` on the server host first, start the generated receiver scripts once the server is listening, copy receiver artifacts back under the same artifact root, then run `merge-commands.sh`. The merge output includes a campaign-level `suite-aggregate.jsonl` and `bandwidth-capacity.*` files for highest-stable-capacity review.
 
-For remote contention campaigns, generate fanout, fairness, and disappearance cases together:
+For remote contention campaigns, generate fanout, fairness, disappearance, batched, and resource-pack cases together:
 
 ```bash
 benchmark/scripts/plan-remote-contention.sh \
@@ -230,7 +230,7 @@ benchmark/scripts/plan-remote-contention.sh \
   --case remote-contention-100x5 \
   --server-host <server-ip> \
   --receiver receiver-a=100 \
-  --cases fanout,fairness,disappear-blackhole,resource-pack \
+  --cases fanout,fairness,disappear-blackhole,batched,resource-pack \
   --payload-size 512 \
   --per-client-mbps 5 \
   --impaired-clients 10% \

@@ -13,9 +13,13 @@ contention_clients="100"
 case_prefix="lab-baseline"
 curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 curve_rates_mbps="100,250,500,750,1000,1500,2000,unlimited"
-contention_cases="fanout,fairness,disappear-blackhole,resource-pack"
+contention_cases="fanout,fairness,disappear-blackhole,batched,resource-pack"
 contention_payload_size="512"
 per_client_mbps="5"
+batch_intervals="10ms,20ms,50ms"
+batch_payload_sizes="128,512,1200"
+logical_packets_per_batch="8"
+batch_groups="4"
 resource_pack_chunk_sizes="8192,262144"
 resource_pack_interval="200ms"
 impaired_clients="10%"
@@ -55,7 +59,7 @@ Usage:
 
 Generates a coordinated lab baseline plan:
   - remote 1-client bandwidth-latency curve plan
-  - remote multi-client fanout/fairness/disappearance contention plan
+  - remote multi-client fanout/fairness/disappearance/batched/resource-pack workload plan
   - host-capture commands
   - combined merge script and topology template
 
@@ -75,9 +79,13 @@ Options:
   --case NAME                       Alias for --case-prefix.
   --curve-payload-sizes CSV         Payload sizes for bandwidth curve. Default: 64,256,512,1200,1340,1400,262144.
   --curve-rates-mbps CSV            Offered Mbps points for bandwidth curve. Default: 100,250,500,750,1000,1500,2000,unlimited.
-  --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole,resource-pack.
+  --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole,batched,resource-pack.
   --contention-payload-size N       Payload size for contention cases. Default: 512.
   --per-client-mbps N               Contention per-client offered rate. Default: 5.
+  --batch-intervals CSV             Batch intervals for batched cases. Default: 10ms,20ms,50ms.
+  --batch-payload-sizes CSV         Batch payload sizes for batched cases. Default: 128,512,1200.
+  --logical-packets-per-batch N     Logical packets encoded into each batch. Default: 8.
+  --batch-groups N                  Payload variant groups for batched cases. Default: 4.
   --resource-pack-chunk-sizes CSV   Resource-pack chunk sizes. Default: 8192,262144.
   --resource-pack-interval DURATION Resource-pack chunk interval. Default: 200ms.
   --impaired-clients N|PCT          Affected clients for fairness. Default: 10%.
@@ -185,6 +193,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --per-client-mbps)
       per_client_mbps="$2"
+      shift 2
+      ;;
+    --batch-intervals)
+      batch_intervals="$2"
+      shift 2
+      ;;
+    --batch-payload-sizes)
+      batch_payload_sizes="$2"
+      shift 2
+      ;;
+    --logical-packets-per-batch|--batch-logical-packets)
+      logical_packets_per_batch="$2"
+      shift 2
+      ;;
+    --batch-groups|--group-count)
+      batch_groups="$2"
       shift 2
       ;;
     --resource-pack-chunk-sizes|--chunk-sizes)
@@ -409,6 +433,14 @@ if ! positive_int "$contention_payload_size"; then
   echo "--contention-payload-size must be a positive integer" >&2
   exit 2
 fi
+if ! positive_int "$logical_packets_per_batch"; then
+  echo "--logical-packets-per-batch must be a positive integer" >&2
+  exit 2
+fi
+if ! positive_int "$batch_groups"; then
+  echo "--batch-groups must be a positive integer" >&2
+  exit 2
+fi
 resource_pack_interval_ms="$(duration_millis "$resource_pack_interval")"
 if [[ "$resource_pack_interval_ms" -le 0 ]]; then
   echo "--resource-pack-interval must be greater than zero" >&2
@@ -436,9 +468,26 @@ for value_name in per_client_mbps max_p99_ms max_queue_bytes max_send_deliver_ra
     exit 2
   fi
 done
-for value in "$curve_payload_sizes" "$curve_rates_mbps" "$contention_cases" "$resource_pack_chunk_sizes"; do
+for value in "$curve_payload_sizes" "$curve_rates_mbps" "$contention_cases" "$batch_intervals" "$batch_payload_sizes" "$resource_pack_chunk_sizes"; do
   if ! non_empty_csv "$value"; then
     echo "CSV options must be non-empty and cannot start or end with a comma: $value" >&2
+    exit 2
+  fi
+done
+
+IFS=',' read -r -a batch_interval_array <<<"$batch_intervals"
+for batch_interval in "${batch_interval_array[@]}"; do
+  batch_interval="${batch_interval//[[:space:]]/}"
+  if [[ "$(duration_millis "$batch_interval")" -le 0 ]]; then
+    echo "--batch-intervals entries must be positive durations: $batch_interval" >&2
+    exit 2
+  fi
+done
+IFS=',' read -r -a batch_payload_array <<<"$batch_payload_sizes"
+for batch_payload_size in "${batch_payload_array[@]}"; do
+  batch_payload_size="${batch_payload_size//[[:space:]]/}"
+  if ! positive_int "$batch_payload_size"; then
+    echo "--batch-payload-sizes entries must be positive integers: $batch_payload_size" >&2
     exit 2
   fi
 done
@@ -618,6 +667,10 @@ contention_cmd=(
   --cases "$contention_cases"
   --payload-size "$contention_payload_size"
   --per-client-mbps "$per_client_mbps"
+  --batch-intervals "$batch_intervals"
+  --batch-payload-sizes "$batch_payload_sizes"
+  --logical-packets-per-batch "$logical_packets_per_batch"
+  --batch-groups "$batch_groups"
   --resource-pack-chunk-sizes "$resource_pack_chunk_sizes"
   --resource-pack-interval "$resource_pack_interval"
   --impaired-clients "$impaired_clients"
@@ -682,6 +735,9 @@ for selected_case in "${contention_case_array[@]}"; do
       ;;
     disappear-*|disappearing-*|close|blackhole|stopread|stop-reading)
       add_required_scenario "disappearing-clients"
+      ;;
+    batch|batched|batched-game-traffic)
+      add_required_scenario "batched-game-traffic"
       ;;
     resource-pack|resource-pack-transfer|resource)
       add_required_scenario "resource-pack-transfer"
@@ -917,6 +973,10 @@ cat >"$topology_template" <<EOF
 - Max queued bytes cap: \`${max_queued_bytes:-library default}\`
 - Contention clients: \`$validation_min_contention_clients\`
 - Contention per-client Mbps: \`$per_client_mbps\`
+- Batch intervals: \`$batch_intervals\`
+- Batch payload sizes: \`$batch_payload_sizes\`
+- Logical packets per batch: \`$logical_packets_per_batch\`
+- Batch groups: \`$batch_groups\`
 - Resource-pack chunk sizes: \`$resource_pack_chunk_sizes\`
 - Resource-pack interval: \`$resource_pack_interval\`
 
@@ -957,6 +1017,10 @@ EOF
   fi
   echo "- Contention plan: \`$contention_plan\`"
   echo "- Contention cases: \`$contention_cases\`"
+  echo "- Batch intervals: \`$batch_intervals\`"
+  echo "- Batch payload sizes: \`$batch_payload_sizes\`"
+  echo "- Logical packets per batch: \`$logical_packets_per_batch\`"
+  echo "- Batch groups: \`$batch_groups\`"
   echo "- Resource-pack chunk sizes: \`$resource_pack_chunk_sizes\`"
   echo "- Resource-pack interval: \`$resource_pack_interval\`"
   echo "- Max queued bytes cap: \`${max_queued_bytes:-library default}\`"

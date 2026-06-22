@@ -298,14 +298,14 @@ For lab validation, run the server and receiver workers on separate machines. St
 ```bash
 start_at_ms=$((($(date +%s) + 60) * 1000))
 echo "$start_at_ms"
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="server-worker --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --start-at-epoch-ms $start_at_ms --warmup 5s --duration 30s --iterations 3 --payload-size 512 --per-client-mbps 5 --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-1000x5"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="multi-client-fanout --role server --bind-host 0.0.0.0 --port 19132 --clients 1000 --start-delay 30s --start-at-epoch-ms $start_at_ms --warmup 5s --duration 30s --iterations 3 --payload-size 512 --per-client-mbps 5 --out $(pwd)/benchmark/build/benchmark-results/lab-server --run-id server-1000x5"
 ```
 
 Then start receivers from one or more client machines:
 
 ```bash
 start_at_ms=<same-value-used-by-server>
-./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="receiver-worker --role client --host <server-ip> --port 19132 --clients 250 --start-at-epoch-ms $start_at_ms --warmup 5s --duration 30s --iterations 3 --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="multi-client-fanout --role client --host <server-ip> --port 19132 --clients 250 --start-at-epoch-ms $start_at_ms --warmup 5s --duration 30s --iterations 3 --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
 ```
 
 The server report contains send-side RakNet metrics and probe RTTs. Receiver reports contain delivered bytes/messages from that worker. Keep `--iterations`, `--warmup`, `--duration`, and `--start-at-epoch-ms` aligned between server and receiver workers for comparable merged artifacts. Use NTP-synchronized hosts and choose a timestamp far enough in the future for receivers to connect before warmup begins. Use absolute `--out` paths for direct `raknetBenchmark` invocations so artifacts land in the same place regardless of the Gradle task working directory.
@@ -343,7 +343,7 @@ benchmark/scripts/plan-remote-worker-curve.sh \
 
 The plan writes `server-commands.sh`, one `receiver-<name>-commands.sh` per receiver, `merge-commands.sh`, a manifest, and a README. The combined lab planner also writes `check-plan-freshness.sh`; run it before starting workers so expired scheduled start times are caught before a lab run starts. The merge script labels remote rows as `curve-*`, concatenates a campaign-level `suite-aggregate.jsonl`, and runs `select-stable-bandwidth.sh` so the remote curve produces the same capacity artifacts as local suites.
 
-For production-like remote contention runs, generate a coordinated fanout, fairness, and disappearance plan:
+For production-like remote contention runs, generate a coordinated fanout, fairness, disappearance, batched, and resource-pack plan:
 
 ```bash
 benchmark/scripts/plan-remote-contention.sh \
@@ -352,7 +352,7 @@ benchmark/scripts/plan-remote-contention.sh \
   --case remote-contention-100x5 \
   --server-host <server-ip> \
   --receiver receiver-a=100 \
-  --cases fanout,fairness,disappear-blackhole,resource-pack \
+  --cases fanout,fairness,disappear-blackhole,batched,resource-pack \
   --payload-size 512 \
   --per-client-mbps 5 \
   --impaired-clients 10% \
@@ -363,7 +363,7 @@ benchmark/scripts/plan-remote-contention.sh \
   --start-delay 90s
 ```
 
-The contention planner writes the same per-host command scripts and merge script shape as the curve planner, but each generated case uses `multi-client-fanout`, `fairness`, or `disappearing-clients` worker modes. Affected clients are assigned to receiver scripts in receiver order. Keep affected clients on one receiver host when you need exact healthy/affected splits, or treat server-side affected splits as advisory because the server labels peers by accept order across hosts.
+The contention planner writes the same per-host command scripts and merge script shape as the curve planner, but each generated case uses the actual workload scenario with `--role server` or `--role client`: `multi-client-fanout`, `fairness`, `disappearing-clients`, `batched-game-traffic`, or `resource-pack-transfer`. Affected clients are assigned to receiver scripts in receiver order. Keep affected clients on one receiver host when you need exact healthy/affected splits, or treat server-side affected splits as advisory because the server labels peers by accept order across hosts.
 
 ## Matrix Profiles
 

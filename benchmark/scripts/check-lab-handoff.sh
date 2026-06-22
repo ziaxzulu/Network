@@ -204,6 +204,7 @@ expected_contention_scenarios_json="$(jq -c '
     | if $case == "fanout" or $case == "multi-client-fanout" then "multi-client-fanout"
       elif $case == "fairness" then "fairness"
       elif ($case | startswith("disappear")) or ($case | startswith("disappearing")) or $case == "close" or $case == "blackhole" or $case == "stopread" or $case == "stop-reading" then "disappearing-clients"
+      elif $case == "batch" or $case == "batched" or $case == "batched-game-traffic" then "batched-game-traffic"
       elif $case == "resource-pack" or $case == "resource-pack-transfer" or $case == "resource" then "resource-pack-transfer"
       else $case
       end;

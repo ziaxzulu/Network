@@ -9,9 +9,13 @@ port="19132"
 clients="100"
 clients_set=false
 receivers=()
-cases="fanout,fairness,disappear-blackhole,resource-pack"
+cases="fanout,fairness,disappear-blackhole,batched,resource-pack"
 payload_size="512"
 per_client_mbps="5"
+batch_intervals="10ms,20ms,50ms"
+batch_payload_sizes="128,512,1200"
+logical_packets_per_batch="8"
+batch_groups="4"
 resource_pack_chunk_sizes="8192,262144"
 resource_pack_interval="200ms"
 warmup="10s"
@@ -48,10 +52,14 @@ Options:
   --port PORT                       UDP port. Default: 19132.
   --clients N                       Total clients when no --receiver is supplied. Default: 100.
   --receiver NAME:CLIENTS           Receiver worker and client count. NAME=CLIENTS is also accepted. May be repeated.
-  --cases CSV                       Cases: fanout,fairness,disappear-close,disappear-stopread,disappear-blackhole,resource-pack.
-                                    Default: fanout,fairness,disappear-blackhole,resource-pack.
+  --cases CSV                       Cases: fanout,fairness,disappear-close,disappear-stopread,disappear-blackhole,batched,resource-pack.
+                                    Default: fanout,fairness,disappear-blackhole,batched,resource-pack.
   --payload-size N                  Payload size. Default: 512.
   --per-client-mbps N               Per-client offered rate. Default: 5.
+  --batch-intervals CSV             Batch intervals for batched cases. Default: 10ms,20ms,50ms.
+  --batch-payload-sizes CSV         Batch payload sizes for batched cases. Default: 128,512,1200.
+  --logical-packets-per-batch N     Logical packets encoded into each batch. Default: 8.
+  --batch-groups N                  Payload variant groups for batched cases. Default: 4.
   --resource-pack-chunk-sizes CSV   Chunk sizes for resource-pack cases. Default: 8192,262144.
   --resource-pack-interval DURATION Chunk interval for resource-pack cases. Default: 200ms.
   --warmup DURATION                 Warmup per case. Default: 10s.
@@ -126,6 +134,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --per-client-mbps)
       per_client_mbps="$2"
+      shift 2
+      ;;
+    --batch-intervals)
+      batch_intervals="$2"
+      shift 2
+      ;;
+    --batch-payload-sizes)
+      batch_payload_sizes="$2"
+      shift 2
+      ;;
+    --logical-packets-per-batch|--batch-logical-packets)
+      logical_packets_per_batch="$2"
+      shift 2
+      ;;
+    --batch-groups|--group-count)
+      batch_groups="$2"
       shift 2
       ;;
     --resource-pack-chunk-sizes|--chunk-sizes)
@@ -321,6 +345,9 @@ canonical_case() {
     disappear-blackhole|disappearing-blackhole|blackhole)
       echo "disappear-blackhole"
       ;;
+    batch|batched|batched-game-traffic)
+      echo "batched"
+      ;;
     resource-pack|resource-pack-transfer|resource)
       echo "resource-pack"
       ;;
@@ -345,6 +372,14 @@ if ! positive_int "$iterations"; then
 fi
 if ! positive_int "$payload_size"; then
   echo "--payload-size must be a positive integer" >&2
+  exit 2
+fi
+if ! positive_int "$logical_packets_per_batch"; then
+  echo "--logical-packets-per-batch must be a positive integer" >&2
+  exit 2
+fi
+if ! positive_int "$batch_groups"; then
+  echo "--batch-groups must be a positive integer" >&2
   exit 2
 fi
 resource_pack_interval_ms="$(duration_millis "$resource_pack_interval")"
@@ -374,6 +409,14 @@ if ! non_empty_csv "$resource_pack_chunk_sizes"; then
   echo "--resource-pack-chunk-sizes must be a non-empty CSV value" >&2
   exit 2
 fi
+if ! non_empty_csv "$batch_intervals"; then
+  echo "--batch-intervals must be a non-empty CSV value" >&2
+  exit 2
+fi
+if ! non_empty_csv "$batch_payload_sizes"; then
+  echo "--batch-payload-sizes must be a non-empty CSV value" >&2
+  exit 2
+fi
 
 IFS=',' read -r -a case_array_raw <<<"$cases"
 case_array=()
@@ -386,6 +429,32 @@ if [[ "${#case_array[@]}" -eq 0 ]]; then
   echo "No valid cases selected" >&2
   exit 2
 fi
+
+IFS=',' read -r -a batch_interval_array_raw <<<"$batch_intervals"
+batch_interval_array=()
+for raw_batch_interval in "${batch_interval_array_raw[@]}"; do
+  raw_batch_interval="${raw_batch_interval//[[:space:]]/}"
+  [[ -z "$raw_batch_interval" ]] && continue
+  if [[ "$(duration_millis "$raw_batch_interval")" -le 0 ]]; then
+    echo "--batch-intervals entries must be positive durations: $raw_batch_interval" >&2
+    exit 2
+  fi
+  batch_interval_array+=("$raw_batch_interval")
+done
+if [[ "${#batch_interval_array[@]}" -eq 0 ]]; then
+  echo "No valid batch intervals selected" >&2
+  exit 2
+fi
+
+IFS=',' read -r -a batch_payload_array_raw <<<"$batch_payload_sizes"
+for raw_batch_payload_size in "${batch_payload_array_raw[@]}"; do
+  raw_batch_payload_size="${raw_batch_payload_size//[[:space:]]/}"
+  [[ -z "$raw_batch_payload_size" ]] && continue
+  if ! positive_int "$raw_batch_payload_size"; then
+    echo "--batch-payload-sizes entries must be positive integers: $raw_batch_payload_size" >&2
+    exit 2
+  fi
+done
 
 IFS=',' read -r -a resource_pack_chunk_array_raw <<<"$resource_pack_chunk_sizes"
 resource_pack_chunk_array=()
@@ -405,13 +474,21 @@ fi
 
 expanded_case_array=()
 for selected_case in "${case_array[@]}"; do
-  if [[ "$selected_case" == "resource-pack" ]]; then
-    for chunk_size in "${resource_pack_chunk_array[@]}"; do
-      expanded_case_array+=("resource-pack:$chunk_size")
-    done
-  else
-    expanded_case_array+=("$selected_case")
-  fi
+  case "$selected_case" in
+    batched)
+      for batch_interval in "${batch_interval_array[@]}"; do
+        expanded_case_array+=("batched:$batch_interval")
+      done
+      ;;
+    resource-pack)
+      for chunk_size in "${resource_pack_chunk_array[@]}"; do
+        expanded_case_array+=("resource-pack:$chunk_size")
+      done
+      ;;
+    *)
+      expanded_case_array+=("$selected_case")
+      ;;
+  esac
 done
 case_array=("${expanded_case_array[@]}")
 
@@ -453,6 +530,7 @@ start_offset_ms="$(duration_millis "$start_offset")"
 start_delay_ms="$(duration_millis "$start_delay")"
 warmup_ms="$(duration_millis "$warmup")"
 duration_ms="$(duration_millis "$duration")"
+disappear_after_ms="$(duration_millis "$disappear_after")"
 if [[ -z "$case_spacing" ]]; then
   case_spacing_ms=$((start_delay_ms + warmup_ms + duration_ms + 30000))
   case_spacing="${case_spacing_ms}ms"
@@ -463,6 +541,12 @@ if [[ "$case_spacing_ms" -lt $((start_delay_ms + warmup_ms + duration_ms)) ]]; t
   echo "--case-spacing should be at least start-delay + warmup + duration" >&2
   exit 2
 fi
+for selected_case in "${case_array[@]}"; do
+  if [[ "$selected_case" == disappear-* && "$disappear_after_ms" -ge "$duration_ms" ]]; then
+    echo "--disappear-after must be less than --duration when disappearance cases are selected" >&2
+    exit 2
+  fi
+done
 
 mkdir -p "$output_root"
 manifest="$output_root/manifest.jsonl"
@@ -616,6 +700,14 @@ for selected_case in "${case_array[@]}"; do
       affected_total="$disappearing_count"
       affected_kind="disappearing-blackhole"
       ;;
+    batched:*)
+      batch_interval="${selected_case#batched:}"
+      benchmark_name="batched-game-traffic"
+      run_suffix="batch-${clients}-$(safe_name "$batch_interval")"
+      server_case_args="--batch-interval $batch_interval --logical-packets-per-batch $logical_packets_per_batch --batch-payload-sizes $batch_payload_sizes --batch-groups $batch_groups"
+      affected_total=0
+      affected_kind="none"
+      ;;
     resource-pack:*)
       chunk_size="${selected_case#resource-pack:}"
       benchmark_name="resource-pack-transfer"
@@ -632,7 +724,7 @@ for selected_case in "${case_array[@]}"; do
   case_name="$run_id"
   start_at=$((base_start_at + (case_index * case_spacing_ms)))
 
-  server_args="server-worker --role server --bind-host $bind_host --port $port --clients $clients --start-delay $start_delay --start-at-epoch-ms $start_at $common_worker_args $server_case_args --out \$SERVER_OUT --run-id $run_id"
+  server_args="$benchmark_name --role server --bind-host $bind_host --port $port --clients $clients --start-delay $start_delay --start-at-epoch-ms $start_at $common_worker_args $server_case_args --out \$SERVER_OUT --run-id $run_id"
   echo >>"$server_script"
   echo "echo '==> server $run_id start_at=$start_at'" >>"$server_script"
   echo "\"\$GRADLE\" :benchmark:raknetBenchmark -PbenchmarkArgs=\"$server_args\"" >>"$server_script"
@@ -658,13 +750,15 @@ for selected_case in "${case_array[@]}"; do
       extra_receiver_args="--disappearing-clients $assigned --disappear-after $disappear_after --disappear-mode $mode"
     elif [[ "$selected_case" == resource-pack:* ]]; then
       extra_receiver_args="$server_case_args"
+    elif [[ "$selected_case" == batched:* ]]; then
+      extra_receiver_args="$server_case_args"
     fi
     if [[ -n "$affected_json" ]]; then
       affected_json="$affected_json,"
     fi
     affected_json="$affected_json{\"receiver\":\"$(json_escape "$receiver")\",\"clients\":$count,\"affected\":$assigned}"
 
-    receiver_args="receiver-worker --role client --host \$SERVER_HOST --port $port --clients $count --start-at-epoch-ms $start_at $common_worker_args $extra_receiver_args --out \$RECEIVER_OUT --run-id $receiver_run_id"
+    receiver_args="$benchmark_name --role client --host \$SERVER_HOST --port $port --clients $count --start-at-epoch-ms $start_at $common_worker_args $extra_receiver_args --out \$RECEIVER_OUT --run-id $receiver_run_id"
     echo >>"$receiver_script"
     echo "echo '==> receiver $receiver_run_id start_at=$start_at'" >>"$receiver_script"
     echo "\"\$GRADLE\" :benchmark:raknetBenchmark -PbenchmarkArgs=\"$receiver_args\"" >>"$receiver_script"
@@ -710,6 +804,10 @@ chmod +x "$server_script" "$merge_script"
   echo "- Cases: \`$(IFS=,; echo "${case_array[*]}")\`"
   echo "- Payload size: \`$payload_size\`"
   echo "- Per-client Mbps: \`$per_client_mbps\`"
+  echo "- Batch intervals: \`$batch_intervals\`"
+  echo "- Batch payload sizes: \`$batch_payload_sizes\`"
+  echo "- Logical packets per batch: \`$logical_packets_per_batch\`"
+  echo "- Batch groups: \`$batch_groups\`"
   echo "- Resource-pack chunk sizes: \`$resource_pack_chunk_sizes\`"
   echo "- Resource-pack interval: \`$resource_pack_interval\`"
   echo "- Impaired clients: \`$impaired_count\` from \`$impaired_clients\`"
