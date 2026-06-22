@@ -5,6 +5,7 @@ input_path=""
 output_root="benchmark/build/benchmark-baselines"
 baseline_name=""
 manifest_paths=()
+handoff_manifest_path=""
 extra_validation_args=()
 allow_existing=false
 update_latest=true
@@ -23,6 +24,7 @@ Options before --:
   --out DIR                Baseline package root. Default: benchmark/build/benchmark-baselines.
   --name NAME              Baseline package name. Default: <timestamp>-<git-sha>.
   --manifest PATH          Planned manifest.jsonl. May be repeated and is passed to validation.
+  --handoff-manifest PATH  Handoff manifest used to generate the lab plan; copied into the baseline package.
   --allow-existing         Allow writing into an existing baseline package directory.
   --allow-validation-bypasses Allow promotion when validation used bypass flags. Smoke only.
   --no-latest              Do not update the latest symlink.
@@ -66,6 +68,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --manifest|--curve-manifest|--contention-manifest)
       manifest_paths+=("$2")
+      shift 2
+      ;;
+    --handoff-manifest)
+      handoff_manifest_path="$2"
       shift 2
       ;;
     --allow-existing)
@@ -113,6 +119,9 @@ fi
 if [[ "$output_root" != /* ]]; then
   output_root="$repo_root/$output_root"
 fi
+if [[ -n "$handoff_manifest_path" && "$handoff_manifest_path" != /* ]]; then
+  handoff_manifest_path="$repo_root/$handoff_manifest_path"
+fi
 
 for i in "${!manifest_paths[@]}"; do
   if [[ "${manifest_paths[$i]}" != /* ]]; then
@@ -123,6 +132,22 @@ for i in "${!manifest_paths[@]}"; do
     exit 2
   fi
 done
+production_evidence_json="null"
+if [[ -n "$handoff_manifest_path" ]]; then
+  if [[ ! -s "$handoff_manifest_path" ]]; then
+    echo "handoff manifest not found or empty: $handoff_manifest_path" >&2
+    exit 2
+  fi
+  if ! jq -e '.kind == "raknet-lab-handoff"' "$handoff_manifest_path" >/dev/null; then
+    echo "handoff manifest has an unexpected kind: $handoff_manifest_path" >&2
+    exit 2
+  fi
+  if ! jq -e '(.productionEvidence.document // "") != "" and (.productionEvidence.exists == true) and ((.productionEvidence.sha256 // "") | test("^[0-9a-f]{64}$"))' "$handoff_manifest_path" >/dev/null; then
+    echo "handoff manifest does not include a concrete production evidence fingerprint: $handoff_manifest_path" >&2
+    exit 2
+  fi
+  production_evidence_json="$(jq -c '.productionEvidence' "$handoff_manifest_path")"
+fi
 
 safe_name() {
   local value="${1,,}"
@@ -204,6 +229,7 @@ rm -f \
   "$destination/bandwidth-capacity.csv" \
   "$destination/bandwidth-capacity.md" \
   "$destination/topology.md" \
+  "$destination/handoff-manifest.json" \
   "$destination/baseline-manifest.json" \
   "$destination/BASELINE.md"
 rm -rf "$destination/host-reports" "$destination/prereq-reports" "$destination/manifests"
@@ -223,6 +249,9 @@ fi
 
 if [[ -n "$topology_file" && -s "$topology_file" ]]; then
   cp "$topology_file" "$destination/topology.md"
+fi
+if [[ -n "$handoff_manifest_path" ]]; then
+  cp "$handoff_manifest_path" "$destination/handoff-manifest.json"
 fi
 
 host_report_count=0
@@ -279,6 +308,7 @@ jq -n \
   --arg suiteAggregate "$suite_aggregate" \
   --arg capacityFile "$capacity_file" \
   --arg topologyFile "$topology_file" \
+  --arg handoffManifest "$handoff_manifest_path" \
   --argjson manifests "$(printf '%s\n' "${manifest_paths[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')" \
   '{
     input: $input,
@@ -286,6 +316,7 @@ jq -n \
     suiteAggregate: $suiteAggregate,
     capacityFile: (if $capacityFile == "" then null else $capacityFile end),
     topologyFile: (if $topologyFile == "" then null else $topologyFile end),
+    handoffManifest: (if $handoffManifest == "" then null else $handoffManifest end),
     manifests: $manifests
   }' >"$source_paths_json"
 
@@ -302,6 +333,10 @@ jq -n \
   echo "- Host reports copied: \`$host_report_count\`"
   echo "- Prereq reports copied: \`$prereq_report_count\`"
   echo "- Planned manifests copied: \`$manifest_count\`"
+  if [[ "$production_evidence_json" != "null" ]]; then
+    echo "- Production evidence: \`$(jq -r '.document' <<<"$production_evidence_json")\`"
+    echo "- Production evidence SHA-256: \`$(jq -r '.sha256' <<<"$production_evidence_json")\`"
+  fi
   echo
   echo "## Scenario Counts"
   echo
@@ -347,6 +382,9 @@ jq -n \
   if [[ -s "$destination/topology.md" ]]; then
     echo "- Topology: \`topology.md\`"
   fi
+  if [[ -s "$destination/handoff-manifest.json" ]]; then
+    echo "- Handoff manifest: \`handoff-manifest.json\`"
+  fi
 } >"$destination/BASELINE.md"
 
 find "$destination" -maxdepth 2 -type f -printf '%P\n' \
@@ -362,6 +400,7 @@ jq -n \
   --arg gitRevision "$git_revision" \
   --arg destination "$destination" \
   --argjson allowValidationBypasses "$allow_validation_bypasses" \
+  --argjson productionEvidence "$production_evidence_json" \
   '{
     baselineKind: "raknet-lab-baseline",
     name: $name,
@@ -369,6 +408,7 @@ jq -n \
     gitRevision: $gitRevision,
     destination: $destination,
     allowValidationBypasses: $allowValidationBypasses,
+    productionEvidence: $productionEvidence,
     validation: $validation[0],
     sourcePaths: $sourcePaths[0],
     promotedFiles: $promotedFiles[0]

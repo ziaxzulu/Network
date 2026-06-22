@@ -462,6 +462,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("--required-min-contention-target-client-mbps \"1\""));
         Assertions.assertTrue(readme.contains("Production evidence document: `benchmark/docs/production-usage-evidence.md`"));
         Assertions.assertTrue(readme.contains("Production evidence SHA-256: `"));
+        Assertions.assertTrue(readme.contains("--handoff-manifest \"" + handoff.resolve("handoff-manifest.json") + "\""));
 
         JsonNode handoffManifest = JSON.readTree(Files.readString(handoff.resolve("handoff-manifest.json"),
                 StandardCharsets.UTF_8));
@@ -921,6 +922,8 @@ public class BenchmarkKitTests {
         assumeShellTooling();
         Path root = repoRoot();
         Path output = Files.createTempDirectory("raknet-lab-promotion-bypass-test");
+        Path handoffManifest = output.resolve("handoff-manifest.json");
+        writeHandoffManifest(handoffManifest);
 
         Path strictLab = output.resolve("strict-lab");
         writeValidationLabArtifacts(strictLab, 2, 2);
@@ -930,12 +933,23 @@ public class BenchmarkKitTests {
                 "--input", strictLab.toString(),
                 "--out", output.resolve("baselines").toString(),
                 "--name", "strict",
+                "--handoff-manifest", handoffManifest.toString(),
                 "--no-latest"
         );
         Assertions.assertEquals(0, strictPromotion.exitCode, strictPromotion.output);
         JsonNode strictManifest = JSON.readTree(Files.readString(
                 output.resolve("baselines/strict/baseline-manifest.json"), StandardCharsets.UTF_8));
         Assertions.assertFalse(strictManifest.path("allowValidationBypasses").asBoolean());
+        Assertions.assertEquals("benchmark/docs/production-usage-evidence.md",
+                strictManifest.path("productionEvidence").path("document").asText());
+        Assertions.assertTrue(strictManifest.path("productionEvidence").path("sha256").asText()
+                .matches("[0-9a-f]{64}"));
+        Assertions.assertEquals(handoffManifest.toString(),
+                strictManifest.path("sourcePaths").path("handoffManifest").asText());
+        Assertions.assertTrue(Files.exists(output.resolve("baselines/strict/handoff-manifest.json")));
+        String strictReport = Files.readString(output.resolve("baselines/strict/BASELINE.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(strictReport.contains("Production evidence: `benchmark/docs/production-usage-evidence.md`"));
+        Assertions.assertTrue(strictReport.contains("Handoff manifest: `handoff-manifest.json`"));
 
         Path looseLab = output.resolve("loose-lab");
         writeValidationLabArtifacts(looseLab, 2, 2, false);
@@ -1496,6 +1510,36 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresProductionEvidenceFingerprint() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-production-evidence-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        Files.writeString(labBaseline.resolve("baseline-manifest.json"),
+                "{\"baselineKind\":\"raknet-lab-baseline\"}\n",
+                StandardCharsets.UTF_8);
+
+        ProcessResult missingEvidence = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missingEvidence.exitCode, missingEvidence.output);
+        JsonNode missingEvidenceJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingEvidenceJson.path("ready").asBoolean());
+        Assertions.assertTrue(missingEvidenceJson.findValuesAsText("code")
+                .contains("lab-missing-production-evidence"));
+    }
+
+    @Test
     public void testBaselineReadinessRequiresPrereqReports() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1685,6 +1729,20 @@ public class BenchmarkKitTests {
         writeReadinessLabBaseline(labBaseline, 500, 5.0D, payloadSizes);
     }
 
+    private static String productionEvidenceJson() {
+        return "{\"document\":\"benchmark/docs/production-usage-evidence.md\","
+                + "\"exists\":true,"
+                + "\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}";
+    }
+
+    private static void writeHandoffManifest(Path handoffManifest) throws Exception {
+        Files.createDirectories(handoffManifest.getParent());
+        Files.writeString(handoffManifest,
+                "{\"kind\":\"raknet-lab-handoff\",\"productionEvidence\":"
+                        + productionEvidenceJson() + "}\n",
+                StandardCharsets.UTF_8);
+    }
+
     private static void writeReadinessLabBaseline(Path labBaseline,
                                                   int minContentionClients,
                                                   double minContentionTargetClientMbps,
@@ -1702,7 +1760,8 @@ public class BenchmarkKitTests {
                                                               int... payloadSizes) throws Exception {
         Files.createDirectories(labBaseline);
         Files.writeString(labBaseline.resolve("baseline-manifest.json"),
-                "{\"baselineKind\":\"raknet-lab-baseline\"}\n",
+                "{\"baselineKind\":\"raknet-lab-baseline\",\"productionEvidence\":"
+                        + productionEvidenceJson() + "}\n",
                 StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("validation.json"),
                 "{\"passed\":true,\"distinctHostnameCount\":2,\"hostReportCount\":2,\"rowCount\":"

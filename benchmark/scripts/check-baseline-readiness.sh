@@ -206,6 +206,9 @@ if [[ -s "$lab_manifest" ]]; then
   if jq -e '.allowValidationBypasses == true' "$lab_manifest" >/dev/null; then
     append_issue "lab-validation-bypasses-allowed" "lab-baseline" "promoted lab baseline allowed validation bypasses" "{\"path\":\"$lab_manifest\"}"
   fi
+  if ! jq -e '(.productionEvidence.document // "") != "" and (.productionEvidence.exists == true) and ((.productionEvidence.sha256 // "") | test("^[0-9a-f]{64}$"))' "$lab_manifest" >/dev/null; then
+    append_issue "lab-missing-production-evidence" "lab-baseline" "promoted lab baseline does not include a concrete production evidence fingerprint" "{\"path\":\"$lab_manifest\"}"
+  fi
 fi
 
 if [[ -s "$lab_validation" ]]; then

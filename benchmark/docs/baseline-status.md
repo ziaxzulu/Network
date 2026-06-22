@@ -157,6 +157,7 @@ Promote only after validation passes:
 ```bash
 benchmark/scripts/promote-lab-baseline.sh \
   --input benchmark/build/benchmark-results/lab-baseline-current/combined \
+  --handoff-manifest benchmark/build/benchmark-results/lab-handoff-current/handoff-manifest.json \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan-current/curve-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan-current/curve-raised-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan-current/contention-plan/manifest.jsonl \

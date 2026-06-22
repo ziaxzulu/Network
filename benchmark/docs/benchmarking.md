@@ -135,6 +135,7 @@ After validation passes, promote the lab run into a compact baseline package:
 ```bash
 benchmark/scripts/promote-lab-baseline.sh \
   --input benchmark/build/benchmark-results/lab-baseline \
+  --handoff-manifest benchmark/build/benchmark-results/lab-handoff-<date>-<topology>/handoff-manifest.json \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-raised-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/contention-plan/manifest.jsonl \

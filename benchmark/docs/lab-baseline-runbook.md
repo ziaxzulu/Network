@@ -366,6 +366,7 @@ After validation passes, package the baseline of record. Promotion refuses valid
 ```bash
 benchmark/scripts/promote-lab-baseline.sh \
   --input benchmark/build/benchmark-results/lab-baseline \
+  --handoff-manifest benchmark/build/benchmark-results/lab-handoff-<date>-<topology>/handoff-manifest.json \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/curve-raised-plan/manifest.jsonl \
   --manifest benchmark/build/benchmark-results/lab-baseline-plan/contention-plan/manifest.jsonl \
@@ -380,7 +381,7 @@ benchmark/scripts/promote-lab-baseline.sh \
   --min-contention-target-client-mbps 5
 ```
 
-The promoted baseline directory contains the comparable `suite-aggregate.jsonl`, validation reports, capacity selector artifacts, copied host/topology evidence, copied planning manifests, and a `baseline-manifest.json` with source paths and validation metadata. Use that promoted directory, or the `benchmark/build/benchmark-baselines/latest` symlink, as the `--baseline` input for future candidate comparisons, and pass `--require-validation` so unvalidated candidates fail comparison.
+The promoted baseline directory contains the comparable `suite-aggregate.jsonl`, validation reports, capacity selector artifacts, copied host/topology evidence, copied planning manifests, the copied handoff manifest, and a `baseline-manifest.json` with source paths, validation metadata, and the production-evidence fingerprint. Use that promoted directory, or the `benchmark/build/benchmark-baselines/latest` symlink, as the `--baseline` input for future candidate comparisons, and pass `--require-validation` so unvalidated candidates fail comparison.
 
 After both the perfect-network baseline and adverse-network impairment campaign have been promoted, run the readiness check:
 

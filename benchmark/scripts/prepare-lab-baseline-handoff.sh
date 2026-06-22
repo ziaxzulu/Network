@@ -675,6 +675,7 @@ checks shortly before execution, then follow each generated plan README.
 \`\`\`bash
 benchmark/scripts/promote-lab-baseline.sh \\
   --input "$perfect_artifacts/combined" \\
+  --handoff-manifest "$handoff_manifest" \\
   --manifest "$perfect_plan/curve-plan/manifest.jsonl" \\
   --manifest "$perfect_plan/curve-raised-plan/manifest.jsonl" \\
   --manifest "$perfect_plan/contention-plan/manifest.jsonl" \\
