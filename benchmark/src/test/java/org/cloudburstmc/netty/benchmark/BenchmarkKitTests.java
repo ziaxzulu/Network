@@ -841,6 +841,62 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testProductionSourceAuditCapturesRevisionsWithoutPrivatePaths() throws Exception {
+        assumeShellTooling();
+        assumeGit();
+
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-source-audit-test");
+        Path geyser = initGitRepo(output.resolve("geyser"));
+        Path cubecraft = initGitRepo(output.resolve("cubecraft"));
+        Path audit = output.resolve("audit");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/capture-production-evidence.sh").toString(),
+                "--out", audit.toString(),
+                "--geyser", geyser.toString(),
+                "--cubecraft", cubecraft.toString(),
+                "--require-sources", "geyser,cubecraft"
+        );
+        Assertions.assertEquals(0, result.exitCode, result.output);
+
+        String auditJsonText = Files.readString(audit.resolve("source-audit.json"), StandardCharsets.UTF_8);
+        JsonNode auditJson = JSON.readTree(auditJsonText);
+        Assertions.assertEquals("raknet-production-source-audit", auditJson.path("kind").asText());
+        Assertions.assertTrue(auditJson.path("ready").asBoolean());
+        Assertions.assertFalse(auditJson.path("includePaths").asBoolean());
+        Assertions.assertTrue(auditJson.has("networkDirtyTrackedFiles"));
+        Assertions.assertEquals(0, auditJson.path("issueCount").asInt());
+        Assertions.assertEquals("benchmark/docs/production-usage-evidence.md",
+                auditJson.path("evidenceDocument").path("document").asText());
+        Assertions.assertTrue(auditJson.path("evidenceDocument").path("sha256").asText()
+                .matches("[0-9a-f]{64}"));
+        Assertions.assertFalse(auditJsonText.contains(cubecraft.toString()),
+                "private checkout paths should be omitted unless --include-paths is used");
+        JsonNode cubecraftSource = findSource(auditJson, "cubecraft");
+        Assertions.assertEquals("private", cubecraftSource.path("visibility").asText());
+        Assertions.assertTrue(cubecraftSource.path("available").asBoolean());
+        Assertions.assertTrue(cubecraftSource.path("shortRevision").asText().matches("[0-9a-f]{12}"));
+        Assertions.assertTrue(cubecraftSource.path("path").isNull());
+
+        Path missingAudit = output.resolve("missing-audit");
+        ProcessResult missingResult = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/capture-production-evidence.sh").toString(),
+                "--out", missingAudit.toString(),
+                "--cloudburst-protocol", output.resolve("missing-protocol").toString(),
+                "--require-sources", "cloudburst-protocol"
+        );
+        Assertions.assertEquals(1, missingResult.exitCode, missingResult.output);
+        JsonNode missingAuditJson = JSON.readTree(Files.readString(missingAudit.resolve("source-audit.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingAuditJson.path("ready").asBoolean());
+        Assertions.assertTrue(missingAuditJson.findValuesAsText("code")
+                .contains("required-source-unavailable"));
+    }
+
+    @Test
     public void testLabHostPrereqCheckProducesReports() throws Exception {
         assumeShellTooling();
         Assumptions.assumeTrue(commandAvailable("ip"), "ip is required for host prereq script tests");
@@ -3007,6 +3063,27 @@ public class BenchmarkKitTests {
         return rows;
     }
 
+    private static JsonNode findSource(JsonNode auditJson, String sourceId) {
+        for (JsonNode source : auditJson.path("sources")) {
+            if (sourceId.equals(source.path("id").asText())) {
+                return source;
+            }
+        }
+        throw new AssertionError("Missing source audit row for " + sourceId + ": " + auditJson);
+    }
+
+    private static Path initGitRepo(Path path) throws Exception {
+        Files.createDirectories(path);
+        runProcess(path, Duration.ofSeconds(10), "git", "init");
+        runProcess(path, Duration.ofSeconds(10), "git", "config", "user.email", "benchmark@example.invalid");
+        runProcess(path, Duration.ofSeconds(10), "git", "config", "user.name", "Benchmark Test");
+        Files.writeString(path.resolve("README.md"), "benchmark source fixture\n", StandardCharsets.UTF_8);
+        runProcess(path, Duration.ofSeconds(10), "git", "add", "README.md");
+        ProcessResult commit = runProcess(path, Duration.ofSeconds(10), "git", "commit", "-m", "initial");
+        Assertions.assertEquals(0, commit.exitCode, commit.output);
+        return path;
+    }
+
     private static String mockGradleScript() {
         return """
                 #!/usr/bin/env bash
@@ -3112,6 +3189,10 @@ public class BenchmarkKitTests {
     private static void assumeShellTooling() throws Exception {
         Assumptions.assumeTrue(commandAvailable("bash"), "bash is required for benchmark script tests");
         Assumptions.assumeTrue(commandAvailable("jq"), "jq is required for benchmark script tests");
+    }
+
+    private static void assumeGit() throws Exception {
+        Assumptions.assumeTrue(commandAvailable("git"), "git is required for source audit script tests");
     }
 
     private static boolean commandAvailable(String command) throws Exception {

@@ -6,6 +6,16 @@ Public source links are included where available. A private CubeCraft checkout w
 
 Evidence was refreshed on 2026-06-22 against shallow public checkouts at Geyser `0d65b201f26c1ecdf676df26463081119a55d291`, Cloudburst Protocol `f8295d3258fcb4e5c707d852dac981e964b336aa`, and Cloudburst Nukkit `dbbb7ca6fe7e097ba25a451f9a280a9f7b251471`. The local private CubeCraft checkout was also accessible and rechecked for the same transport-shape assumptions, but it remains private evidence rather than a public source citation.
 
+To refresh the local source availability and revision audit before preparing a lab handoff, run:
+
+```bash
+benchmark/scripts/capture-production-evidence.sh \
+  --out benchmark/build/benchmark-results/production-evidence-current \
+  --require-sources geyser,cloudburst-protocol,cloudburst-nukkit,cubecraft
+```
+
+Use `GEYSER_REPO`, `CLOUDBURST_PROTOCOL_REPO`, `CLOUDBURST_NUKKIT_REPO`, and `CUBECRAFT_REPO` when the checkouts are not in the usual local worktree locations. The audit writes `source-audit.json` and `source-audit.md`; private checkout paths are omitted unless `--include-paths` is passed for a local-only handoff artifact.
+
 ## Summary
 
 The benchmark is a good transport-level synthetic for established RakNet behavior when it is used for:

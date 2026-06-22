@@ -19,6 +19,20 @@ benchmark/build/benchmark-results/lab-<date>-<topology>/
 
 Record the exact branch, commit, host names, NICs, CPU pinning, JVM, impairment profile, and any non-default kernel/NIC tuning in `topology.md`.
 
+Before generating the handoff, capture the source-evidence revision state that
+backs the synthetic matrix:
+
+```bash
+benchmark/scripts/capture-production-evidence.sh \
+  --out benchmark/build/benchmark-results/lab-<date>-<topology>/production-evidence \
+  --require-sources geyser,cloudburst-protocol,cloudburst-nukkit,cubecraft
+```
+
+Set `GEYSER_REPO`, `CLOUDBURST_PROTOCOL_REPO`, `CLOUDBURST_NUKKIT_REPO`, or
+`CUBECRAFT_REPO` if those checkouts are not in the usual local worktree
+locations. Keep `source-audit.json` and `source-audit.md` beside the lab
+handoff; private checkout paths are omitted by default.
+
 ## VM Harness Relationship
 
 The TeamZiax Bedrock eBPF filter repository has a useful VM benchmark pattern for root-free test orchestration: host-side QEMU lifecycle management, guest setup, shared capture/output directories, and repeatable artifact collection. That orchestration shape is reusable for future isolated Network lab runs.
