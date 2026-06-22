@@ -552,6 +552,9 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(readme.contains("--handoff-manifest \"" + handoff.resolve("handoff-manifest.json") + "\""));
 
         String promoteScriptContent = Files.readString(promoteScript, StandardCharsets.UTF_8);
+        Assertions.assertTrue(promoteScriptContent.contains("check-lab-handoff.sh"));
+        Assertions.assertTrue(promoteScriptContent.contains("--handoff \"" + handoff + "\""));
+        Assertions.assertTrue(promoteScriptContent.contains("--out \"$PREFLIGHT_OUT\" --require-source-audit"));
         Assertions.assertTrue(promoteScriptContent.contains("promote-lab-baseline.sh"));
         Assertions.assertTrue(promoteScriptContent.contains("--handoff-manifest \"" + handoff.resolve("handoff-manifest.json") + "\""));
         Assertions.assertTrue(promoteScriptContent.contains("--manifest \"" + handoff.resolve("perfect-plan/curve-plan/manifest.jsonl") + "\""));

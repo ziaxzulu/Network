@@ -383,7 +383,7 @@ The lab planner's generated `merge-all.sh` runs the same validation automaticall
 
 The top-level handoff manifest and every generated curve/contention manifest row record the planned reliability mode. `check-lab-handoff.sh` treats missing or mismatched reliability as a preflight failure so `RELIABLE_ORDERED`, `RELIABLE`, and `UNRELIABLE` campaigns cannot be compared as the same matrix shape by accident.
 
-After validation passes, package the baseline of record. The generated handoff includes `promote-and-check.sh`, which runs perfect-network promotion, impairment promotion, and the final readiness check with the exact handoff manifests and artifact roots. Prefer that helper after `perfect-plan/merge-all.sh`, `impairment-plan/validate-all.sh`, and `impairment-plan/summarize-campaign.sh` have completed. Set `BASELINE_ROOT`, `PERFECT_BASELINE_NAME`, `IMPAIRMENT_BASELINE_NAME`, or `READINESS_OUT` only when the lab needs explicit package names.
+After validation passes, package the baseline of record. The generated handoff includes `promote-and-check.sh`, which reruns handoff preflight, runs perfect-network promotion, runs impairment promotion, and then runs the final readiness check with the exact handoff manifests and artifact roots. Prefer that helper after `perfect-plan/merge-all.sh`, `impairment-plan/validate-all.sh`, and `impairment-plan/summarize-campaign.sh` have completed. Set `BASELINE_ROOT`, `PERFECT_BASELINE_NAME`, `IMPAIRMENT_BASELINE_NAME`, `READINESS_OUT`, or `PREFLIGHT_OUT` only when the lab needs explicit package names.
 
 The equivalent manual perfect-network promotion command is below. Promotion refuses validation bypass flags by default; `--allow-validation-bypasses` is only for non-baseline smoke packages:
 

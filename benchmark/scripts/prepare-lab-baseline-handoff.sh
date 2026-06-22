@@ -738,6 +738,11 @@ BASELINE_ROOT="\${BASELINE_ROOT:-benchmark/build/benchmark-baselines}"
 PERFECT_BASELINE_NAME="\${PERFECT_BASELINE_NAME:-lab-$timestamp}"
 IMPAIRMENT_BASELINE_NAME="\${IMPAIRMENT_BASELINE_NAME:-lab-impairment-$timestamp}"
 READINESS_OUT="\${READINESS_OUT:-benchmark/build/benchmark-results/baseline-readiness-$timestamp}"
+PREFLIGHT_OUT="\${PREFLIGHT_OUT:-$output_root/pre-promotion-preflight}"
+
+benchmark/scripts/check-lab-handoff.sh \\
+  --handoff "$output_root" \\
+  --out "\$PREFLIGHT_OUT"$preflight_flags
 
 benchmark/scripts/promote-lab-baseline.sh \\
   --input "$perfect_artifacts/combined" \\
