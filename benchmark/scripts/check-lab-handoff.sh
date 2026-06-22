@@ -86,7 +86,10 @@ append_issue() {
   local code="$1"
   local component="$2"
   local message="$3"
-  local extra="${4:-{}}"
+  local extra="${4-}"
+  if [[ -z "$extra" ]]; then
+    extra="{}"
+  fi
   jq -n \
     --arg code "$code" \
     --arg component "$component" \
@@ -131,6 +134,23 @@ curve_payloads_json="$(jq -c '.curvePayloadSizes // []' "$manifest")"
 curve_rates_json="$(jq -c '.curveRatesMbps // []' "$manifest")"
 profiles_json="$(jq -c '.profiles // []' "$manifest")"
 expected_curve_rows="$(jq -r '((.curvePayloadSizes // []) | length) * ((.curveRatesMbps // []) | length)' "$manifest")"
+expected_contention_clients="$(jq -r '
+  def receiver_clients($spec):
+    if ($spec | contains("=")) then ($spec | split("=")[-1] | tonumber)
+    elif ($spec | contains(":")) then ($spec | split(":")[-1] | tonumber)
+    else 0
+    end;
+  .contentionClientTotal // (((.contentionReceivers // []) | map(receiver_clients(.))) | add // 0)
+' "$manifest")"
+computed_contention_clients="$(jq -r '
+  def receiver_clients($spec):
+    if ($spec | contains("=")) then ($spec | split("=")[-1] | tonumber)
+    elif ($spec | contains(":")) then ($spec | split(":")[-1] | tonumber)
+    else 0
+    end;
+  ((.contentionReceivers // []) | map(receiver_clients(.))) | add // 0
+' "$manifest")"
+expected_per_client_mbps="$(jq -r '.perClientMbps // 0' "$manifest")"
 expected_contention_scenarios_json="$(jq -c '
   def scenario($value):
     ($value | ascii_downcase) as $case
@@ -141,6 +161,11 @@ expected_contention_scenarios_json="$(jq -c '
       end;
   [(.contentionCases // [])[] | scenario(.)] | unique
 ' "$manifest")"
+
+if [[ "$expected_contention_clients" != "$computed_contention_clients" ]]; then
+  append_issue "handoff-contention-client-total-mismatch" "handoff" "handoff contentionClientTotal does not match contention receiver distribution" \
+    "$(jq -n --argjson expected "$computed_contention_clients" --argjson actual "$expected_contention_clients" '{expectedFromReceivers:$expected,actualContentionClientTotal:$actual}')"
+fi
 
 check_path "$handoff_root/README.md" "handoff"
 check_path "$perfect_plan/check-plan-freshness.sh" "perfect-plan" true
@@ -214,6 +239,30 @@ check_contention_manifest() {
     append_issue "contention-missing-scenario" "$label" "contention manifest is missing a required scenario" \
       "$(jq -n --arg path "$path" --arg scenario "$scenario" '{path:$path,scenario:$scenario}')"
   done <<<"$missing_scenarios"
+
+  local client_mismatches
+  client_mismatches="$(jq -r -s --argjson expected "$expected_contention_clients" '
+    .[]
+    | select(((.clients // -1) | tonumber) != $expected)
+    | [(.case // ""), (.benchmarkName // ""), ((.clients // -1) | tostring)] | @tsv
+  ' "$path")"
+  while IFS=$'\t' read -r case_name benchmark_name actual_clients; do
+    [[ -z "$case_name" && -z "$benchmark_name" ]] && continue
+    append_issue "contention-client-count-mismatch" "$label" "contention manifest row client count does not match the handoff receiver total" \
+      "$(jq -n --arg path "$path" --arg case "$case_name" --arg benchmarkName "$benchmark_name" --argjson expected "$expected_contention_clients" --argjson actual "${actual_clients:-0}" '{path:$path,case:$case,benchmarkName:$benchmarkName,expectedClients:$expected,actualClients:$actual}')"
+  done <<<"$client_mismatches"
+
+  local rate_mismatches
+  rate_mismatches="$(jq -r -s --argjson expected "$expected_per_client_mbps" '
+    .[]
+    | select(((((.perClientMbps // -1) | tonumber) - $expected) | fabs) > 0.000001)
+    | [(.case // ""), (.benchmarkName // ""), ((.perClientMbps // -1) | tostring)] | @tsv
+  ' "$path")"
+  while IFS=$'\t' read -r case_name benchmark_name actual_per_client_mbps; do
+    [[ -z "$case_name" && -z "$benchmark_name" ]] && continue
+    append_issue "contention-per-client-mbps-mismatch" "$label" "contention manifest row per-client Mbps does not match the handoff target" \
+      "$(jq -n --arg path "$path" --arg case "$case_name" --arg benchmarkName "$benchmark_name" --argjson expected "$expected_per_client_mbps" --argjson actual "${actual_per_client_mbps:-0}" '{path:$path,case:$case,benchmarkName:$benchmarkName,expectedPerClientMbps:$expected,actualPerClientMbps:$actual}')"
+  done <<<"$rate_mismatches"
 }
 
 check_curve_manifest "perfect-curve" "$perfect_plan/curve-plan/manifest.jsonl"
@@ -256,6 +305,8 @@ jq -n \
   --argjson expectedCurveRatesMbps "$curve_rates_json" \
   --argjson expectedProfiles "$profiles_json" \
   --argjson expectedContentionScenarios "$expected_contention_scenarios_json" \
+  --argjson expectedContentionClients "$expected_contention_clients" \
+  --argjson expectedPerClientMbps "$expected_per_client_mbps" \
   --argjson expectedCurveRows "$expected_curve_rows" \
   --argjson issues "$issues_array" \
   '{
@@ -269,6 +320,8 @@ jq -n \
     expectedCurveRowsPerCurvePlan: $expectedCurveRows,
     expectedProfiles: $expectedProfiles,
     expectedContentionScenarios: $expectedContentionScenarios,
+    expectedContentionClients: $expectedContentionClients,
+    expectedPerClientMbps: $expectedPerClientMbps,
     issues: $issues
   }' >"$check_json"
 
@@ -280,6 +333,8 @@ jq -n \
   echo "- Issues: \`$(jq -r '.issueCount' "$check_json")\`"
   echo "- Handoff: \`$handoff_root\`"
   echo "- Expected curve rows per curve plan: \`$(jq -r '.expectedCurveRowsPerCurvePlan' "$check_json")\`"
+  echo "- Expected contention clients: \`$(jq -r '.expectedContentionClients' "$check_json")\`"
+  echo "- Expected per-client Mbps: \`$(jq -r '.expectedPerClientMbps' "$check_json")\`"
   echo
   echo "## Issues"
   echo

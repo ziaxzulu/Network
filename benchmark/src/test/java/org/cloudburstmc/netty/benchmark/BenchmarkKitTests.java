@@ -393,6 +393,26 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, handoffCheckJson.path("issueCount").asInt());
         Assertions.assertEquals(56, handoffCheckJson.path("expectedCurveRowsPerCurvePlan").asInt());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedProfiles").size());
+        Assertions.assertEquals(2, handoffCheckJson.path("expectedContentionClients").asInt());
+        Assertions.assertEquals(1.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
+
+        Path contentionManifest = handoff.resolve("perfect-plan/contention-plan/manifest.jsonl");
+        Files.writeString(contentionManifest,
+                Files.readString(contentionManifest, StandardCharsets.UTF_8)
+                        .replaceFirst("\"clients\":2", "\"clients\":1"),
+                StandardCharsets.UTF_8);
+        ProcessResult tamperedHandoffCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-tampered").toString()
+        );
+        Assertions.assertEquals(1, tamperedHandoffCheck.exitCode, tamperedHandoffCheck.output);
+        JsonNode tamperedHandoffCheckJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(tamperedHandoffCheckJson.findValuesAsText("code")
+                .contains("contention-client-count-mismatch"));
 
         ProcessResult freshness = runProcess(root, Duration.ofSeconds(10),
                 "bash",
