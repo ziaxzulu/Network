@@ -62,24 +62,24 @@ The smoke capacity selector did not choose a stable point, which is expected for
 Latest local pilot artifact in this worktree:
 
 ```text
-benchmark/build/benchmark-results/current-pilot-20260622T065503Z/
+benchmark/build/benchmark-results/current-local-pilot-post-impairment-cleanup-20260622T110109Z/
 ```
 
-This run completed the representative pilot profile and produced parseable suite, aggregate, and capacity-selector artifacts. It is current-branch loopback evidence that the benchmark shape executes and emits the retry-pressure fields, but it is still not a baseline-of-record result. Eight of the nine aggregate rows were unstable under the default stability policy, mostly because the short loopback run had p99 probe-latency spread. The immediate small-packet fanout row was stable locally:
+This run completed the representative pilot profile after the benchmark-managed impairment cleanup in git revision `4d1c961cc7cd`. It produced parseable suite, aggregate, and capacity-selector artifacts and the saved runner log did not contain `LEAK:` or `ResourceLeakDetector` lines. It is current-branch loopback evidence that the benchmark shape executes and emits the retry-pressure fields, but it is still not a baseline-of-record result. Seven of the nine aggregate rows were unstable under the default stability policy, mostly because the short loopback run had p99 probe-latency spread. The selected local capacity row and immediate small-packet fanout row were stable locally:
 
 | Case | Delivered Gbps | Client p50 Mbps | p99 RTT ms | Max queue bytes | Affected undelivered Gbps | Affected datagram out/s | Retry signal | Unstable reason |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| `pilot-curve-1c-mtu` / `curve-50_0mbps` | `0.04997952` | `49.97952` | `9.072826` | `84000` | `0` | `0` | none | `p99-spread` |
-| `pilot-curve-1c-mtu` / `curve-100_0mbps` | `0.0999744` | `99.9744` | `10.558146` | `154800` | `0` | `0` | none | `p99-spread` |
-| `pilot-curve-1c-mtu` / `curve-250_0mbps` | `0.24944064` | `249.44064` | `41.686878` | `394800` | `0` | `0` | none | `p99-spread` |
-| `pilot-fanout-100x5` | `0.499666944` | `4.99712` | `52.030321` | `272947` | `0` | `0` | none | `throughput-spread`, `p99-spread` |
-| `pilot-immediate-100x1-p256` | `0.0999440384` | `0.999424` | `10.08904` | `1809` | `0` | `0` | none | none |
-| `pilot-fairness-100-10poor` | `0.449673216` | `4.995754666666667` | `44.808422` | `4215296` | `0.003749692` | `583.8333333333334` | `5.5` NACK out/s | `p99-spread` |
-| `pilot-disappear-100-blackhole` | `0.46633710933333333` | `4.99712` | `107.738895` | `2906280` | `0.039410752` | `6720.833333333333` | `4822.166666666667` stale datagrams/s | `p99-spread` |
-| `pilot-batch-100-20ms` | `0.51136` | `5.1008` | `61.464953` | `308994` | `0` | `0` | `5.6` stale datagrams/s, `0.2` NACK out/s | `p99-spread` |
-| `pilot-resource-100-8k-200ms` | `0.032768` | `0.32768` | `11.093554` | `8209` | `0` | `0` | none | `p99-spread` |
+| `pilot-curve-1c-mtu` / `curve-50_0mbps` | `0.04997952` | `49.97952` | `9.273926` | `70800` | `0` | `0` | none | `p99-spread` |
+| `pilot-curve-1c-mtu` / `curve-100_0mbps` | `0.09996864` | `99.96864` | `10.201239` | `158400` | `0` | `0` | none | none |
+| `pilot-curve-1c-mtu` / `curve-250_0mbps` | `0.24945216` | `249.45216` | `21.656095` | `433200` | `0` | `0` | none | `p99-spread` |
+| `pilot-fanout-100x5` | `0.499666944` | `4.99712` | `63.911171` | `1335825` | `0` | `0` | none | `throughput-spread`, `p99-spread` |
+| `pilot-immediate-100x1-p256` | `0.0999374848` | `0.999424` | `10.088538` | `1792` | `0` | `0` | none | none |
+| `pilot-fairness-100-10poor` | `0.449705984` | `4.996437333333333` | `27.805779` | `4227072` | `0.003963556` | `618` | `22.833333333333332` stale datagrams/s, `5.833333333333333` NACK out/s | `throughput-spread`, `p99-spread` |
+| `pilot-disappear-100-blackhole` | `0.4655356586666667` | `4.989610666666667` | `176.084499` | `2491031` | `0.03108224533333333` | `5745.5` | `3609.1666666666665` stale datagrams/s | `p99-spread` |
+| `pilot-batch-100-20ms` | `0.51136` | `5.1008` | `37.022604` | `306133` | `0` | `0` | `4` stale datagrams/s, `3` NACK out/s | `p99-spread` |
+| `pilot-resource-100-8k-200ms` | `0.032768` | `0.32768` | `10.836547` | `8209` | `0` | `0` | none | `p99-spread` |
 
-The capacity selector did not choose a stable point for the local pilot. The best observed curve row was `curve-250_0mbps` at `0.249441Gbps`, rejected because unstable rows are not allowed. This is useful as a current developer regression fixture and artifact-shape proof, but capacity selection still requires a stable local curve or, preferably, separate-host lab evidence.
+The capacity selector chose `curve-100_0mbps` at `0.09996864Gbps` as the stable local pilot capacity point. The best observed curve row was `curve-250_0mbps` at `0.24945216Gbps`, rejected because unstable rows are not allowed. This is useful as a current developer regression fixture and artifact-shape proof, but capacity selection for the baseline of record still requires separate-host lab evidence.
 
 Latest local best-case curve artifact in this worktree:
 
