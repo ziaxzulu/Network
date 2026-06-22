@@ -625,6 +625,8 @@ public class BenchmarkKitTests {
                 handoffCheckJson.path("productionEvidence").path("document").asText());
         Assertions.assertTrue(handoffCheckJson.path("productionEvidence").path("sha256").asText()
                 .matches("[0-9a-f]{64}"));
+        Assertions.assertEquals(handoffCheckJson.path("productionEvidence").path("sha256").asText(),
+                handoffCheckJson.path("productionEvidenceActualSha256").asText());
         Assertions.assertEquals(2, handoffCheckJson.path("actualImpairmentProfileRows").size());
         for (JsonNode profileRows : handoffCheckJson.path("actualImpairmentProfileRows")) {
             Assertions.assertEquals(56, profileRows.path("curveRows").asInt());
@@ -660,6 +662,29 @@ public class BenchmarkKitTests {
 
         Path handoffManifestPath = handoff.resolve("handoff-manifest.json");
         String originalHandoffManifest = Files.readString(handoffManifestPath, StandardCharsets.UTF_8);
+        JsonNode manifestWithStaleEvidence = JSON.readTree(originalHandoffManifest);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) manifestWithStaleEvidence.path("productionEvidence"))
+                .put("sha256", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        Files.writeString(handoffManifestPath, JSON.writeValueAsString(manifestWithStaleEvidence),
+                StandardCharsets.UTF_8);
+        ProcessResult staleEvidenceCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-evidence-stale").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
+        );
+        Assertions.assertEquals(1, staleEvidenceCheck.exitCode, staleEvidenceCheck.output);
+        JsonNode staleEvidenceCheckJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-evidence-stale/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(staleEvidenceCheckJson.findValuesAsText("code")
+                .contains("handoff-production-evidence-sha-mismatch"));
+        Assertions.assertTrue(staleEvidenceCheckJson.path("productionEvidenceActualSha256").asText()
+                .matches("[0-9a-f]{64}"));
+        Files.writeString(handoffManifestPath, originalHandoffManifest, StandardCharsets.UTF_8);
+
         JsonNode manifestWithoutEvidence = JSON.readTree(originalHandoffManifest);
         ((com.fasterxml.jackson.databind.node.ObjectNode) manifestWithoutEvidence).remove("productionEvidence");
         Files.writeString(handoffManifestPath, JSON.writeValueAsString(manifestWithoutEvidence), StandardCharsets.UTF_8);

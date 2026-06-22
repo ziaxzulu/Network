@@ -112,6 +112,17 @@ resolve_path() {
   fi
 }
 
+sha256_file() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
 duration_millis() {
   local value="${1,,}"
   if [[ "$value" =~ ^([0-9]+)ms$ ]]; then
@@ -273,6 +284,8 @@ expected_per_client_mbps="$(jq -r '.perClientMbps // 0' "$manifest")"
 production_evidence_json="$(jq -c '.productionEvidence // null' "$manifest")"
 production_evidence_doc="$(jq -r '.productionEvidence.document // ""' "$manifest")"
 production_evidence_sha256="$(jq -r '.productionEvidence.sha256 // ""' "$manifest")"
+production_evidence_path=""
+production_evidence_actual_sha256=""
 expected_contention_scenarios_json="$(jq -c '
   def scenario($value):
     ($value | ascii_downcase) as $case
@@ -312,6 +325,19 @@ fi
 if ! jq -e '(.productionEvidence.document // "") != "" and (.productionEvidence.exists == true) and ((.productionEvidence.sha256 // "") | test("^[0-9a-f]{64}$"))' "$manifest" >/dev/null; then
   append_issue "handoff-missing-production-evidence" "handoff" "handoff manifest does not include a concrete production evidence document fingerprint" \
     "$(jq -n --arg path "$manifest" '{path:$path}')"
+fi
+if [[ -n "$production_evidence_doc" ]]; then
+  production_evidence_path="$(resolve_path "$production_evidence_doc")"
+  if [[ ! -f "$production_evidence_path" ]]; then
+    append_issue "handoff-production-evidence-document-missing" "handoff" "production evidence document referenced by the handoff manifest is missing" \
+      "$(jq -n --arg document "$production_evidence_doc" --arg path "$production_evidence_path" '{document:$document,path:$path}')"
+  elif ! production_evidence_actual_sha256="$(sha256_file "$production_evidence_path")"; then
+    append_issue "handoff-production-evidence-sha-unavailable" "handoff" "could not compute production evidence SHA-256 on this host" \
+      "$(jq -n --arg document "$production_evidence_doc" --arg path "$production_evidence_path" '{document:$document,path:$path}')"
+  elif [[ -n "$production_evidence_sha256" && "$production_evidence_sha256" != "$production_evidence_actual_sha256" ]]; then
+    append_issue "handoff-production-evidence-sha-mismatch" "handoff" "handoff production evidence fingerprint does not match the current evidence document" \
+      "$(jq -n --arg document "$production_evidence_doc" --arg path "$production_evidence_path" --arg expected "$production_evidence_sha256" --arg actual "$production_evidence_actual_sha256" '{document:$document,path:$path,expectedSha256:$expected,actualSha256:$actual}')"
+  fi
 fi
 if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("batched-game-traffic") != null' >/dev/null; then
   missing_required_batch_intervals="$(jq -r -n --argjson actual "$expected_batch_intervals_millis_json" --argjson required "$required_batch_intervals_millis_json" '
@@ -653,6 +679,8 @@ jq -n \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson productionEvidence "$production_evidence_json" \
+  --arg productionEvidencePath "$production_evidence_path" \
+  --arg productionEvidenceActualSha256 "$production_evidence_actual_sha256" \
   --argjson expectedCurveRows "$expected_curve_rows" \
   --argjson actualPerfectCurveRows "$actual_perfect_curve_rows" \
   --argjson actualPerfectRaisedCurveRows "$actual_perfect_raised_curve_rows" \
@@ -687,6 +715,8 @@ jq -n \
     expectedMinCpus: $expectedMinCpus,
     requireCpuPerformance: $requireCpuPerformance,
     productionEvidence: $productionEvidence,
+    productionEvidencePath: $productionEvidencePath,
+    productionEvidenceActualSha256: $productionEvidenceActualSha256,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     issues: $issues
