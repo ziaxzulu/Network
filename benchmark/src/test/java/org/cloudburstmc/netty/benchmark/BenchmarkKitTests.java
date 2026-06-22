@@ -1121,6 +1121,14 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, summaryJson.path("sourceAudit").path("issueCount").asInt());
         Assertions.assertEquals(2, summaryJson.path("sourceAudit").path("requiredSources").size());
         Assertions.assertTrue(summaryJson.path("sourceAudit").path("sourceCount").asInt() >= 2);
+        JsonNode summarySources = summaryJson.path("sourceAudit").path("sources");
+        Assertions.assertTrue(summarySources.isArray());
+        Assertions.assertTrue(findSource(summaryJson.path("sourceAudit"), "geyser").path("required").asBoolean());
+        Assertions.assertTrue(findSource(summaryJson.path("sourceAudit"), "geyser").path("available").asBoolean());
+        Assertions.assertTrue(findSource(summaryJson.path("sourceAudit"), "cloudburst-protocol")
+                .path("required").asBoolean());
+        Assertions.assertFalse(findSource(summaryJson.path("sourceAudit"), "teamziax-ebpf")
+                .path("required").asBoolean());
         Assertions.assertEquals("reliable_ordered", summaryJson.path("requirements")
                 .path("expectedReliability").asText());
         Assertions.assertEquals(7, summaryJson.path("requirements").path("expectedCurvePayloadSizes").size());

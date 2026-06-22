@@ -15,6 +15,7 @@ benchmark/scripts/capture-production-evidence.sh \
 ```
 
 Use `GEYSER_REPO`, `CLOUDBURST_PROTOCOL_REPO`, `CLOUDBURST_NUKKIT_REPO`, and `CUBECRAFT_REPO` when the checkouts are not in the usual local worktree locations. The audit writes `source-audit.json` and `source-audit.md`; private checkout paths are omitted unless `--include-paths` is passed for a local-only handoff artifact.
+When TeamZiax companion evidence is part of the lab campaign, set `TEAMZIAX_EBPF_REPO` or pass `--teamziax-ebpf`, and include `teamziax-ebpf` in `--require-sources` only for runs where missing VM/eBPF replay evidence should fail the handoff.
 
 ## Summary
 

@@ -276,7 +276,20 @@ jq -n \
           end
         ),
         requiredSources: ($sourceAudit.requiredSources // []),
-        sourceCount: (($sourceAudit.sources // []) | length)
+        sourceCount: (($sourceAudit.sources // []) | length),
+        sources: (
+          ($sourceAudit.requiredSources // []) as $requiredSources |
+          ($sourceAudit.sources // []) | map(. as $source | {
+            id: ($source.id // ""),
+            visibility: ($source.visibility // ""),
+            role: ($source.role // ""),
+            available: ($source.available == true),
+            required: (($requiredSources | index($source.id // "")) != null),
+            shortRevision: ($source.shortRevision // ""),
+            dirtyTrackedFiles: ($source.dirtyTrackedFiles == true),
+            matrixSignal: ($source.matrixSignal // "")
+          })
+        )
       },
       preflight: {
         path: $preflightPath,

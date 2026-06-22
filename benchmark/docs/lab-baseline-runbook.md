@@ -32,6 +32,10 @@ Set `GEYSER_REPO`, `CLOUDBURST_PROTOCOL_REPO`, `CLOUDBURST_NUKKIT_REPO`, or
 `CUBECRAFT_REPO` if those checkouts are not in the usual local worktree
 locations. Keep `source-audit.json` and `source-audit.md` beside the lab
 handoff; private checkout paths are omitted by default.
+If the lab campaign will also collect TeamZiax VM/eBPF companion evidence, set
+`TEAMZIAX_EBPF_REPO` or pass `--teamziax-ebpf`. Add `teamziax-ebpf` to
+`--require-sources` only when that companion evidence is mandatory for the run;
+it is otherwise recorded as optional source availability.
 
 ## VM Harness Relationship
 
