@@ -13,9 +13,11 @@ contention_clients="100"
 case_prefix="lab-baseline"
 curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 curve_rates_mbps="100,250,500,750,1000,1500,2000,unlimited"
-contention_cases="fanout,fairness,disappear-blackhole,batched,resource-pack"
+contention_cases="fanout,immediate,fairness,disappear-blackhole,batched,resource-pack"
 contention_payload_size="512"
 per_client_mbps="5"
+immediate_payload_size="256"
+immediate_per_client_mbps="1"
 batch_intervals="10ms,20ms,50ms"
 batch_payload_sizes="128,512,1200"
 logical_packets_per_batch="8"
@@ -79,9 +81,11 @@ Options:
   --case NAME                       Alias for --case-prefix.
   --curve-payload-sizes CSV         Payload sizes for bandwidth curve. Default: 64,256,512,1200,1340,1400,262144.
   --curve-rates-mbps CSV            Offered Mbps points for bandwidth curve. Default: 100,250,500,750,1000,1500,2000,unlimited.
-  --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole,batched,resource-pack.
+  --contention-cases CSV            Contention cases. Default: fanout,immediate,fairness,disappear-blackhole,batched,resource-pack.
   --contention-payload-size N       Payload size for contention cases. Default: 512.
   --per-client-mbps N               Contention per-client offered rate. Default: 5.
+  --immediate-payload-size N        Payload size for immediate small-packet fanout. Default: 256.
+  --immediate-per-client-mbps N     Per-client offered rate for immediate small-packet fanout. Default: 1.
   --batch-intervals CSV             Batch intervals for batched cases. Default: 10ms,20ms,50ms.
   --batch-payload-sizes CSV         Batch payload sizes for batched cases. Default: 128,512,1200.
   --logical-packets-per-batch N     Logical packets encoded into each batch. Default: 8.
@@ -193,6 +197,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --per-client-mbps)
       per_client_mbps="$2"
+      shift 2
+      ;;
+    --immediate-payload-size)
+      immediate_payload_size="$2"
+      shift 2
+      ;;
+    --immediate-per-client-mbps|--immediate-target-client-mbps)
+      immediate_per_client_mbps="$2"
       shift 2
       ;;
     --batch-intervals)
@@ -433,6 +445,10 @@ if ! positive_int "$contention_payload_size"; then
   echo "--contention-payload-size must be a positive integer" >&2
   exit 2
 fi
+if ! positive_int "$immediate_payload_size"; then
+  echo "--immediate-payload-size must be a positive integer" >&2
+  exit 2
+fi
 if ! positive_int "$logical_packets_per_batch"; then
   echo "--logical-packets-per-batch must be a positive integer" >&2
   exit 2
@@ -462,7 +478,7 @@ if [[ -n "$raised_packet_limit" && -z "$raised_global_packet_limit" ]] || [[ -z 
   echo "--raised-packet-limit and --raised-global-packet-limit must be supplied together" >&2
   exit 2
 fi
-for value_name in per_client_mbps max_p99_ms max_queue_bytes max_send_deliver_ratio max_nack_out_s min_healthy_fairness max_healthy_send_deliver_ratio max_affected_send_deliver_ratio max_contention_p99_ms; do
+for value_name in per_client_mbps immediate_per_client_mbps max_p99_ms max_queue_bytes max_send_deliver_ratio max_nack_out_s min_healthy_fairness max_healthy_send_deliver_ratio max_affected_send_deliver_ratio max_contention_p99_ms; do
   if ! non_negative_number "${!value_name}"; then
     echo "--${value_name//_/-} must be a non-negative number: ${!value_name}" >&2
     exit 2
@@ -667,6 +683,8 @@ contention_cmd=(
   --cases "$contention_cases"
   --payload-size "$contention_payload_size"
   --per-client-mbps "$per_client_mbps"
+  --immediate-payload-size "$immediate_payload_size"
+  --immediate-per-client-mbps "$immediate_per_client_mbps"
   --batch-intervals "$batch_intervals"
   --batch-payload-sizes "$batch_payload_sizes"
   --logical-packets-per-batch "$logical_packets_per_batch"
@@ -727,7 +745,7 @@ for selected_case in "${contention_case_array[@]}"; do
   selected_case="${selected_case//[[:space:]]/}"
   selected_case="${selected_case,,}"
   case "$selected_case" in
-    fanout|multi-client-fanout)
+    fanout|multi-client-fanout|immediate|immediate-send|immediate-fanout)
       add_required_scenario "multi-client-fanout"
       ;;
     fairness)
@@ -1017,6 +1035,8 @@ EOF
   fi
   echo "- Contention plan: \`$contention_plan\`"
   echo "- Contention cases: \`$contention_cases\`"
+  echo "- Immediate payload size: \`$immediate_payload_size\`"
+  echo "- Immediate per-client Mbps: \`$immediate_per_client_mbps\`"
   echo "- Batch intervals: \`$batch_intervals\`"
   echo "- Batch payload sizes: \`$batch_payload_sizes\`"
   echo "- Logical packets per batch: \`$logical_packets_per_batch\`"

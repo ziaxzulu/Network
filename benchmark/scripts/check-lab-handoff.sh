@@ -281,6 +281,7 @@ computed_contention_clients="$(jq -r '
   ((.contentionReceivers // []) | map(receiver_clients(.))) | add // 0
 ' "$manifest")"
 expected_per_client_mbps="$(jq -r '.perClientMbps // 0' "$manifest")"
+expected_immediate_per_client_mbps="$(jq -r '.immediatePerClientMbps // .perClientMbps // 0' "$manifest")"
 production_evidence_json="$(jq -c '.productionEvidence // null' "$manifest")"
 production_evidence_doc="$(jq -r '.productionEvidence.document // ""' "$manifest")"
 production_evidence_sha256="$(jq -r '.productionEvidence.sha256 // ""' "$manifest")"
@@ -289,7 +290,7 @@ production_evidence_actual_sha256=""
 expected_contention_scenarios_json="$(jq -c '
   def scenario($value):
     ($value | ascii_downcase) as $case
-    | if $case == "fanout" or $case == "multi-client-fanout" then "multi-client-fanout"
+    | if $case == "fanout" or $case == "multi-client-fanout" or $case == "immediate" or $case == "immediate-send" or $case == "immediate-fanout" then "multi-client-fanout"
       elif $case == "fairness" then "fairness"
       elif ($case | startswith("disappear")) or ($case | startswith("disappearing")) or $case == "close" or $case == "blackhole" or $case == "stopread" or $case == "stop-reading" then "disappearing-clients"
       elif $case == "batch" or $case == "batched" or $case == "batched-game-traffic" then "batched-game-traffic"
@@ -585,16 +586,20 @@ check_contention_manifest() {
   fi
 
   local rate_mismatches
-  rate_mismatches="$(jq -r -s --argjson expected "$expected_per_client_mbps" '
+  rate_mismatches="$(jq -r -s --argjson expected "$expected_per_client_mbps" --argjson immediateExpected "$expected_immediate_per_client_mbps" '
+    def immediate_row:
+      ((.affectedKind // "") == "immediate")
+      or (((.case // "") | ascii_downcase) | contains("immediate"));
     .[]
     | select((.benchmarkName // "") != "resource-pack-transfer")
-    | select(((((.perClientMbps // -1) | tonumber) - $expected) | fabs) > 0.000001)
-    | [(.case // ""), (.benchmarkName // ""), ((.perClientMbps // -1) | tostring)] | @tsv
+    | (if immediate_row then $immediateExpected else $expected end) as $rowExpected
+    | select(((((.perClientMbps // -1) | tonumber) - $rowExpected) | fabs) > 0.000001)
+    | [(.case // ""), (.benchmarkName // ""), ($rowExpected | tostring), ((.perClientMbps // -1) | tostring)] | @tsv
   ' "$path")"
-  while IFS=$'\t' read -r case_name benchmark_name actual_per_client_mbps; do
+  while IFS=$'\t' read -r case_name benchmark_name expected_row_per_client_mbps actual_per_client_mbps; do
     [[ -z "$case_name" && -z "$benchmark_name" ]] && continue
     append_issue "contention-per-client-mbps-mismatch" "$label" "contention manifest row per-client Mbps does not match the handoff target" \
-      "$(jq -n --arg path "$path" --arg case "$case_name" --arg benchmarkName "$benchmark_name" --argjson expected "$expected_per_client_mbps" --argjson actual "${actual_per_client_mbps:-0}" '{path:$path,case:$case,benchmarkName:$benchmarkName,expectedPerClientMbps:$expected,actualPerClientMbps:$actual}')"
+      "$(jq -n --arg path "$path" --arg case "$case_name" --arg benchmarkName "$benchmark_name" --argjson expected "${expected_row_per_client_mbps:-0}" --argjson actual "${actual_per_client_mbps:-0}" '{path:$path,case:$case,benchmarkName:$benchmarkName,expectedPerClientMbps:$expected,actualPerClientMbps:$actual}')"
   done <<<"$rate_mismatches"
 }
 
@@ -673,6 +678,7 @@ jq -n \
   --argjson requiredDisappearanceModes "$required_disappearance_modes_json" \
   --argjson expectedContentionClients "$expected_contention_clients" \
   --argjson expectedPerClientMbps "$expected_per_client_mbps" \
+  --argjson expectedImmediatePerClientMbps "$expected_immediate_per_client_mbps" \
   --argjson expectedMtu "$expected_mtu_json" \
   --argjson expectedMinCpus "$expected_min_cpus_json" \
   --argjson requireCpuPerformance "$require_cpu_performance" \
@@ -711,6 +717,7 @@ jq -n \
     requiredDisappearanceModes: $requiredDisappearanceModes,
     expectedContentionClients: $expectedContentionClients,
     expectedPerClientMbps: $expectedPerClientMbps,
+    expectedImmediatePerClientMbps: $expectedImmediatePerClientMbps,
     expectedMtu: $expectedMtu,
     expectedMinCpus: $expectedMinCpus,
     requireCpuPerformance: $requireCpuPerformance,

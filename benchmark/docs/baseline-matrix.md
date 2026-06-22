@@ -20,6 +20,7 @@ The current RakNet runner is a useful starting synthetic for established-channel
 - It supports `--per-client-mbps` so fanout and fairness runs can express production-style per-client pull targets directly.
 - It can apply benchmark-managed latency, jitter, and loss to selected impaired clients after their RakNet channels are established.
 - It includes a `disappearing-clients` scenario where selected established clients close, stop reading, or blackhole datagrams during the measured window.
+- It includes an immediate small-packet fanout lane, implemented as a low-payload `multi-client-fanout` profile, to measure traffic outside periodic batch/resource-pack pacing.
 - It includes a `batched-game-traffic` scenario for fixed-cadence grouped fanout with synthetic length-framed batches.
 - It records RakNet server packet-limit overrides so best-case bandwidth runs can distinguish library-default limiter behavior from raised-limiter capacity tests.
 
@@ -49,9 +50,10 @@ Benchmark implications:
 
 - Keep `RELIABLE_ORDERED` channel `0` as the primary recurring baseline.
 - Prefer payload sizes near real RakNet/Bedrock shapes: small control packets, threshold-adjacent packets around `256B` and `512B`, near-MTU batches around `1200-1400B`, and split-heavy chunk/resource-pack payloads.
+- Use immediate small-packet fanout for traffic outside periodic batch/resource-pack pacing.
 - Use `batched-game-traffic` for bursts every `10ms`, `20ms`, and `50ms` instead of only an evenly spaced fixed-size stream.
 - Add a future Bedrock-like workload layer that uses captured logical packet distributions and optionally compresses batches with thresholds `1`, `256`, and `512`, distinguishing pass-through compressed batches from re-encoded modified batches.
-- Use `resource-pack-transfer` for paced large-chunk transfers so split-heavy payload coverage is not limited to an always-on bulk stream. Immediate-send profiles outside resource-pack pacing remain a future gap.
+- Use `resource-pack-transfer` for paced large-chunk transfers so split-heavy payload coverage is not limited to an always-on bulk stream.
 - Use `--max-queued-bytes` queue/backlog cap sweeps on fairness and disappearance rows when measuring slow-client disconnect thresholds.
 - Add host/NIC-level impairment and blackhole disappearance profiles before treating the suite as production-representative.
 - Add a later proxy profile with one downstream and one upstream RakNet channel per user to represent pass-through deployments.
@@ -143,6 +145,14 @@ Recommended starting commands:
 ```
 
 Use `--rate-mbps` for aggregate offered rate, or `--per-client-mbps` for a stable per-client target across different client counts.
+
+The recurring plan also includes an immediate small-packet lane using the same established-channel fanout engine:
+
+```bash
+./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="multi-client-fanout --clients 100 --warmup 10s --duration 60s --iterations 3 --payload-size 256 --per-client-mbps 1"
+```
+
+This row is intentionally transport-level. It verifies the latency and send-work behavior of immediate small sends outside batch/resource-pack pacing, while real Bedrock logical packet distributions remain a later workload layer.
 
 Matrix dimensions:
 
@@ -246,7 +256,6 @@ The current workload can:
 
 Remaining batch gaps:
 
-- immediate-send lane outside periodic batch flushes
 - captured gameplay packet-size distributions
 - compression threshold and algorithm modeling around `1B`, `256B`, and `512B`, including pass-through versus re-encode behavior
 - batch-size histograms beyond the configured payload-size list
@@ -256,7 +265,7 @@ Initial target shape:
 | Dimension | Values |
 | --- | --- |
 | Clients | `20`, `100`, `500`, `1000` |
-| Flush cadence | `10ms`, `20ms`, `50ms`, immediate |
+| Flush cadence | `10ms`, `20ms`, `50ms` |
 | Batch payloads | small control, `256B`/`512B` threshold-adjacent, mixed gameplay, near-MTU, split/chunk/resource-pack-like |
 | Compression threshold | future: `1`, `256`, `512`, disabled |
 | Group count | `1`, `4`, `16` payload variants |
@@ -315,6 +324,7 @@ Use this smaller set as the first recurring perfect-network baseline before expa
 | `bestcase-1c-split` | `1` | `262144` | `reliable_ordered` | perfect | ramp |
 | `fanout-100x5` | `100` | `512` | `reliable_ordered` | perfect | `5Mbps` per client |
 | `fanout-500x5` | `500` | `512` | `reliable_ordered` | perfect aggregate/proxy fanout | `5Mbps` per client |
+| `immediate-100x1-p256` | `100` | `256` | `reliable_ordered` | perfect | `1Mbps` per client |
 | `fairness-100-10poor` | `100` | `512` | `reliable_ordered` | 10 poor clients | `5Mbps` per client |
 | `disappear-100-10pct-close` | `100` | `512` | `reliable_ordered` | close 10 clients | `5Mbps` per client |
 | `disappear-100-10pct-stopread` | `100` | `512` | `reliable_ordered` | stop reads on 10 clients | `5Mbps` per client |
@@ -340,7 +350,7 @@ Run the executable profile with:
 benchmark/scripts/run-baseline-matrix.sh --profile lab --out benchmark/build/benchmark-results/lab-baseline
 ```
 
-That command is the perfect-network executable baseline. It covers the recommended one-client bandwidth curve, split-heavy bandwidth, fanout, fairness, disappearance, and batched-game-traffic cases under the current host conditions. For the latency/loss rows in the matrix, wrap the same profile with host-level impairment rather than treating benchmark-managed client impairment as line-rate evidence:
+That command is the perfect-network executable baseline. It covers the recommended one-client bandwidth curve, split-heavy bandwidth, fanout, immediate small-packet fanout, fairness, disappearance, and batched-game-traffic cases under the current host conditions. For the latency/loss rows in the matrix, wrap the same profile with host-level impairment rather than treating benchmark-managed client impairment as line-rate evidence:
 
 ```bash
 benchmark/scripts/run-impairment-matrix.sh \
@@ -414,9 +424,9 @@ The merged directory exposes a `suite-aggregate.jsonl` row, so it can be compare
 
 For a full lab baseline campaign, prefer `benchmark/scripts/plan-lab-baseline.sh`. It composes the remote bandwidth curve and contention planners, writes host-capture commands and a topology template, schedules non-overlapping case starts, and produces a combined `suite-aggregate.jsonl` for baseline-of-record comparisons.
 
-Use `benchmark/scripts/validate-lab-baseline.sh` on the combined output before accepting a lab run as the baseline of record. The validator checks required scenario families, planned manifest rows when manifests are supplied, manifest-to-aggregate client/payload/per-client-rate consistency, measured iteration counts, unstable flags, zero-delivery rows, unexpected curve/fanout disconnects, retry-pressure signals in disappearance rows, selected bandwidth-capacity rows with concrete positive-throughput selected candidates, topology metadata, host reports, ready strict prereq reports, and optional contention gates for minimum client count, per-client offered Mbps, healthy-client fairness, healthy-client send work, affected-client send work, and contention p99 latency. The per-client Mbps gate applies to rate-controlled fanout, fairness, disappearance, and batched rows; paced resource-pack rows use the target derived from chunk size and interval. Strict prereq reports must prove clock sync, expected MTU, minimum CPU count, and no pre-existing netem qdisc. `plan-lab-baseline.sh` enables planned contention scale/rate, healthy fairness, and send-work gates by default.
+Use `benchmark/scripts/validate-lab-baseline.sh` on the combined output before accepting a lab run as the baseline of record. The validator checks required scenario families, planned manifest rows when manifests are supplied, manifest-to-aggregate client/payload/per-client-rate consistency, measured iteration counts, unstable flags, zero-delivery rows, unexpected curve/fanout disconnects, retry-pressure signals in disappearance rows, selected bandwidth-capacity rows with concrete positive-throughput selected candidates, topology metadata, host reports, ready strict prereq reports, and optional contention gates for minimum client count, per-client offered Mbps, healthy-client fairness, healthy-client send work, affected-client send work, and contention p99 latency. The per-client Mbps gate applies to rate-controlled fanout, fairness, disappearance, and batched rows, excluding the lower-rate immediate small-packet lane; paced resource-pack rows use the target derived from chunk size and interval. Strict prereq reports must prove clock sync, expected MTU, minimum CPU count, and no pre-existing netem qdisc. `plan-lab-baseline.sh` enables planned contention scale/rate, healthy fairness, and send-work gates by default.
 
-After promotion, `check-baseline-readiness.sh` adds a final production-shape gate: the promoted perfect-network and impairment baselines must include `blackhole` disappearing-client rows, `10ms`, `20ms`, and `50ms` batched-game-traffic rows, plus resource-pack rows for `8192` and `262144` byte chunks at `200ms`. A package with only generic batch/resource scenario names, clean-close disappearance rows, validation bypass markers, or missing retry-pressure-field bypass markers is not enough.
+After promotion, `check-baseline-readiness.sh` adds a final production-shape gate: the promoted perfect-network and impairment baselines must include `blackhole` disappearing-client rows, `10ms`, `20ms`, and `50ms` batched-game-traffic rows, plus resource-pack rows for `8192` and `262144` byte chunks at `200ms`. The recommended handoff also schedules immediate small-packet fanout. A package with only generic batch/resource scenario names, clean-close disappearance rows, validation bypass markers, or missing retry-pressure-field bypass markers is not enough.
 
 After validation passes, use `benchmark/scripts/promote-lab-baseline.sh` with the generated `--handoff-manifest` to create the durable comparison package. It refuses validation bypass flags and aggregate rows missing required retry-pressure fields by default, copies the comparable aggregate, validation reports, capacity selector artifacts, topology/host/prereq evidence, planning manifests, and production-evidence fingerprint into a named baseline directory, and updates a `latest` symlink for candidate comparisons.
 

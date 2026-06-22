@@ -9,9 +9,11 @@ port="19132"
 clients="100"
 clients_set=false
 receivers=()
-cases="fanout,fairness,disappear-blackhole,batched,resource-pack"
+cases="fanout,immediate,fairness,disappear-blackhole,batched,resource-pack"
 payload_size="512"
 per_client_mbps="5"
+immediate_payload_size="256"
+immediate_per_client_mbps="1"
 batch_intervals="10ms,20ms,50ms"
 batch_payload_sizes="128,512,1200"
 logical_packets_per_batch="8"
@@ -52,10 +54,12 @@ Options:
   --port PORT                       UDP port. Default: 19132.
   --clients N                       Total clients when no --receiver is supplied. Default: 100.
   --receiver NAME:CLIENTS           Receiver worker and client count. NAME=CLIENTS is also accepted. May be repeated.
-  --cases CSV                       Cases: fanout,fairness,disappear-close,disappear-stopread,disappear-blackhole,batched,resource-pack.
-                                    Default: fanout,fairness,disappear-blackhole,batched,resource-pack.
+  --cases CSV                       Cases: fanout,immediate,fairness,disappear-close,disappear-stopread,disappear-blackhole,batched,resource-pack.
+                                    Default: fanout,immediate,fairness,disappear-blackhole,batched,resource-pack.
   --payload-size N                  Payload size. Default: 512.
   --per-client-mbps N               Per-client offered rate. Default: 5.
+  --immediate-payload-size N        Payload size for immediate small-packet fanout. Default: 256.
+  --immediate-per-client-mbps N     Per-client offered rate for immediate small-packet fanout. Default: 1.
   --batch-intervals CSV             Batch intervals for batched cases. Default: 10ms,20ms,50ms.
   --batch-payload-sizes CSV         Batch payload sizes for batched cases. Default: 128,512,1200.
   --logical-packets-per-batch N     Logical packets encoded into each batch. Default: 8.
@@ -134,6 +138,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --per-client-mbps)
       per_client_mbps="$2"
+      shift 2
+      ;;
+    --immediate-payload-size)
+      immediate_payload_size="$2"
+      shift 2
+      ;;
+    --immediate-per-client-mbps|--immediate-target-client-mbps)
+      immediate_per_client_mbps="$2"
       shift 2
       ;;
     --batch-intervals)
@@ -333,6 +345,9 @@ canonical_case() {
     fanout|multi-client-fanout)
       echo "fanout"
       ;;
+    immediate|immediate-send|immediate-fanout)
+      echo "immediate"
+      ;;
     fairness)
       echo "fairness"
       ;;
@@ -374,6 +389,10 @@ if ! positive_int "$payload_size"; then
   echo "--payload-size must be a positive integer" >&2
   exit 2
 fi
+if ! positive_int "$immediate_payload_size"; then
+  echo "--immediate-payload-size must be a positive integer" >&2
+  exit 2
+fi
 if ! positive_int "$logical_packets_per_batch"; then
   echo "--logical-packets-per-batch must be a positive integer" >&2
   exit 2
@@ -387,7 +406,7 @@ if [[ "$resource_pack_interval_ms" -le 0 ]]; then
   echo "--resource-pack-interval must be greater than zero" >&2
   exit 2
 fi
-for value in "$per_client_mbps" "$impairment_loss"; do
+for value in "$per_client_mbps" "$immediate_per_client_mbps" "$impairment_loss"; do
   if ! non_negative_number "$value"; then
     echo "rate and loss values must be non-negative numbers: $value" >&2
     exit 2
@@ -678,6 +697,15 @@ for selected_case in "${case_array[@]}"; do
       affected_total=0
       affected_kind="none"
       ;;
+    immediate)
+      benchmark_name="multi-client-fanout"
+      run_suffix="immediate-${clients}x${immediate_per_client_mbps//./_}-p${immediate_payload_size}"
+      server_case_args="--payload-size $immediate_payload_size --per-client-mbps $immediate_per_client_mbps"
+      manifest_payload_size="$immediate_payload_size"
+      manifest_per_client_mbps="$immediate_per_client_mbps"
+      affected_total=0
+      affected_kind="immediate"
+      ;;
     fairness)
       benchmark_name="fairness"
       run_suffix="fairness-${clients}-${impaired_count}poor"
@@ -771,6 +799,8 @@ for selected_case in "${case_array[@]}"; do
       extra_receiver_args="$server_case_args"
     elif [[ "$selected_case" == batched:* ]]; then
       extra_receiver_args="$server_case_args"
+    elif [[ "$selected_case" == "immediate" ]]; then
+      extra_receiver_args="$server_case_args"
     fi
     if [[ -n "$affected_json" ]]; then
       affected_json="$affected_json,"
@@ -831,6 +861,8 @@ chmod +x "$server_script" "$merge_script"
   echo "- Cases: \`$(IFS=,; echo "${case_array[*]}")\`"
   echo "- Payload size: \`$payload_size\`"
   echo "- Per-client Mbps: \`$per_client_mbps\`"
+  echo "- Immediate payload size: \`$immediate_payload_size\`"
+  echo "- Immediate per-client Mbps: \`$immediate_per_client_mbps\`"
   echo "- Batch intervals: \`$batch_intervals\`"
   echo "- Batch payload sizes: \`$batch_payload_sizes\`"
   echo "- Logical packets per batch: \`$logical_packets_per_batch\`"

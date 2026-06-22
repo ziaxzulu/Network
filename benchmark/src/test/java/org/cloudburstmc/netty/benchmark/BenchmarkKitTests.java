@@ -303,10 +303,11 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, result.exitCode, result.output);
 
         List<String> manifest = Files.readAllLines(output.resolve("manifest.jsonl"), StandardCharsets.UTF_8);
-        Assertions.assertEquals(6, manifest.size());
+        Assertions.assertEquals(7, manifest.size());
         Assertions.assertTrue(manifest.stream().allMatch(row -> row.contains("\"status\":\"dry-run\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-curve-1c-mtu\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-fanout-100x5\"")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-immediate-100x1-p256\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-fairness-100-10poor\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-disappear-100-blackhole\"")));
         Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"name\":\"pilot-batch-100-20ms\"")));
@@ -333,7 +334,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, result.exitCode, result.output);
 
         List<JsonNode> summaryRows = readJsonLines(suite.resolve("suite-summary.jsonl"));
-        Assertions.assertEquals(9, summaryRows.size());
+        Assertions.assertEquals(10, summaryRows.size());
         Assertions.assertTrue(summaryRows.stream().allMatch(JsonNode::isObject));
         Assertions.assertTrue(summaryRows.stream().allMatch(row -> row.path("openPeers").asInt() == row.path("clients").asInt()));
         Assertions.assertTrue(summaryRows.stream().allMatch(row -> row.path("activePeers").asInt() == row.path("clients").asInt()));
@@ -346,7 +347,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summaryRows.stream().allMatch(row -> row.has("affectedServerDatagramsOutPerSecond")));
 
         List<JsonNode> aggregateRows = readJsonLines(suite.resolve("suite-aggregate.jsonl"));
-        Assertions.assertEquals(9, aggregateRows.size());
+        Assertions.assertEquals(10, aggregateRows.size());
         Assertions.assertTrue(aggregateRows.stream().allMatch(JsonNode::isObject));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("summaryKind").asText().equals("aggregate")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("activePeers")));
@@ -552,6 +553,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("200ms", handoffManifest.path("resourcePackInterval").asText());
         Assertions.assertEquals(64, handoffManifest.path("contentionPayloadSize").asInt());
         Assertions.assertEquals(1.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(256, handoffManifest.path("immediatePayloadSize").asInt());
+        Assertions.assertEquals(1.0D, handoffManifest.path("immediatePerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(1000, handoffManifest.path("raisedPacketLimit").asInt());
         Assertions.assertEquals(10000, handoffManifest.path("raisedGlobalPacketLimit").asInt());
         Assertions.assertEquals(1048576, handoffManifest.path("maxQueuedBytes").asInt());
@@ -771,6 +774,10 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8));
         Assertions.assertEquals(500, handoffManifest.path("contentionClientTotal").asInt());
         Assertions.assertEquals(5.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(6, handoffManifest.path("contentionCases").size());
+        Assertions.assertTrue(handoffManifest.path("contentionCases").toString().contains("\"immediate\""));
+        Assertions.assertEquals(256, handoffManifest.path("immediatePayloadSize").asInt());
+        Assertions.assertEquals(1.0D, handoffManifest.path("immediatePerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals("receiver-a=250", handoffManifest.path("contentionReceivers").get(0).asText());
         Assertions.assertEquals("receiver-b=250", handoffManifest.path("contentionReceivers").get(1).asText());
 
@@ -795,13 +802,20 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(1, handoffCheckJson.path("requiredResourcePackIntervalsMillis").size());
         Assertions.assertEquals(56, handoffCheckJson.path("actualPerfectCurveRows").asInt());
         Assertions.assertEquals(56, handoffCheckJson.path("actualPerfectRaisedCurveRows").asInt());
-        Assertions.assertEquals(8, handoffCheckJson.path("actualPerfectContentionRows").asInt());
+        Assertions.assertEquals(9, handoffCheckJson.path("actualPerfectContentionRows").asInt());
         Assertions.assertEquals(1, handoffCheckJson.path("actualImpairmentProfileRows").size());
-        Assertions.assertEquals(8, handoffCheckJson.path("actualImpairmentProfileRows").get(0).path("contentionRows").asInt());
+        Assertions.assertEquals(9, handoffCheckJson.path("actualImpairmentProfileRows").get(0).path("contentionRows").asInt());
         Assertions.assertTrue(handoffCheckJson.path("expectedContentionScenarios").toString()
                 .contains("\"batched-game-traffic\""));
         Assertions.assertTrue(handoffCheckJson.path("expectedContentionScenarios").toString()
                 .contains("\"resource-pack-transfer\""));
+
+        JsonNode immediateRow = readJsonLines(handoff.resolve("perfect-plan/contention-plan/manifest.jsonl")).stream()
+                .filter(row -> row.path("affectedKind").asText().equals("immediate"))
+                .findFirst()
+                .orElseThrow();
+        Assertions.assertEquals(256, immediateRow.path("payloadSize").asInt());
+        Assertions.assertEquals(1.0D, immediateRow.path("perClientMbps").asDouble(), 0.001D);
 
         ProcessResult strictShapeCheck = runProcess(root, Duration.ofSeconds(20),
                 "bash",

@@ -8,11 +8,11 @@ The benchmark is a good synthetic for established-channel transport pressure:
 
 - primary `RELIABLE_ORDERED` channel `0` server-to-client traffic
 - one-client bandwidth-latency curves for best-case transport capacity
-- multi-client fanout, fairness, disappearing-client, and batched-game-traffic cases
+- multi-client fanout, immediate small-packet fanout, fairness, disappearing-client, and batched-game-traffic cases
 - queue, ACK/NACK, stale datagram, disconnect, open/active peer, final channel-state, fairness, per-client throughput, send/deliver, undelivered send-work, healthy/affected datagram-rate, and probe-latency indicators
 - local loopback runs for regression and remote worker runs for separate-host lab evidence
 
-It is not a full Bedrock production emulator yet. The main remaining workload gaps are compression modeling, captured logical packet distributions, pass-through versus re-encode batch behavior, immediate-send behavior outside resource-pack pacing, proxy pass-through, and captured host/NIC-level impairment results. Source evidence and the gap list are in [`production-usage-evidence.md`](production-usage-evidence.md).
+It is not a full Bedrock production emulator yet. The main remaining workload gaps are compression modeling, captured logical packet distributions, pass-through versus re-encode batch behavior, proxy pass-through, and captured host/NIC-level impairment results. Source evidence and the gap list are in [`production-usage-evidence.md`](production-usage-evidence.md).
 
 ## Base Matrix
 
@@ -21,7 +21,7 @@ Use [`baseline-matrix.md`](baseline-matrix.md) as the source of truth. The first
 - best-case one-client curves with payloads `64`, `256`, `512`, `1200`, `1340`, `1400`, and split-heavy payloads
 - default-limiter and raised-limiter one-client curves
 - `100+` client contention rows at `5Mbps` per client
-- fanout, fairness, and disappearing-client rows
+- fanout, immediate small-packet fanout, fairness, and disappearing-client rows
 - `10ms`, `20ms`, and `50ms` batched-game-traffic rows
 - paced resource-pack rows for `8KiB` and `256KiB` chunks
 - host-level impairment campaigns for selected curve and contention rows
@@ -40,7 +40,7 @@ Latest current-branch smoke artifact in this worktree:
 benchmark/build/benchmark-results/current-branch-smoke-20260622T050230Z/
 ```
 
-This run completed the smoke profile and produced `9` aggregate rows across best-case, curve, fanout, fairness, stop-reading disappearance, blackhole disappearance, batched game traffic, and resource-pack transfer cases. Every aggregate row includes the current retry-pressure send-work fields: `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`. Treat it as output-schema and instrumentation proof only; it uses one measured iteration per case and all rows are intentionally marked unstable by the default stability policy:
+This historical run completed the smoke profile before the immediate small-packet row was added and produced `9` aggregate rows across best-case, curve, fanout, fairness, stop-reading disappearance, blackhole disappearance, batched game traffic, and resource-pack transfer cases. Current smoke plans schedule `10` rows. Every aggregate row includes the current retry-pressure send-work fields: `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`. Treat it as output-schema and instrumentation proof only; it uses one measured iteration per case and all rows are intentionally marked unstable by the default stability policy:
 
 | Case | Delivered Gbps | Undelivered Gbps | Affected undelivered Gbps | Affected datagram out/s | Retry signal |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -66,7 +66,7 @@ This run completed the representative pilot profile and produced parseable suite
 | `pilot-batch-100-20ms` | `0.51136` | `5.1008` | `41.909064` | `229587` | `p99-spread` |
 | `pilot-resource-100-8k-200ms` | `0.032768` | `0.32768` | `10.842546` | `8209` | `p99-spread` |
 
-The capacity selector did not choose a stable point for the local pilot. The best observed curve row was `curve-250_0mbps` at `0.249444Gbps`, rejected because unstable rows are not allowed. A self-comparison of the same artifact passed with `8` OK rows and `0` regressions.
+The capacity selector did not choose a stable point for the local pilot. The best observed curve row was `curve-250_0mbps` at `0.249444Gbps`, rejected because unstable rows are not allowed. A self-comparison of the same historical artifact passed with `8` OK rows and `0` regressions; current pilot plans schedule `9` aggregate rows.
 
 Latest local best-case curve artifact in this worktree:
 
@@ -135,7 +135,7 @@ benchmark/scripts/plan-lab-baseline.sh \
   --curve-receiver receiver-a=1 \
   --contention-receiver receiver-a=250 \
   --contention-receiver receiver-b=250 \
-  --contention-cases fanout,fairness,disappear-blackhole,batched,resource-pack \
+  --contention-cases fanout,immediate,fairness,disappear-blackhole,batched,resource-pack \
   --contention-payload-size 512 \
   --per-client-mbps 5 \
   --raised-packet-limit 100000 \
@@ -151,7 +151,7 @@ The generated plan schedules:
 
 - `56` default-limiter curve rows across payloads `64,256,512,1200,1340,1400,262144`
 - `56` raised-limiter curve rows across the same payloads
-- `8` contention/workload rows at `500` clients split across two receiver hosts: fanout, fairness, blackhole disappearance, three batched cadences, and two resource-pack transfers
+- `9` contention/workload rows at `500` clients split across two receiver hosts: fanout, immediate small-packet fanout, fairness, blackhole disappearance, three batched cadences, and two resource-pack transfers
 
 Before promotion, the lab output must include:
 
@@ -201,7 +201,7 @@ benchmark/scripts/check-baseline-readiness.sh \
 
 The baseline is not accepted as the comparison baseline until this readiness check passes.
 Readiness also checks that the promoted artifacts have no validation or missing retry-pressure-field bypass markers, that the perfect-network baseline retained its copied handoff manifest and matching production-evidence fingerprint, that the perfect-network validation enforced the requested contention scale and per-client Mbps target, and that both perfect-network and impairment packages include `blackhole` disappearing-client coverage. The recommended handoff uses `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
-It also requires the production-shape contention rows from the source audit: `10ms`, `20ms`, and `50ms` batched-game-traffic rows, plus `8192` and `262144` byte resource-pack rows at `200ms`. Promoted aggregate rows must include retry-pressure send-work fields such as `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`, so future candidate comparisons can detect send work consumed by impaired or disappeared clients.
+It also requires the production-shape contention rows from the source audit: `10ms`, `20ms`, and `50ms` batched-game-traffic rows, plus `8192` and `262144` byte resource-pack rows at `200ms`. The recommended handoff schedules immediate small-packet fanout as a separate multi-client row. Promoted aggregate rows must include retry-pressure send-work fields such as `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`, so future candidate comparisons can detect send work consumed by impaired or disappeared clients.
 
 Current readiness audit in this worktree:
 
@@ -231,7 +231,7 @@ benchmark/scripts/plan-lab-impairment.sh \
   --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --contention-receiver receiver-a=250 \
   --contention-receiver receiver-b=250 \
-  --contention-cases fanout,fairness,disappear-blackhole,batched,resource-pack \
+  --contention-cases fanout,immediate,fairness,disappear-blackhole,batched,resource-pack \
   --contention-payload-size 512 \
   --per-client-mbps 5 \
   --raised-packet-limit 100000 \
@@ -263,6 +263,6 @@ Each profile schedules:
 
 - `56` default-limiter one-client bandwidth curve rows
 - `56` raised-limiter one-client bandwidth curve rows
-- `8` contention/workload rows at `500` clients split across two receiver hosts
+- `9` contention/workload rows at `500` clients split across two receiver hosts
 
 The impairment planner also writes `check-plan-freshness.sh`, `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, `netem/<profile>-clear.sh`, and `summarize-campaign.sh`. Run the campaign freshness check before starting profile workers, then run the netem scripts on the shaped receiver host or network namespace before and after the matching profile plan. Keep the generated `<profile>-status-*.txt` files with the copied benchmark artifacts; `validate-all.sh` requires that evidence by default. After profile merge and validation, keep `campaign-summary/impairment-summary.json`, `impairment-summary.jsonl`, and `impairment-summary.md` with the baseline package so adverse-network capacity and contention behavior are reviewed as one campaign. Campaign summary and promotion reject profile validation bypass flags and missing retry-pressure-field bypasses by default; `--allow-validation-bypasses` and `--allow-missing-retry-pressure-fields` are only for non-baseline smoke packages. Promote that campaign with `benchmark/scripts/promote-lab-impairment.sh`, then compare future candidate campaigns with `benchmark/scripts/compare-lab-impairment.sh`. The `perfect` profile is the no-impairment companion and should still capture qdisc status so later comparisons can prove the baseline host was unshaped.

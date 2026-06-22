@@ -612,6 +612,7 @@ case_list_smoke() {
 bestcase-1c-medium|baseline-bandwidth --clients 1 --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --rate-mbps 50 --workers 1
 curve-1c-mtu|bandwidth-latency-curve --clients 1 --warmup 0ms --duration 1s --iterations 1 --payload-size 1200 --rates-mbps 50,100 --workers 1
 fanout-10x0_2|multi-client-fanout --clients 10 --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --workers 1
+immediate-10x0_1-p256|multi-client-fanout --clients 10 --warmup 0ms --duration 1s --iterations 1 --payload-size 256 --per-client-mbps 0.1 --workers 1
 fairness-10-2poor|fairness --clients 10 --impaired-clients 2 --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --impairment-latency 50ms --impairment-jitter 5ms --impairment-loss 5 --workers 1
 disappear-10-stopread|disappearing-clients --clients 10 --disappearing-clients 1 --disappear-after 500ms --disappear-mode stop-reading --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --workers 1
 disappear-10-blackhole|disappearing-clients --clients 10 --disappearing-clients 1 --disappear-after 500ms --disappear-mode blackhole --warmup 0ms --duration 1s --iterations 1 --payload-size 512 --per-client-mbps 0.2 --workers 1
@@ -624,6 +625,7 @@ case_list_pilot() {
   cat <<'CASES'
 pilot-curve-1c-mtu|bandwidth-latency-curve --clients 1 --warmup 1s --duration 5s --iterations 3 --payload-size 1200 --rates-mbps 50,100,250 --workers 1
 pilot-fanout-100x5|multi-client-fanout --clients 100 --warmup 1s --duration 5s --iterations 3 --payload-size 512 --per-client-mbps 5 --workers 1
+pilot-immediate-100x1-p256|multi-client-fanout --clients 100 --warmup 1s --duration 5s --iterations 3 --payload-size 256 --per-client-mbps 1 --workers 1
 pilot-fairness-100-10poor|fairness --clients 100 --impaired-clients 10 --warmup 1s --duration 6s --iterations 3 --payload-size 512 --per-client-mbps 5 --impairment-latency 100ms --impairment-jitter 10ms --impairment-loss 5 --workers 1
 pilot-disappear-100-blackhole|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 2s --disappear-mode blackhole --warmup 1s --duration 6s --iterations 3 --payload-size 512 --per-client-mbps 5 --workers 1
 pilot-batch-100-20ms|batched-game-traffic --clients 100 --warmup 1s --duration 5s --iterations 3 --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 4 --per-client-mbps 5 --workers 1
@@ -641,6 +643,7 @@ bestcase-1c-mtu1340|bandwidth-latency-curve --clients 1 --warmup 2s --duration 1
 bestcase-1c-mtu1400|bandwidth-latency-curve --clients 1 --warmup 2s --duration 10s --iterations 3 --payload-size 1400 --rates-mbps 100,250,500,1000,unlimited
 fanout-20x5|multi-client-fanout --clients 20 --warmup 2s --duration 10s --iterations 3 --payload-size 512 --per-client-mbps 5
 fanout-100x5|multi-client-fanout --clients 100 --warmup 2s --duration 10s --iterations 3 --payload-size 512 --per-client-mbps 5
+immediate-100x1-p256|multi-client-fanout --clients 100 --warmup 2s --duration 10s --iterations 3 --payload-size 256 --per-client-mbps 1
 fairness-100-10poor|fairness --clients 100 --impaired-clients 10 --warmup 2s --duration 15s --iterations 3 --payload-size 512 --per-client-mbps 5 --impairment-latency 100ms --impairment-jitter 10ms --impairment-loss 5
 disappear-100-close|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode close --warmup 2s --duration 15s --iterations 3 --payload-size 512 --per-client-mbps 5
 disappear-100-stopread|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 5s --disappear-mode stop-reading --warmup 2s --duration 15s --iterations 3 --payload-size 512 --per-client-mbps 5
@@ -661,6 +664,7 @@ bestcase-1c-mtu1400|bandwidth-latency-curve --clients 1 --warmup 5s --duration 3
 bestcase-1c-split|bandwidth-latency-curve --clients 1 --warmup 5s --duration 30s --iterations 3 --payload-size 262144 --rates-mbps 100,250,500,750,1000,1500,2000,unlimited
 fanout-100x5|multi-client-fanout --clients 100 --warmup 5s --duration 30s --iterations 3 --payload-size 512 --per-client-mbps 5
 fanout-500x5|multi-client-fanout --clients 500 --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5
+immediate-100x1-p256|multi-client-fanout --clients 100 --warmup 5s --duration 30s --iterations 3 --payload-size 256 --per-client-mbps 1
 fairness-100-10poor|fairness --clients 100 --impaired-clients 10 --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5 --impairment-latency 100ms --impairment-jitter 10ms --impairment-loss 5
 disappear-100-close|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode close --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5
 disappear-100-stopread|disappearing-clients --clients 100 --disappearing-clients 10 --disappear-after 30s --disappear-mode stop-reading --warmup 10s --duration 60s --iterations 3 --payload-size 512 --per-client-mbps 5

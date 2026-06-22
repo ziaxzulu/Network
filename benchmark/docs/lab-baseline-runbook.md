@@ -140,7 +140,7 @@ benchmark/scripts/plan-lab-baseline.sh \
   --contention-receiver receiver-b=250 \
   --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --curve-rates-mbps 100,250,500,750,1000,1500,2000,unlimited \
-  --contention-cases fanout,fairness,disappear-blackhole,batched,resource-pack \
+  --contention-cases fanout,immediate,fairness,disappear-blackhole,batched,resource-pack \
   --contention-payload-size 512 \
   --per-client-mbps 5 \
   --warmup 10s \
@@ -231,7 +231,7 @@ benchmark/scripts/plan-remote-worker-curve.sh \
 
 Run `server-commands.sh` on the server host first, start the generated receiver scripts once the server is listening, copy receiver artifacts back under the same artifact root, then run `merge-commands.sh`. The merge output includes a campaign-level `suite-aggregate.jsonl` and `bandwidth-capacity.*` files for highest-stable-capacity review.
 
-For remote contention campaigns, generate fanout, fairness, disappearance, batched, and resource-pack cases together:
+For remote contention campaigns, generate fanout, immediate small-packet fanout, fairness, disappearance, batched, and resource-pack cases together:
 
 ```bash
 benchmark/scripts/plan-remote-contention.sh \
@@ -240,7 +240,7 @@ benchmark/scripts/plan-remote-contention.sh \
   --case remote-contention-100x5 \
   --server-host <server-ip> \
   --receiver receiver-a=100 \
-  --cases fanout,fairness,disappear-blackhole,batched,resource-pack \
+  --cases fanout,immediate,fairness,disappear-blackhole,batched,resource-pack \
   --payload-size 512 \
   --per-client-mbps 5 \
   --impaired-clients 10% \

@@ -14,9 +14,11 @@ curve_receivers=("receiver-a=1")
 curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 curve_rates_mbps="100,250,500,750,1000,1500,2000,unlimited"
 contention_receivers=()
-contention_cases="fanout,fairness,disappear-blackhole,batched,resource-pack"
+contention_cases="fanout,immediate,fairness,disappear-blackhole,batched,resource-pack"
 contention_payload_size="512"
 per_client_mbps="5"
+immediate_payload_size="256"
+immediate_per_client_mbps="1"
 batch_intervals="10ms,20ms,50ms"
 batch_payload_sizes="128,512,1200"
 logical_packets_per_batch="8"
@@ -66,9 +68,11 @@ Options:
   --profiles CSV                    Impairment profiles. Default: perfect,near-loss,regional-loss,poor,severe.
   --target-host-role ROLE           Host/namespace role shaped by impairment netem scripts. Default: receiver-a.
   --case-prefix NAME                Case prefix. Default: lab.
-  --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole,batched,resource-pack.
+  --contention-cases CSV            Contention cases. Default: fanout,immediate,fairness,disappear-blackhole,batched,resource-pack.
   --contention-payload-size N       Payload size for contention. Default: 512.
   --per-client-mbps N               Contention per-client offered rate. Default: 5.
+  --immediate-payload-size N        Payload size for immediate small-packet fanout. Default: 256.
+  --immediate-per-client-mbps N     Per-client offered rate for immediate small-packet fanout. Default: 1.
   --batch-intervals CSV             Batch intervals for batched cases. Default: 10ms,20ms,50ms.
   --batch-payload-sizes CSV         Batch payload sizes for batched cases. Default: 128,512,1200.
   --logical-packets-per-batch N     Logical packets encoded into each batch. Default: 8.
@@ -165,6 +169,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --per-client-mbps)
       per_client_mbps="$2"
+      shift 2
+      ;;
+    --immediate-payload-size)
+      immediate_payload_size="$2"
+      shift 2
+      ;;
+    --immediate-per-client-mbps|--immediate-target-client-mbps)
+      immediate_per_client_mbps="$2"
       shift 2
       ;;
     --batch-intervals)
@@ -301,9 +313,19 @@ non_empty_csv() {
   [[ -n "$1" && "$1" != *, && "$1" != ,* ]]
 }
 
-for value_name in port contention_payload_size iterations raised_packet_limit raised_global_packet_limit max_queued_bytes expect_mtu expect_min_cpus; do
+non_negative_number() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+for value_name in port contention_payload_size immediate_payload_size iterations raised_packet_limit raised_global_packet_limit max_queued_bytes expect_mtu expect_min_cpus; do
   if ! positive_int "${!value_name}"; then
     echo "--${value_name//_/-} must be a positive integer: ${!value_name}" >&2
+    exit 2
+  fi
+done
+for value_name in per_client_mbps immediate_per_client_mbps; do
+  if ! non_negative_number "${!value_name}"; then
+    echo "--${value_name//_/-} must be a non-negative number: ${!value_name}" >&2
     exit 2
   fi
 done
@@ -449,6 +471,8 @@ common_baseline_args=(
   --contention-cases "$contention_cases"
   --contention-payload-size "$contention_payload_size"
   --per-client-mbps "$per_client_mbps"
+  --immediate-payload-size "$immediate_payload_size"
+  --immediate-per-client-mbps "$immediate_per_client_mbps"
   --batch-intervals "$batch_intervals"
   --batch-payload-sizes "$batch_payload_sizes"
   --logical-packets-per-batch "$logical_packets_per_batch"
@@ -537,6 +561,8 @@ jq -n \
   --arg contentionPayloadSize "$contention_payload_size" \
   --arg contentionClientTotal "$contention_client_total" \
   --arg perClientMbps "$per_client_mbps" \
+  --arg immediatePayloadSize "$immediate_payload_size" \
+  --arg immediatePerClientMbps "$immediate_per_client_mbps" \
   --arg logicalPacketsPerBatch "$logical_packets_per_batch" \
   --arg batchGroups "$batch_groups" \
   --arg resourcePackInterval "$resource_pack_interval" \
@@ -595,6 +621,8 @@ jq -n \
     contentionPayloadSize: ($contentionPayloadSize | tonumber),
     contentionClientTotal: ($contentionClientTotal | tonumber),
     perClientMbps: ($perClientMbps | tonumber),
+    immediatePayloadSize: ($immediatePayloadSize | tonumber),
+    immediatePerClientMbps: ($immediatePerClientMbps | tonumber),
     batchIntervals: $batchIntervals,
     batchPayloadSizes: $batchPayloadSizes,
     logicalPacketsPerBatch: ($logicalPacketsPerBatch | tonumber),
@@ -639,6 +667,8 @@ cat >"$readme" <<EOF
 - Contention clients: \`$contention_client_total\`
 - Contention cases: \`$contention_cases\`
 - Per-client Mbps: \`$per_client_mbps\`
+- Immediate payload size: \`$immediate_payload_size\`
+- Immediate per-client Mbps: \`$immediate_per_client_mbps\`
 - Batch intervals: \`$batch_intervals\`
 - Batch payload sizes: \`$batch_payload_sizes\`
 - Logical packets per batch: \`$logical_packets_per_batch\`

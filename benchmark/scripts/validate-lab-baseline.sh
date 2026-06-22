@@ -558,11 +558,17 @@ jq -n \
     or (scenario($row) == "disappearing-clients")
     or (scenario($row) == "batched-game-traffic")
     or (scenario($row) == "resource-pack-transfer");
+  def immediate_row($row):
+    (($row.affectedKind // "") == "immediate")
+    or (((($row.case // "") | ascii_downcase) | contains("immediate")));
   def rate_limited_contention_scenario($row):
-    (scenario($row) == "multi-client-fanout")
-    or (scenario($row) == "fairness")
-    or (scenario($row) == "disappearing-clients")
-    or (scenario($row) == "batched-game-traffic");
+    ((immediate_row($row) | not)
+      and (
+        (scenario($row) == "multi-client-fanout")
+        or (scenario($row) == "fairness")
+        or (scenario($row) == "disappearing-clients")
+        or (scenario($row) == "batched-game-traffic")
+      ));
   def affected_scenario($row):
     (scenario($row) == "fairness")
     or (scenario($row) == "disappearing-clients");
