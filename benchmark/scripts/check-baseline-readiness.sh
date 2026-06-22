@@ -280,6 +280,17 @@ lab_aggregate="$lab_baseline/suite-aggregate.jsonl"
 lab_capacity="$lab_baseline/bandwidth-capacity.jsonl"
 lab_source_audit_json="null"
 lab_handoff_source_audit_json="null"
+lab_packaged_host_report_count="0"
+lab_packaged_prereq_summary="$(jq -n '{
+  reportCount: 0,
+  readyReportCount: 0,
+  notReadyReportCount: 0,
+  distinctHostnameCount: 0,
+  strictReportCount: 0,
+  strictDistinctHostnameCount: 0,
+  hostnames: [],
+  strictHostnames: []
+}')"
 required_curve_payloads_json="$(csv_json_number_array "$required_curve_payload_sizes")"
 required_impairment_contention_json="$(csv_json_array "$required_impairment_contention_scenarios")"
 required_batch_intervals_json="$(csv_json_duration_millis_array "$required_batch_intervals_ms")"
@@ -288,6 +299,41 @@ required_resource_pack_chunks_json="$(csv_json_number_array "$required_resource_
 required_resource_pack_intervals_json="$(csv_json_duration_millis_array "$required_resource_pack_intervals_ms")"
 required_disappearance_modes_json="$(csv_json_array "$required_disappearance_modes")"
 required_retry_pressure_fields_json="$(csv_json_array "$required_retry_pressure_fields")"
+
+if [[ -d "$lab_baseline/host-reports" ]]; then
+  lab_packaged_host_report_count="$(find "$lab_baseline/host-reports" -maxdepth 1 -type f -name '*-host-report.md' 2>/dev/null | wc -l | tr -d ' ')"
+fi
+
+lab_packaged_prereq_files=()
+if [[ -d "$lab_baseline/prereq-reports" ]]; then
+  mapfile -t lab_packaged_prereq_files < <(find "$lab_baseline/prereq-reports" -maxdepth 1 -type f -name '*-prereq.json' 2>/dev/null | sort)
+fi
+if [[ "${#lab_packaged_prereq_files[@]}" -gt 0 ]]; then
+  lab_packaged_prereq_summary="$(jq -s '
+    def hostname:
+      (.hostname // empty | select(length > 0));
+    def strict:
+      .ready == true
+      and .requireClockSync == true
+      and .requireNoNetem == true
+      and ((.expectedMtu // null) | type == "number")
+      and ((.interfaceMtu // null) | type == "number")
+      and (.interfaceMtu == .expectedMtu)
+      and ((.expectedMinCpus // null) | type == "number")
+      and ((.cpuCount // null) | type == "number")
+      and (.cpuCount >= .expectedMinCpus);
+    {
+      reportCount: length,
+      readyReportCount: ([.[] | select(.ready == true)] | length),
+      notReadyReportCount: ([.[] | select((.ready // false) != true)] | length),
+      distinctHostnameCount: ([.[] | hostname] | unique | length),
+      strictReportCount: ([.[] | select(strict)] | length),
+      strictDistinctHostnameCount: ([.[] | select(strict) | hostname] | unique | length),
+      hostnames: ([.[] | hostname] | unique),
+      strictHostnames: ([.[] | select(strict) | hostname] | unique)
+    }
+  ' "${lab_packaged_prereq_files[@]}")"
+fi
 
 if [[ ! -s "$lab_manifest" ]]; then
   append_issue "missing-lab-baseline-manifest" "lab-baseline" "promoted lab baseline manifest is missing" "{\"path\":\"$lab_manifest\"}"
@@ -353,21 +399,41 @@ if [[ -s "$lab_validation" ]]; then
   if ! jq -e '.hostReportCount >= 2' "$lab_validation" >/dev/null; then
     append_issue "lab-missing-host-reports" "lab-baseline" "lab baseline does not include at least two host reports" "{\"path\":\"$lab_validation\"}"
   fi
+  if (( lab_packaged_host_report_count < 2 )); then
+    extra="$(jq -n --argjson actual "$lab_packaged_host_report_count" '{requiredPackagedHostReports:2,actualPackagedHostReportCount:$actual}')"
+    append_issue "lab-missing-packaged-host-reports" "lab-baseline" "promoted lab baseline package does not contain enough copied host reports" "$extra"
+  fi
   if ! jq -e --argjson required "$required_min_prereq_reports" '(.prereqReportCount // 0) >= $required' "$lab_validation" >/dev/null; then
     extra="$(jq -n --argjson required "$required_min_prereq_reports" --argjson actual "$(jq -r '.prereqReportCount // 0' "$lab_validation")" '{requiredMinPrereqReports:$required,actualPrereqReportCount:$actual}')"
     append_issue "lab-missing-prereq-reports" "lab-baseline" "lab baseline does not include enough host prerequisite reports" "$extra"
+  fi
+  if ! jq -e --argjson required "$required_min_prereq_reports" '(.reportCount // 0) >= $required' <<<"$lab_packaged_prereq_summary" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_prereq_reports" --argjson actual "$(jq -r '.reportCount // 0' <<<"$lab_packaged_prereq_summary")" '{requiredMinPackagedPrereqReports:$required,actualPackagedPrereqReportCount:$actual}')"
+    append_issue "lab-missing-packaged-prereq-reports" "lab-baseline" "promoted lab baseline package does not contain enough copied prerequisite reports" "$extra"
   fi
   if ! jq -e --argjson required "$required_min_ready_prereq_reports" '(.readyPrereqReportCount // 0) >= $required' "$lab_validation" >/dev/null; then
     extra="$(jq -n --argjson required "$required_min_ready_prereq_reports" --argjson actual "$(jq -r '.readyPrereqReportCount // 0' "$lab_validation")" '{requiredMinReadyPrereqReports:$required,actualReadyPrereqReportCount:$actual}')"
     append_issue "lab-prereq-not-ready" "lab-baseline" "lab baseline does not prove enough ready host prerequisite reports" "$extra"
   fi
+  if ! jq -e --argjson required "$required_min_ready_prereq_reports" '(.readyReportCount // 0) >= $required' <<<"$lab_packaged_prereq_summary" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_ready_prereq_reports" --argjson actual "$(jq -r '.readyReportCount // 0' <<<"$lab_packaged_prereq_summary")" '{requiredMinReadyPackagedPrereqReports:$required,actualReadyPackagedPrereqReportCount:$actual}')"
+    append_issue "lab-packaged-prereq-not-ready" "lab-baseline" "promoted lab baseline package does not contain enough ready prerequisite reports" "$extra"
+  fi
   if ! jq -e '(.notReadyPrereqReportCount // 0) == 0' "$lab_validation" >/dev/null; then
     extra="$(jq -n --argjson actual "$(jq -r '.notReadyPrereqReportCount // 0' "$lab_validation")" '{notReadyPrereqReportCount:$actual}')"
     append_issue "lab-prereq-report-failed" "lab-baseline" "one or more lab host prerequisite reports was not ready" "$extra"
   fi
+  if ! jq -e '(.notReadyReportCount // 0) == 0' <<<"$lab_packaged_prereq_summary" >/dev/null; then
+    extra="$(jq -n --argjson actual "$(jq -r '.notReadyReportCount // 0' <<<"$lab_packaged_prereq_summary")" '{notReadyPackagedPrereqReportCount:$actual}')"
+    append_issue "lab-packaged-prereq-report-failed" "lab-baseline" "one or more copied prerequisite reports in the promoted lab baseline package is not ready" "$extra"
+  fi
   if ! jq -e --argjson required "$required_min_prereq_distinct_hostnames" '(.prereqDistinctHostnameCount // 0) >= $required' "$lab_validation" >/dev/null; then
     extra="$(jq -n --argjson required "$required_min_prereq_distinct_hostnames" --argjson actual "$(jq -r '.prereqDistinctHostnameCount // 0' "$lab_validation")" '{requiredMinPrereqDistinctHostnames:$required,actualPrereqDistinctHostnameCount:$actual}')"
     append_issue "lab-prereq-not-separate-hosts" "lab-baseline" "lab baseline does not prove prerequisite checks from enough distinct hostnames" "$extra"
+  fi
+  if ! jq -e --argjson required "$required_min_prereq_distinct_hostnames" '(.distinctHostnameCount // 0) >= $required' <<<"$lab_packaged_prereq_summary" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_prereq_distinct_hostnames" --argjson actual "$(jq -r '.distinctHostnameCount // 0' <<<"$lab_packaged_prereq_summary")" --argjson hostnames "$(jq -c '.hostnames // []' <<<"$lab_packaged_prereq_summary")" '{requiredMinPackagedPrereqDistinctHostnames:$required,actualPackagedPrereqDistinctHostnameCount:$actual,packagedPrereqHostnames:$hostnames}')"
+    append_issue "lab-packaged-prereq-not-separate-hosts" "lab-baseline" "promoted lab baseline package does not contain copied prerequisite reports from enough distinct hostnames" "$extra"
   fi
   if jq -e '.allowLoosePrereqGates == true' "$lab_validation" >/dev/null; then
     append_issue "lab-prereq-strict-gates-bypassed" "lab-baseline" "lab validation allowed loose prerequisite gates" "{\"path\":\"$lab_validation\"}"
@@ -393,9 +459,17 @@ if [[ -s "$lab_validation" ]]; then
     extra="$(jq -n --argjson required "$required_min_ready_prereq_reports" --argjson actual "$(jq -r '.strictPrereqReportCount // 0' "$lab_validation")" '{requiredMinStrictPrereqReports:$required,actualStrictPrereqReportCount:$actual}')"
     append_issue "lab-prereq-strict-gates-missing" "lab-baseline" "lab baseline does not prove enough strict clock, MTU, CPU-count, and no-netem prerequisite gates" "$extra"
   fi
+  if ! jq -e --argjson required "$required_min_ready_prereq_reports" '(.strictReportCount // 0) >= $required' <<<"$lab_packaged_prereq_summary" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_ready_prereq_reports" --argjson actual "$(jq -r '.strictReportCount // 0' <<<"$lab_packaged_prereq_summary")" '{requiredMinStrictPackagedPrereqReports:$required,actualStrictPackagedPrereqReportCount:$actual}')"
+    append_issue "lab-packaged-prereq-strict-gates-missing" "lab-baseline" "promoted lab baseline package does not contain enough copied prerequisite reports proving strict clock, MTU, CPU-count, and no-netem gates" "$extra"
+  fi
   if ! jq -e --argjson required "$required_min_prereq_distinct_hostnames" '(.strictPrereqDistinctHostnameCount // 0) >= $required' "$lab_validation" >/dev/null; then
     extra="$(jq -n --argjson required "$required_min_prereq_distinct_hostnames" --argjson actual "$(jq -r '.strictPrereqDistinctHostnameCount // 0' "$lab_validation")" '{requiredMinStrictPrereqDistinctHostnames:$required,actualStrictPrereqDistinctHostnameCount:$actual}')"
     append_issue "lab-prereq-strict-gates-not-separate-hosts" "lab-baseline" "lab baseline does not prove strict prerequisite gates from enough distinct hostnames" "$extra"
+  fi
+  if ! jq -e --argjson required "$required_min_prereq_distinct_hostnames" '(.strictDistinctHostnameCount // 0) >= $required' <<<"$lab_packaged_prereq_summary" >/dev/null; then
+    extra="$(jq -n --argjson required "$required_min_prereq_distinct_hostnames" --argjson actual "$(jq -r '.strictDistinctHostnameCount // 0' <<<"$lab_packaged_prereq_summary")" --argjson hostnames "$(jq -c '.strictHostnames // []' <<<"$lab_packaged_prereq_summary")" '{requiredMinStrictPackagedPrereqDistinctHostnames:$required,actualStrictPackagedPrereqDistinctHostnameCount:$actual,strictPackagedPrereqHostnames:$hostnames}')"
+    append_issue "lab-packaged-prereq-strict-gates-not-separate-hosts" "lab-baseline" "promoted lab baseline package does not contain copied strict prerequisite reports from enough distinct hostnames" "$extra"
   fi
   for scenario in curve multi-client-fanout fairness disappearing-clients batched-game-traffic resource-pack-transfer; do
     if ! jq -e --arg scenario "$scenario" '(.scenarioCounts[$scenario] // 0) > 0' "$lab_validation" >/dev/null; then
@@ -797,15 +871,22 @@ next_actions_json="$(jq -s '
       "failed-lab-validation",
       "lab-not-separate-hosts",
       "lab-missing-host-reports",
+      "lab-missing-packaged-host-reports",
       "lab-missing-prereq-reports",
+      "lab-missing-packaged-prereq-reports",
       "lab-prereq-not-ready",
+      "lab-packaged-prereq-not-ready",
       "lab-prereq-report-failed",
+      "lab-packaged-prereq-report-failed",
       "lab-prereq-not-separate-hosts",
+      "lab-packaged-prereq-not-separate-hosts",
       "lab-validation-bypasses-allowed",
       "lab-validation-bypass-flags",
       "lab-prereq-strict-gates-bypassed",
       "lab-prereq-strict-gates-missing",
-      "lab-prereq-strict-gates-not-separate-hosts"
+      "lab-packaged-prereq-strict-gates-missing",
+      "lab-prereq-strict-gates-not-separate-hosts",
+      "lab-packaged-prereq-strict-gates-not-separate-hosts"
     ]) then {
       code: "fix-lab-evidence",
       title: "Fix perfect-network validation evidence",
@@ -863,6 +944,8 @@ jq -n \
   --argjson requiredMinReadyPrereqReports "$required_min_ready_prereq_reports" \
   --argjson requiredMinPrereqDistinctHostnames "$required_min_prereq_distinct_hostnames" \
   --argjson requireSourceAudit "$require_source_audit" \
+  --argjson packagedHostReportCount "$lab_packaged_host_report_count" \
+  --argjson packagedPrereq "$lab_packaged_prereq_summary" \
   --argjson labSourceAudit "$lab_source_audit_json" \
   --argjson labHandoffSourceAudit "$lab_handoff_source_audit_json" \
   --argjson issues "$issues_array" \
@@ -875,6 +958,8 @@ jq -n \
     issueCount: ($issues | length),
     labBaseline: {
       path: $labBaseline,
+      packagedHostReportCount: $packagedHostReportCount,
+      packagedPrereq: $packagedPrereq,
       validation: ($labValidation[0] // null)
     },
     impairmentBaseline: {
@@ -936,12 +1021,18 @@ jq -n \
     echo "- Rows: \`$(jq -r '.rowCount // 0' "$lab_validation")\`"
     echo "- Capacity rows: \`$(jq -r '.capacityRowCount // 0' "$lab_validation")\`"
     echo "- Host reports: \`$(jq -r '.hostReportCount // 0' "$lab_validation")\`"
+    echo "- Packaged host reports: \`$lab_packaged_host_report_count\`"
     echo "- Distinct hostnames: \`$(jq -r '.distinctHostnameCount // 0' "$lab_validation")\`"
     echo "- Prereq reports: \`$(jq -r '.prereqReportCount // 0' "$lab_validation")\`"
     echo "- Ready prereq reports: \`$(jq -r '.readyPrereqReportCount // 0' "$lab_validation")\`"
     echo "- Strict prereq reports: \`$(jq -r '.strictPrereqReportCount // 0' "$lab_validation")\`"
     echo "- Distinct prereq hostnames: \`$(jq -r '.prereqDistinctHostnameCount // 0' "$lab_validation")\`"
     echo "- Strict prereq hostnames: \`$(jq -r '.strictPrereqDistinctHostnameCount // 0' "$lab_validation")\`"
+    echo "- Packaged prereq reports: \`$(jq -r '.reportCount // 0' <<<"$lab_packaged_prereq_summary")\`"
+    echo "- Packaged ready prereq reports: \`$(jq -r '.readyReportCount // 0' <<<"$lab_packaged_prereq_summary")\`"
+    echo "- Packaged strict prereq reports: \`$(jq -r '.strictReportCount // 0' <<<"$lab_packaged_prereq_summary")\`"
+    echo "- Packaged distinct prereq hostnames: \`$(jq -r '.distinctHostnameCount // 0' <<<"$lab_packaged_prereq_summary")\`"
+    echo "- Packaged strict prereq hostnames: \`$(jq -r '.strictDistinctHostnameCount // 0' <<<"$lab_packaged_prereq_summary")\`"
     echo "- Validated minimum iterations: \`$(jq -r '.minIterations // "missing"' "$lab_validation")\`"
     echo "- Validated minimum contention clients: \`$(jq -r '.minContentionClients // "missing"' "$lab_validation")\`"
     echo "- Validated minimum contention target/client Mbps: \`$(jq -r '.minContentionTargetClientMbps // "missing"' "$lab_validation")\`"

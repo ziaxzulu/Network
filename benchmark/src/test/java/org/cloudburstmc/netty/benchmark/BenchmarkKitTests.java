@@ -2905,6 +2905,58 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresPackagedHostAndPrereqReports() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-packaged-prereq-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        clearDirectory(labBaseline.resolve("host-reports"));
+        clearDirectory(labBaseline.resolve("prereq-reports"));
+
+        ProcessResult missingPackagedReports = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missingPackagedReports.exitCode, missingPackagedReports.output);
+        JsonNode readinessJson = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(readinessJson.path("ready").asBoolean());
+        Assertions.assertEquals(0, readinessJson.path("labBaseline").path("packagedHostReportCount").asInt());
+        Assertions.assertEquals(0, readinessJson.path("labBaseline").path("packagedPrereq")
+                .path("reportCount").asInt());
+        Assertions.assertTrue(readinessJson.findValuesAsText("code")
+                .contains("lab-missing-packaged-host-reports"));
+        Assertions.assertTrue(readinessJson.findValuesAsText("code")
+                .contains("lab-missing-packaged-prereq-reports"));
+        Assertions.assertTrue(readinessJson.findValuesAsText("code")
+                .contains("lab-packaged-prereq-not-ready"));
+        Assertions.assertTrue(readinessJson.findValuesAsText("code")
+                .contains("lab-packaged-prereq-not-separate-hosts"));
+        Assertions.assertTrue(readinessJson.findValuesAsText("code")
+                .contains("lab-packaged-prereq-strict-gates-missing"));
+        Assertions.assertTrue(readinessJson.path("nextActions").findValuesAsText("code")
+                .contains("fix-lab-evidence"));
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+    }
+
+    @Test
     public void testResultWriterProducesArtifacts() throws Exception {
         Path output = Files.createTempDirectory("raknet-benchmark-test");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
@@ -3219,6 +3271,37 @@ public class BenchmarkKitTests {
                         + ",\"multi-client-fanout\":2,\"fairness\":1,\"disappearing-clients\":1,"
                         + "\"batched-game-traffic\":3,\"resource-pack-transfer\":2}}\n",
                 StandardCharsets.UTF_8);
+
+        Path hostReports = labBaseline.resolve("host-reports");
+        clearDirectory(hostReports);
+        Files.createDirectories(hostReports);
+        for (int host = 0; host < 2; host++) {
+            Files.writeString(hostReports.resolve("host-" + host + "-host-report.md"),
+                    "# Host Report\n\n- Hostname: `host-" + host + "`\n",
+                    StandardCharsets.UTF_8);
+        }
+
+        Path prereqReports = labBaseline.resolve("prereq-reports");
+        clearDirectory(prereqReports);
+        Files.createDirectories(prereqReports);
+        int distinctHostCount = Math.max(1, prereqDistinctHostnameCount);
+        for (int prereq = 0; prereq < prereqReportCount; prereq++) {
+            boolean ready = prereq < readyPrereqReportCount;
+            int host = prereq % distinctHostCount;
+            String strictFields = ready
+                    ? ",\"requireClockSync\":true,\"requireNoNetem\":true,\"expectedMtu\":1500,"
+                    + "\"interfaceMtu\":1500,\"expectedMinCpus\":1,\"cpuCount\":8"
+                    : "";
+            String prefix = "prereq-host-" + host + "-" + prereq;
+            Files.writeString(prereqReports.resolve(prefix + "-prereq.json"),
+                    "{\"ready\":" + ready
+                            + ",\"hostname\":\"host-" + host + "\""
+                            + strictFields + "}\n",
+                    StandardCharsets.UTF_8);
+            Files.writeString(prereqReports.resolve(prefix + "-prereq.md"),
+                    "# Prereq\n",
+                    StandardCharsets.UTF_8);
+        }
 
         StringBuilder aggregate = new StringBuilder();
         StringBuilder capacity = new StringBuilder();
@@ -3852,6 +3935,20 @@ public class BenchmarkKitTests {
     private static void assumeShellTooling() throws Exception {
         Assumptions.assumeTrue(commandAvailable("bash"), "bash is required for benchmark script tests");
         Assumptions.assumeTrue(commandAvailable("jq"), "jq is required for benchmark script tests");
+    }
+
+    private static void clearDirectory(Path directory) throws Exception {
+        if (!Files.isDirectory(directory)) {
+            return;
+        }
+        try (java.nio.file.DirectoryStream<Path> children = Files.newDirectoryStream(directory)) {
+            for (Path child : children) {
+                if (Files.isDirectory(child)) {
+                    clearDirectory(child);
+                }
+                Files.deleteIfExists(child);
+            }
+        }
     }
 
     private static void assumeGit() throws Exception {
