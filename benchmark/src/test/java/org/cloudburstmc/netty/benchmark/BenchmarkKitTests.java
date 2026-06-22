@@ -523,11 +523,20 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(handoffCheckJson.path("ready").asBoolean());
         Assertions.assertEquals(0, handoffCheckJson.path("issueCount").asInt());
         Assertions.assertEquals(56, handoffCheckJson.path("expectedCurveRowsPerCurvePlan").asInt());
+        Assertions.assertEquals(56, handoffCheckJson.path("actualPerfectCurveRows").asInt());
+        Assertions.assertEquals(56, handoffCheckJson.path("actualPerfectRaisedCurveRows").asInt());
+        Assertions.assertEquals(1, handoffCheckJson.path("actualPerfectContentionRows").asInt());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedProfiles").size());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedContentionClients").asInt());
         Assertions.assertEquals(1.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(1500, handoffCheckJson.path("expectedMtu").asInt());
         Assertions.assertEquals(2, handoffCheckJson.path("expectedMinCpus").asInt());
+        Assertions.assertEquals(2, handoffCheckJson.path("actualImpairmentProfileRows").size());
+        for (JsonNode profileRows : handoffCheckJson.path("actualImpairmentProfileRows")) {
+            Assertions.assertEquals(56, profileRows.path("curveRows").asInt());
+            Assertions.assertEquals(56, profileRows.path("raisedCurveRows").asInt());
+            Assertions.assertEquals(1, profileRows.path("contentionRows").asInt());
+        }
 
         Path handoffReadme = handoff.resolve("README.md");
         Files.writeString(handoffReadme,
@@ -641,6 +650,11 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(5.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(500, handoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+        Assertions.assertEquals(56, handoffCheckJson.path("actualPerfectCurveRows").asInt());
+        Assertions.assertEquals(56, handoffCheckJson.path("actualPerfectRaisedCurveRows").asInt());
+        Assertions.assertEquals(8, handoffCheckJson.path("actualPerfectContentionRows").asInt());
+        Assertions.assertEquals(1, handoffCheckJson.path("actualImpairmentProfileRows").size());
+        Assertions.assertEquals(8, handoffCheckJson.path("actualImpairmentProfileRows").get(0).path("contentionRows").asInt());
         Assertions.assertTrue(handoffCheckJson.path("expectedContentionScenarios").toString()
                 .contains("\"batched-game-traffic\""));
         Assertions.assertTrue(handoffCheckJson.path("expectedContentionScenarios").toString()

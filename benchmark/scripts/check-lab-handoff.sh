@@ -402,6 +402,32 @@ if [[ -s "$impairment_plan/manifest.jsonl" ]]; then
   done < <(jq -r '[.profile, .plan, .applyScript, .statusScript, .clearScript] | @tsv' "$impairment_plan/manifest.jsonl")
 fi
 
+row_count() {
+  local path="$1"
+  if [[ -s "$path" ]]; then
+    jq -s 'length' "$path"
+  else
+    printf '0\n'
+  fi
+}
+
+actual_perfect_curve_rows="$(row_count "$perfect_plan/curve-plan/manifest.jsonl")"
+actual_perfect_raised_curve_rows="$(row_count "$perfect_plan/curve-raised-plan/manifest.jsonl")"
+actual_perfect_contention_rows="$(row_count "$perfect_plan/contention-plan/manifest.jsonl")"
+if [[ -s "$impairment_plan/manifest.jsonl" ]]; then
+  actual_impairment_profile_rows="$(while IFS=$'\t' read -r profile plan; do
+    [[ -z "$profile" ]] && continue
+    jq -n \
+      --arg profile "$profile" \
+      --argjson curveRows "$(row_count "$plan/curve-plan/manifest.jsonl")" \
+      --argjson raisedCurveRows "$(row_count "$plan/curve-raised-plan/manifest.jsonl")" \
+      --argjson contentionRows "$(row_count "$plan/contention-plan/manifest.jsonl")" \
+      '{profile:$profile,curveRows:$curveRows,raisedCurveRows:$raisedCurveRows,contentionRows:$contentionRows}'
+  done < <(jq -r '[.profile, .plan] | @tsv' "$impairment_plan/manifest.jsonl") | jq -s '.')"
+else
+  actual_impairment_profile_rows="[]"
+fi
+
 issues_array="$(jq -s '.' "$issues_jsonl")"
 
 jq -n \
@@ -421,6 +447,10 @@ jq -n \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson expectedCurveRows "$expected_curve_rows" \
+  --argjson actualPerfectCurveRows "$actual_perfect_curve_rows" \
+  --argjson actualPerfectRaisedCurveRows "$actual_perfect_raised_curve_rows" \
+  --argjson actualPerfectContentionRows "$actual_perfect_contention_rows" \
+  --argjson actualImpairmentProfileRows "$actual_impairment_profile_rows" \
   --argjson issues "$issues_array" \
   '{
     checkedAt: $checkedAt,
@@ -431,6 +461,10 @@ jq -n \
     expectedCurvePayloadSizes: $expectedCurvePayloadSizes,
     expectedCurveRatesMbps: $expectedCurveRatesMbps,
     expectedCurveRowsPerCurvePlan: $expectedCurveRows,
+    actualPerfectCurveRows: $actualPerfectCurveRows,
+    actualPerfectRaisedCurveRows: $actualPerfectRaisedCurveRows,
+    actualPerfectContentionRows: $actualPerfectContentionRows,
+    actualImpairmentProfileRows: $actualImpairmentProfileRows,
     expectedProfiles: $expectedProfiles,
     expectedContentionScenarios: $expectedContentionScenarios,
     expectedResourcePackPayloadSizes: $expectedResourcePackPayloadSizes,
@@ -452,6 +486,9 @@ jq -n \
   echo "- Issues: \`$(jq -r '.issueCount' "$check_json")\`"
   echo "- Handoff: \`$handoff_root\`"
   echo "- Expected curve rows per curve plan: \`$(jq -r '.expectedCurveRowsPerCurvePlan' "$check_json")\`"
+  echo "- Actual perfect curve rows: \`$(jq -r '.actualPerfectCurveRows' "$check_json")\`"
+  echo "- Actual perfect raised curve rows: \`$(jq -r '.actualPerfectRaisedCurveRows' "$check_json")\`"
+  echo "- Actual perfect contention rows: \`$(jq -r '.actualPerfectContentionRows' "$check_json")\`"
   echo "- Expected contention clients: \`$(jq -r '.expectedContentionClients' "$check_json")\`"
   echo "- Expected per-client Mbps: \`$(jq -r '.expectedPerClientMbps' "$check_json")\`"
   echo "- Expected MTU: \`$(jq -r '.expectedMtu' "$check_json")\`"
@@ -459,6 +496,16 @@ jq -n \
   echo "- Require CPU performance governor: \`$(jq -r '.requireCpuPerformance' "$check_json")\`"
   echo "- Required minimum contention clients: \`$(jq -r '.requiredMinContentionClients' "$check_json")\`"
   echo "- Required minimum per-client Mbps: \`$(jq -r '.requiredMinContentionTargetClientMbps' "$check_json")\`"
+  echo
+  echo "## Impairment Profile Rows"
+  echo
+  if jq -e '.actualImpairmentProfileRows | length == 0' "$check_json" >/dev/null; then
+    echo "No impairment profiles found."
+  else
+    echo "| Profile | Curve rows | Raised curve rows | Contention rows |"
+    echo "| --- | ---: | ---: | ---: |"
+    jq -r '.actualImpairmentProfileRows[] | "| `\(.profile)` | \(.curveRows) | \(.raisedCurveRows) | \(.contentionRows) |"' "$check_json"
+  fi
   echo
   echo "## Issues"
   echo
