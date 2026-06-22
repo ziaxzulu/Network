@@ -346,7 +346,7 @@ benchmark/scripts/plan-remote-worker-curve.sh \
   --max-send-deliver-ratio 1.2
 ```
 
-The plan writes `server-commands.sh`, one `receiver-<name>-commands.sh` per receiver, `merge-commands.sh`, a manifest, and a README. The combined lab planner also writes `check-plan-freshness.sh`; run it before starting workers so expired scheduled start times are caught before a lab run starts. The merge script labels remote rows as `curve-*`, concatenates a campaign-level `suite-aggregate.jsonl`, and runs `select-stable-bandwidth.sh` so the remote curve produces the same capacity artifacts as local suites.
+The plan writes `server-commands.sh`, one `receiver-<name>-commands.sh` per receiver, `merge-commands.sh`, a manifest, and a README. The combined lab planner also writes `check-plan-freshness.sh`; run it before starting workers so expired scheduled start times are caught before a lab run starts, and keep the generated `plan-freshness.json` with the lab evidence. The merge script labels remote rows as `curve-*`, concatenates a campaign-level `suite-aggregate.jsonl`, and runs `select-stable-bandwidth.sh` so the remote curve produces the same capacity artifacts as local suites.
 
 For production-like remote contention runs, generate a coordinated fanout, immediate small-packet fanout, fairness, disappearance, batched, and resource-pack plan:
 

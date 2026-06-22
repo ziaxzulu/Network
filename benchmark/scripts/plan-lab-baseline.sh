@@ -903,6 +903,7 @@ cat >"$freshness_script" <<EOF
 set -euo pipefail
 
 MIN_LEAD_SECONDS="\${MIN_LEAD_SECONDS:-60}"
+FRESHNESS_JSON="\${FRESHNESS_JSON:-$output_root/plan-freshness.json}"
 
 if ! [[ "\$MIN_LEAD_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "MIN_LEAD_SECONDS must be a non-negative integer" >&2
@@ -918,6 +919,9 @@ iso_from_ms() {
   date -u -d "@\$((millis / 1000))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%sms' "\$millis"
 }
 
+rows_tmp="\$(mktemp)"
+trap 'rm -f "\$rows_tmp"' EXIT
+checked_at="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 now_seconds="\$(date +%s)"
 threshold_ms=\$(((now_seconds + MIN_LEAD_SECONDS) * 1000))
 status=0
@@ -943,6 +947,9 @@ echo
 for manifest in "\${manifests[@]}"; do
   if [[ ! -s "\$manifest" ]]; then
     echo "missing manifest: \$manifest" >&2
+    jq -c -n \
+      --arg manifest "\$manifest" \
+      '{manifest:\$manifest, exists:false, result:"missing-manifest", reason:"manifest not found or empty"}' >>"\$rows_tmp"
     status=1
     continue
   fi
@@ -952,6 +959,10 @@ for manifest in "\${manifests[@]}"; do
   latest="\$(jq -s 'map(.startAtEpochMillis // empty) | max // empty' "\$manifest")"
   if [[ -z "\$earliest" || -z "\$latest" ]]; then
     echo "stale: \$manifest has no startAtEpochMillis values" >&2
+    jq -c -n \
+      --arg manifest "\$manifest" \
+      --argjson count "\$count" \
+      '{manifest:\$manifest, exists:true, cases:\$count, result:"stale", reason:"manifest has no startAtEpochMillis values"}' >>"\$rows_tmp"
     status=1
     continue
   fi
@@ -960,15 +971,44 @@ for manifest in "\${manifests[@]}"; do
   echo "cases=\$count"
   echo "earliest_start=\$(iso_from_ms "\$earliest")"
   echo "latest_start=\$(iso_from_ms "\$latest")"
+  result="fresh"
+  reason=""
   if [[ "\$earliest" -le "\$threshold_ms" ]]; then
-    echo "result=stale-or-too-close"
-    echo "reason=earliest start is less than MIN_LEAD_SECONDS from now; regenerate the lab plan before running workers"
+    result="stale-or-too-close"
+    reason="earliest start is less than MIN_LEAD_SECONDS from now; regenerate the lab plan before running workers"
     status=1
-  else
-    echo "result=fresh"
   fi
+  echo "result=\$result"
+  if [[ -n "\$reason" ]]; then
+    echo "reason=\$reason"
+  fi
+  jq -c -n \
+    --arg manifest "\$manifest" \
+    --arg result "\$result" \
+    --arg reason "\$reason" \
+    --arg earliestIso "\$(iso_from_ms "\$earliest")" \
+    --arg latestIso "\$(iso_from_ms "\$latest")" \
+    --argjson count "\$count" \
+    --argjson earliest "\$earliest" \
+    --argjson latest "\$latest" \
+    '{manifest:\$manifest, exists:true, cases:\$count, earliestStartEpochMillis:\$earliest, latestStartEpochMillis:\$latest, earliestStart:\$earliestIso, latestStart:\$latestIso, result:\$result, reason:\$reason}' >>"\$rows_tmp"
   echo
 done
+
+passed_json=false
+if [[ "\$status" -eq 0 ]]; then
+  passed_json=true
+fi
+mkdir -p "\$(dirname "\$FRESHNESS_JSON")"
+jq -s \
+  --arg kind "raknet-lab-plan-freshness" \
+  --arg checkedAt "\$checked_at" \
+  --argjson minimumLeadSeconds "\$MIN_LEAD_SECONDS" \
+  --argjson thresholdEpochMillis "\$threshold_ms" \
+  --argjson passed "\$passed_json" \
+  '{kind:\$kind, checkedAt:\$checkedAt, passed:\$passed, minimumLeadSeconds:\$minimumLeadSeconds, thresholdEpochMillis:\$thresholdEpochMillis, manifests:.}' \
+  "\$rows_tmp" >"\$FRESHNESS_JSON"
+echo "freshness_json=\$FRESHNESS_JSON"
 
 exit "\$status"
 EOF

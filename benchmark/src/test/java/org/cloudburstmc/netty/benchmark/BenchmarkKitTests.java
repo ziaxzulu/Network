@@ -1210,6 +1210,14 @@ public class BenchmarkKitTests {
         );
         Assertions.assertEquals(0, freshness.exitCode, freshness.output);
         Assertions.assertTrue(freshness.output.contains("result=fresh"));
+        Assertions.assertTrue(freshness.output.contains("freshness_json="));
+        JsonNode planFreshnessJson = JSON.readTree(Files.readString(
+                handoff.resolve("perfect-plan/plan-freshness.json"), StandardCharsets.UTF_8));
+        Assertions.assertEquals("raknet-lab-plan-freshness", planFreshnessJson.path("kind").asText());
+        Assertions.assertTrue(planFreshnessJson.path("passed").asBoolean());
+        Assertions.assertEquals(3, planFreshnessJson.path("manifests").size());
+        Assertions.assertTrue(planFreshnessJson.path("manifests").findValuesAsText("result")
+                .stream().allMatch("fresh"::equals));
 
         ProcessResult impairmentFreshness = runProcess(root, Duration.ofSeconds(20),
                 "bash",
@@ -1219,6 +1227,17 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(impairmentFreshness.output.contains("==> profile perfect"));
         Assertions.assertTrue(impairmentFreshness.output.contains("==> profile near-loss"));
         Assertions.assertTrue(impairmentFreshness.output.contains("result=fresh"));
+        Assertions.assertTrue(impairmentFreshness.output.contains("freshness_json="));
+        JsonNode impairmentFreshnessJson = JSON.readTree(Files.readString(
+                handoff.resolve("impairment-plan/plan-freshness.json"), StandardCharsets.UTF_8));
+        Assertions.assertEquals("raknet-lab-impairment-plan-freshness",
+                impairmentFreshnessJson.path("kind").asText());
+        Assertions.assertTrue(impairmentFreshnessJson.path("passed").asBoolean());
+        Assertions.assertEquals(2, impairmentFreshnessJson.path("profiles").size());
+        Assertions.assertTrue(impairmentFreshnessJson.path("profiles").findValuesAsText("profile")
+                .containsAll(List.of("perfect", "near-loss")));
+        Assertions.assertTrue(impairmentFreshnessJson.path("profiles").findValuesAsText("result")
+                .stream().allMatch("fresh"::equals));
     }
 
     @Test

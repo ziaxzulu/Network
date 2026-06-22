@@ -304,6 +304,7 @@ set -euo pipefail
 
 REPO_ROOT="\${REPO_ROOT:-\$(pwd)}"
 MIN_LEAD_SECONDS="\${MIN_LEAD_SECONDS:-60}"
+FRESHNESS_JSON="\${FRESHNESS_JSON:-$output_root/plan-freshness.json}"
 MANIFEST="$manifest"
 cd "\$REPO_ROOT"
 
@@ -316,6 +317,9 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 2
 fi
 
+rows_tmp="\$(mktemp)"
+trap 'rm -f "\$rows_tmp"' EXIT
+checked_at="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 status=0
 while IFS=\$'\t' read -r profile plan; do
   if [[ -z "\$profile" || -z "\$plan" ]]; then
@@ -328,13 +332,48 @@ while IFS=\$'\t' read -r profile plan; do
   echo "==> profile \$profile"
   if [[ ! -x "\$check" ]]; then
     echo "missing freshness check: \$check" >&2
+    jq -c -n \
+      --arg profile "\$profile" \
+      --arg plan "\$plan" \
+      --arg check "\$check" \
+      '{profile:\$profile, plan:\$plan, check:\$check, passed:false, result:"missing-freshness-check"}' >>"\$rows_tmp"
     status=1
     continue
   fi
+  profile_json="\$plan/plan-freshness.json"
   if ! MIN_LEAD_SECONDS="\$MIN_LEAD_SECONDS" "\$check"; then
     status=1
   fi
+  if [[ -s "\$profile_json" ]]; then
+    jq -c \
+      --arg profile "\$profile" \
+      --arg plan "\$plan" \
+      --arg check "\$check" \
+      '. + {profile:\$profile, plan:\$plan, check:\$check}' "\$profile_json" >>"\$rows_tmp"
+  else
+    jq -c -n \
+      --arg profile "\$profile" \
+      --arg plan "\$plan" \
+      --arg check "\$check" \
+      '{profile:\$profile, plan:\$plan, check:\$check, passed:false, result:"missing-profile-freshness-json"}' >>"\$rows_tmp"
+    status=1
+  fi
 done < <(jq -r '[.profile, .plan] | @tsv' "\$MANIFEST")
+
+passed_json=false
+if [[ "\$status" -eq 0 ]]; then
+  passed_json=true
+fi
+mkdir -p "\$(dirname "\$FRESHNESS_JSON")"
+jq -s \
+  --arg kind "raknet-lab-impairment-plan-freshness" \
+  --arg checkedAt "\$checked_at" \
+  --arg manifest "\$MANIFEST" \
+  --argjson minimumLeadSeconds "\$MIN_LEAD_SECONDS" \
+  --argjson passed "\$passed_json" \
+  '{kind:\$kind, checkedAt:\$checkedAt, passed:\$passed, minimumLeadSeconds:\$minimumLeadSeconds, manifest:\$manifest, profiles:.}' \
+  "\$rows_tmp" >"\$FRESHNESS_JSON"
+echo "freshness_json=\$FRESHNESS_JSON"
 
 exit "\$status"
 EOF
