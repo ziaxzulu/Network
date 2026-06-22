@@ -222,15 +222,7 @@ check_path() {
   if [[ "$executable" == "true" && ! -x "$path" ]]; then
     append_issue "non-executable-path" "$component" "required handoff script is not executable" "$(jq -n --arg path "$path" '{path:$path}')"
   fi
-}
-
-check_shell_syntax() {
-  local path="$1"
-  local component="$2"
-  if [[ ! -s "$path" ]]; then
-    return
-  fi
-  if ! bash -n "$path" >/dev/null 2>&1; then
+  if [[ "$executable" == "true" && -s "$path" ]] && ! bash -n "$path" >/dev/null 2>&1; then
     append_issue "invalid-shell-syntax" "$component" "handoff script has invalid shell syntax" \
       "$(jq -n --arg path "$path" '{path:$path}')"
   fi
@@ -505,7 +497,6 @@ elif [[ "$promote_script" != "$handoff_root/promote-and-check.sh" ]]; then
     "$(jq -n --arg expected "$handoff_root/promote-and-check.sh" --arg actual "$promote_script" '{expected:$expected,actual:$actual}')"
 fi
 check_path "$promote_script" "handoff" true
-check_shell_syntax "$promote_script" "promotion-helper"
 check_readme_contains "benchmark/scripts/check-lab-handoff.sh --handoff" "handoff README does not show the preflight command"
 check_readme_contains "benchmark/scripts/check-lab-host-prereqs.sh" "handoff README does not show the host prerequisite check"
 if [[ -n "$expected_mtu" ]]; then

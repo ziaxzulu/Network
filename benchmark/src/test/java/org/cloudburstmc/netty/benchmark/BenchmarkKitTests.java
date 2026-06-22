@@ -813,6 +813,25 @@ public class BenchmarkKitTests {
                 .contains("invalid-shell-syntax"));
         Files.writeString(promoteScriptPath, originalPromoteScript, StandardCharsets.UTF_8);
 
+        Path perfectMergeScript = handoff.resolve("perfect-plan/merge-all.sh");
+        String originalPerfectMergeScript = Files.readString(perfectMergeScript, StandardCharsets.UTF_8);
+        Files.writeString(perfectMergeScript, originalPerfectMergeScript + "\nif broken\n", StandardCharsets.UTF_8);
+        ProcessResult invalidMergeSyntaxCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-merge-syntax-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
+        );
+        Assertions.assertEquals(1, invalidMergeSyntaxCheck.exitCode, invalidMergeSyntaxCheck.output);
+        JsonNode invalidMergeSyntaxJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-merge-syntax-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(invalidMergeSyntaxJson.findValuesAsText("code")
+                .contains("invalid-shell-syntax"));
+        Files.writeString(perfectMergeScript, originalPerfectMergeScript, StandardCharsets.UTF_8);
+
         Path handoffManifestPath = handoff.resolve("handoff-manifest.json");
         String originalHandoffManifest = Files.readString(handoffManifestPath, StandardCharsets.UTF_8);
         JsonNode manifestWithStaleEvidence = JSON.readTree(originalHandoffManifest);
