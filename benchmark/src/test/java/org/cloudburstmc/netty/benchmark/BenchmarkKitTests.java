@@ -1548,9 +1548,11 @@ public class BenchmarkKitTests {
         String impairmentSummary = Files.readString(impairmentBaseline.resolve("impairment-summary.json"),
                 StandardCharsets.UTF_8)
                 .replace(",{\"benchmarkName\":\"batched-game-traffic\",\"batchIntervalMillis\":50,"
-                        + "\"logicalPacketsPerBatch\":8,\"batchGroups\":4}", "")
+                        + "\"logicalPacketsPerBatch\":8,\"batchGroups\":4"
+                        + readinessRetryFieldsJson() + "}", "")
                 .replace(",{\"benchmarkName\":\"resource-pack-transfer\",\"payloadSize\":262144,"
-                        + "\"batchIntervalMillis\":200}", "");
+                        + "\"batchIntervalMillis\":200"
+                        + readinessRetryFieldsJson() + "}", "");
         Files.writeString(impairmentBaseline.resolve("impairment-summary.json"), impairmentSummary,
                 StandardCharsets.UTF_8);
 
@@ -1632,6 +1634,45 @@ public class BenchmarkKitTests {
                 .contains("lab-missing-disappearance-mode"));
         Assertions.assertTrue(missingReadiness.findValuesAsText("code")
                 .contains("impairment-missing-disappearance-mode"));
+    }
+
+    @Test
+    public void testBaselineReadinessRequiresRetryPressureFields() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-retry-field-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"),
+                Files.readString(labBaseline.resolve("suite-aggregate.jsonl"), StandardCharsets.UTF_8)
+                        .replace("\"undeliveredServerGbps\":0,", ""),
+                StandardCharsets.UTF_8);
+
+        writeReadinessImpairmentBaseline(impairmentBaseline);
+        Files.writeString(impairmentBaseline.resolve("impairment-summary.json"),
+                Files.readString(impairmentBaseline.resolve("impairment-summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"undeliveredServerGbps\":0,", ""),
+                StandardCharsets.UTF_8);
+
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode missingReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingReadiness.path("ready").asBoolean());
+        Assertions.assertTrue(missingReadiness.path("requiredRetryPressureFields").isArray());
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("lab-missing-retry-pressure-field"));
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("impairment-missing-retry-pressure-field"));
     }
 
     @Test
@@ -2022,6 +2063,12 @@ public class BenchmarkKitTests {
                 + "\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}";
     }
 
+    private static String readinessRetryFieldsJson() {
+        return ",\"undeliveredServerGbps\":0,"
+                + "\"affectedUndeliveredServerGbps\":0,"
+                + "\"affectedServerDatagramsOutPerSecond\":0";
+    }
+
     private static void writeHandoffManifest(Path handoffManifest) throws Exception {
         Files.createDirectories(handoffManifest.getParent());
         Files.writeString(handoffManifest,
@@ -2074,6 +2121,7 @@ public class BenchmarkKitTests {
                     .append(payloadSize)
                     .append("\",\"benchmarkName\":\"curve-100_0mbps\",\"scenario\":\"curve\",\"payloadSize\":")
                     .append(payloadSize)
+                    .append(readinessRetryFieldsJson())
                     .append("}\n");
             capacity.append("{\"summaryKind\":\"bandwidth-capacity\",\"case\":\"lab-curve-p")
                     .append(payloadSize)
@@ -2082,24 +2130,29 @@ public class BenchmarkKitTests {
                     .append(",\"selected\":true,\"selectedCandidate\":{\"benchmarkName\":\"curve-100_0mbps\",")
                     .append("\"deliveredGbps\":1.0,\"probeRttP99Millis\":1.0}}\n");
         }
-        aggregate.append("{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\",\"payloadSize\":512}\n");
-        aggregate.append("{\"case\":\"fairness\",\"benchmarkName\":\"fairness\",\"payloadSize\":512}\n");
+        aggregate.append("{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\",\"payloadSize\":512")
+                .append(readinessRetryFieldsJson()).append("}\n");
+        aggregate.append("{\"case\":\"fairness\",\"benchmarkName\":\"fairness\",\"payloadSize\":512")
+                .append(readinessRetryFieldsJson()).append("}\n");
         aggregate.append("{\"case\":\"disappear-blackhole\",\"benchmarkName\":\"disappearing-clients\",")
-                .append("\"payloadSize\":512,\"disappearanceMode\":\"blackhole\"}\n");
+                .append("\"payloadSize\":512,\"disappearanceMode\":\"blackhole\"")
+                .append(readinessRetryFieldsJson()).append("}\n");
         for (int batchIntervalMillis : new int[]{10, 20, 50}) {
             aggregate.append("{\"case\":\"batch-")
                     .append(batchIntervalMillis)
                     .append("ms\",\"benchmarkName\":\"batched-game-traffic\",\"payloadSize\":512,")
                     .append("\"batchIntervalMillis\":")
                     .append(batchIntervalMillis)
-                    .append(",\"logicalPacketsPerBatch\":8,\"batchGroups\":4}\n");
+                    .append(",\"logicalPacketsPerBatch\":8,\"batchGroups\":4")
+                    .append(readinessRetryFieldsJson()).append("}\n");
         }
         for (int chunkSize : new int[]{8192, 262144}) {
             aggregate.append("{\"case\":\"resource-pack-")
                     .append(chunkSize)
                     .append("\",\"benchmarkName\":\"resource-pack-transfer\",\"payloadSize\":")
                     .append(chunkSize)
-                    .append(",\"batchIntervalMillis\":200}\n");
+                    .append(",\"batchIntervalMillis\":200")
+                    .append(readinessRetryFieldsJson()).append("}\n");
         }
         Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("bandwidth-capacity.jsonl"), capacity.toString(), StandardCharsets.UTF_8);
@@ -2437,24 +2490,29 @@ public class BenchmarkKitTests {
             }
             profiles.append("{\"profile\":\"").append(profileNames[profileIndex]).append("\",")
                     .append("\"aggregate\":{\"contentionRows\":[")
-                    .append("{\"benchmarkName\":\"multi-client-fanout\"},")
-                    .append("{\"benchmarkName\":\"fairness\"}");
+                    .append("{\"benchmarkName\":\"multi-client-fanout\"")
+                    .append(readinessRetryFieldsJson()).append("},")
+                    .append("{\"benchmarkName\":\"fairness\"")
+                    .append(readinessRetryFieldsJson()).append("}");
             if (includeDisappearingContention) {
                 profiles.append(",{\"benchmarkName\":\"disappearing-clients\",")
                         .append("\"case\":\"disappear-blackhole\",")
-                        .append("\"disappearanceMode\":\"blackhole\"}");
+                        .append("\"disappearanceMode\":\"blackhole\"")
+                        .append(readinessRetryFieldsJson()).append("}");
             }
             for (int batchIntervalMillis : new int[]{10, 20, 50}) {
                 profiles.append(",{\"benchmarkName\":\"batched-game-traffic\",")
                         .append("\"batchIntervalMillis\":")
                         .append(batchIntervalMillis)
-                        .append(",\"logicalPacketsPerBatch\":8,\"batchGroups\":4}");
+                        .append(",\"logicalPacketsPerBatch\":8,\"batchGroups\":4")
+                        .append(readinessRetryFieldsJson()).append("}");
             }
             for (int chunkSize : new int[]{8192, 262144}) {
                 profiles.append(",{\"benchmarkName\":\"resource-pack-transfer\",")
                         .append("\"payloadSize\":")
                         .append(chunkSize)
-                        .append(",\"batchIntervalMillis\":200}");
+                        .append(",\"batchIntervalMillis\":200")
+                        .append(readinessRetryFieldsJson()).append("}");
             }
             profiles.append("]},\"capacity\":{\"rowCount\":").append(payloadSizes.length)
                     .append(",\"selectedCount\":").append(payloadSizes.length)

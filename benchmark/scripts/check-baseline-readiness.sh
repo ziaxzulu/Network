@@ -11,6 +11,7 @@ required_batch_intervals_ms="10,20,50"
 required_resource_pack_chunk_sizes="8192,262144"
 required_resource_pack_intervals_ms="200"
 required_disappearance_modes="blackhole"
+required_retry_pressure_fields="undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond"
 required_min_contention_clients="500"
 required_min_contention_target_client_mbps="5"
 required_min_prereq_reports="2"
@@ -35,6 +36,7 @@ Options:
   --required-resource-pack-chunk-sizes CSV Required resource-pack chunk payload sizes. Default: 8192,262144.
   --required-resource-pack-intervals-ms CSV Required resource-pack intervals in milliseconds. Default: 200.
   --required-disappearance-modes CSV Required disappearing-client modes. Default: blackhole.
+  --required-retry-pressure-fields CSV Required aggregate fields for send-work/retry-pressure comparison. Default: undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond.
   --required-min-contention-clients N Required lab validation contention-client gate. Default: 500.
   --required-min-contention-target-client-mbps N Required lab validation per-client Mbps gate. Default: 5.
   --required-min-prereq-reports N Required lab prereq reports. Default: 2.
@@ -85,6 +87,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --required-disappearance-modes)
       required_disappearance_modes="$2"
+      shift 2
+      ;;
+    --required-retry-pressure-fields)
+      required_retry_pressure_fields="$2"
       shift 2
       ;;
     --required-min-contention-clients)
@@ -240,6 +246,7 @@ required_batch_intervals_json="$(csv_json_duration_millis_array "$required_batch
 required_resource_pack_chunks_json="$(csv_json_number_array "$required_resource_pack_chunk_sizes")"
 required_resource_pack_intervals_json="$(csv_json_duration_millis_array "$required_resource_pack_intervals_ms")"
 required_disappearance_modes_json="$(csv_json_array "$required_disappearance_modes")"
+required_retry_pressure_fields_json="$(csv_json_array "$required_retry_pressure_fields")"
 
 if [[ ! -s "$lab_manifest" ]]; then
   append_issue "missing-lab-baseline-manifest" "lab-baseline" "promoted lab baseline manifest is missing" "{\"path\":\"$lab_manifest\"}"
@@ -343,6 +350,18 @@ if [[ -s "$lab_capacity" ]] && ! jq -s 'all(.[]; (.selected // false) == true)' 
 fi
 
 if [[ -s "$lab_aggregate" ]]; then
+  missing_lab_retry_fields="$(jq -r -s --argjson expected "$required_retry_pressure_fields_json" '
+    .[] as $row
+    | $expected[] as $field
+    | select(($row | has($field)) | not)
+    | [($row.case // ""), ($row.benchmarkName // ""), $field] | @tsv
+  ' "$lab_aggregate")"
+  while IFS=$'\t' read -r case_name benchmark_name field_name; do
+    [[ -z "$field_name" ]] && continue
+    extra="$(jq -n --arg case "$case_name" --arg benchmarkName "$benchmark_name" --arg field "$field_name" '{case:$case,benchmarkName:$benchmarkName,field:$field}')"
+    append_issue "lab-missing-retry-pressure-field" "lab-baseline" "lab aggregate row is missing a required retry-pressure field" "$extra"
+  done <<<"$missing_lab_retry_fields"
+
   missing_curve_payloads="$(jq -r -s --argjson expected "$required_curve_payloads_json" '
     def is_curve:
       ((.scenario // "") == "curve")
@@ -554,6 +573,21 @@ if [[ -s "$impairment_summary" ]]; then
     append_issue "impairment-missing-contention-scenario" "impairment-baseline" "impairment profile is missing a required contention scenario" "$extra"
   done <<<"$missing_impairment_contention"
 
+  missing_impairment_retry_fields="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedFields "$required_retry_pressure_fields_json" '
+    (.profiles // [])[]
+    | .profile as $profile
+    | select(($expectedProfiles | index($profile)) != null)
+    | (.aggregate.contentionRows[]? as $row
+      | $expectedFields[] as $field
+      | select(($row | has($field)) | not)
+      | [$profile, ($row.case // ""), ($row.benchmarkName // ""), $field] | @tsv)
+  ' "$impairment_summary")"
+  while IFS=$'\t' read -r profile case_name benchmark_name field_name; do
+    [[ -z "$profile" || -z "$field_name" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --arg case "$case_name" --arg benchmarkName "$benchmark_name" --arg field "$field_name" '{profile:$profile,case:$case,benchmarkName:$benchmarkName,field:$field}')"
+    append_issue "impairment-missing-retry-pressure-field" "impairment-baseline" "impairment contention row is missing a required retry-pressure field" "$extra"
+  done <<<"$missing_impairment_retry_fields"
+
   missing_impairment_batch_intervals="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedIntervals "$required_batch_intervals_json" '
     (.profiles // [])[]
     | .profile as $profile
@@ -693,6 +727,7 @@ jq -n \
   --argjson requiredResourcePackChunkSizes "$required_resource_pack_chunks_json" \
   --argjson requiredResourcePackIntervalsMillis "$required_resource_pack_intervals_json" \
   --argjson requiredDisappearanceModes "$required_disappearance_modes_json" \
+  --argjson requiredRetryPressureFields "$required_retry_pressure_fields_json" \
   --argjson requiredMinContentionClients "$required_min_contention_clients" \
   --argjson requiredMinContentionTargetClientMbps "$required_min_contention_target_client_mbps" \
   --argjson requiredMinPrereqReports "$required_min_prereq_reports" \
@@ -721,6 +756,7 @@ jq -n \
     requiredResourcePackChunkSizes: $requiredResourcePackChunkSizes,
     requiredResourcePackIntervalsMillis: $requiredResourcePackIntervalsMillis,
     requiredDisappearanceModes: $requiredDisappearanceModes,
+    requiredRetryPressureFields: $requiredRetryPressureFields,
     requiredMinContentionClients: $requiredMinContentionClients,
     requiredMinContentionTargetClientMbps: $requiredMinContentionTargetClientMbps,
     requiredMinPrereqReports: $requiredMinPrereqReports,
@@ -744,6 +780,7 @@ jq -n \
   echo "- Required resource-pack chunk sizes: \`$required_resource_pack_chunk_sizes\`"
   echo "- Required resource-pack intervals ms: \`$required_resource_pack_intervals_ms\`"
   echo "- Required disappearance modes: \`$required_disappearance_modes\`"
+  echo "- Required retry-pressure fields: \`$required_retry_pressure_fields\`"
   echo "- Required minimum contention clients: \`$required_min_contention_clients\`"
   echo "- Required minimum contention target/client Mbps: \`$required_min_contention_target_client_mbps\`"
   echo "- Required prereq reports: \`$required_min_prereq_reports\`"
