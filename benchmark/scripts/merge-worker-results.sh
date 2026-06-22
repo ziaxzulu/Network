@@ -132,9 +132,11 @@ jq -s \
 
   def sum_or_zero: if length == 0 then 0 else add end;
   def max_or_zero: if length == 0 then 0 else max end;
+  def max0($value): if ($value // 0) < 0 then 0 else ($value // 0) end;
   def ratio($num; $den): if ($den // 0) == 0 then 0 else (($num // 0) / $den) end;
   def gbps($bytes; $elapsed_ms): if ($elapsed_ms // 0) <= 0 then 0 else (($bytes // 0) * 8 / ($elapsed_ms * 1000000)) end;
   def mbps($bytes; $elapsed_ms): if ($elapsed_ms // 0) <= 0 then 0 else (($bytes // 0) * 8 / ($elapsed_ms * 1000)) end;
+  def per_second($count; $elapsed_ms): if ($elapsed_ms // 0) <= 0 then 0 else (($count // 0) * 1000 / $elapsed_ms) end;
   def spread_pct($values):
     ($values | map(. // 0) | sort) as $s |
     if ($s | length) < 2 then 0
@@ -197,7 +199,11 @@ jq -s \
   ($receivers | map((.iterations // []) | map(.clients // 0) | max_or_zero) | sum_or_zero) as $receiver_clients |
   ($receivers | map((.iterations // []) | map(.affectedClients // 0) | max_or_zero) | sum_or_zero) as $receiver_affected_clients |
   ($server_iterations | map(.serverBytesOut // 0) | sum_or_zero) as $server_bytes_out |
+  ($server_iterations | map(.healthyServerBytesOut // 0) | sum_or_zero) as $server_healthy_bytes_out |
+  ($server_iterations | map(.affectedServerBytesOut // 0) | sum_or_zero) as $server_affected_bytes_out |
   ($server_iterations | map(.serverDatagramsOut // 0) | sum_or_zero) as $server_datagrams_out |
+  ($server_iterations | map(.healthyServerDatagramsOut // 0) | sum_or_zero) as $server_healthy_datagrams_out |
+  ($server_iterations | map(.affectedServerDatagramsOut // 0) | sum_or_zero) as $server_affected_datagrams_out |
   ($server_iterations | map(.staleDatagrams // 0) | sum_or_zero) as $server_stale_datagrams |
   ($server_iterations | map(.nackIn // 0) | sum_or_zero) as $server_nack_in |
   ($server_iterations | map(.nackOut // 0) | sum_or_zero) as $server_nack_out |
@@ -251,9 +257,12 @@ jq -s \
   (gbps($receiver_bytes; $receiver_elapsed_ms)) as $receiver_delivered_gbps |
   (gbps($healthy_receiver_bytes; $receiver_elapsed_ms)) as $healthy_delivered_gbps |
   (gbps($affected_receiver_bytes; $receiver_elapsed_ms)) as $affected_delivered_gbps |
+  (max0($server_bytes_out - $receiver_bytes)) as $undelivered_server_bytes_out |
+  (max0($server_healthy_bytes_out - $healthy_receiver_bytes)) as $healthy_undelivered_server_bytes_out |
+  (max0($server_affected_bytes_out - $affected_receiver_bytes)) as $affected_undelivered_server_bytes_out |
   (ratio($server_bytes_out; $receiver_bytes)) as $send_deliver_ratio |
-  (ratio(($server_iterations | map(.healthyServerBytesOut // 0) | sum_or_zero); $healthy_receiver_bytes)) as $healthy_send_deliver_ratio |
-  (ratio(($server_iterations | map(.affectedServerBytesOut // 0) | sum_or_zero); $affected_receiver_bytes)) as $affected_send_deliver_ratio |
+  (ratio($server_healthy_bytes_out; $healthy_receiver_bytes)) as $healthy_send_deliver_ratio |
+  (ratio($server_affected_bytes_out; $affected_receiver_bytes)) as $affected_send_deliver_ratio |
   (
     {
       summaryKind: "aggregate",
@@ -291,7 +300,15 @@ jq -s \
       affectedDeliveredGbps: $affected_delivered_gbps,
       serverBytesOut: $server_bytes_out,
       serverDatagramsOut: $server_datagrams_out,
-      serverDatagramsOutPerSecond: (if $server_elapsed_ms <= 0 then 0 else ($server_datagrams_out * 1000 / $server_elapsed_ms) end),
+      serverDatagramsOutPerSecond: per_second($server_datagrams_out; $server_elapsed_ms),
+      healthyServerDatagramsOutPerSecond: per_second($server_healthy_datagrams_out; $server_elapsed_ms),
+      affectedServerDatagramsOutPerSecond: per_second($server_affected_datagrams_out; $server_elapsed_ms),
+      undeliveredServerBytesOut: $undelivered_server_bytes_out,
+      undeliveredServerGbps: gbps($undelivered_server_bytes_out; $server_elapsed_ms),
+      healthyUndeliveredServerBytesOut: $healthy_undelivered_server_bytes_out,
+      healthyUndeliveredServerGbps: gbps($healthy_undelivered_server_bytes_out; $server_elapsed_ms),
+      affectedUndeliveredServerBytesOut: $affected_undelivered_server_bytes_out,
+      affectedUndeliveredServerGbps: gbps($affected_undelivered_server_bytes_out; $server_elapsed_ms),
       sentToDeliveredBytesRatio: $send_deliver_ratio,
       healthySentToDeliveredBytesRatio: $healthy_send_deliver_ratio,
       affectedSentToDeliveredBytesRatio: $affected_send_deliver_ratio,
@@ -377,7 +394,7 @@ jq -s \
 jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
 
 {
-	  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
+	  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,undelivered_server_gbps,healthy_undelivered_server_gbps,affected_undelivered_server_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,healthy_server_datagrams_out_s,affected_server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
   jq -r '
     .aggregate as $a |
     [
@@ -400,10 +417,15 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.deliveredGbps,
       $a.healthyDeliveredGbps,
       $a.affectedDeliveredGbps,
+      $a.undeliveredServerGbps,
+      $a.healthyUndeliveredServerGbps,
+      $a.affectedUndeliveredServerGbps,
       $a.clientMbpsP50,
       $a.clientMbpsP99,
       $a.sentToDeliveredBytesRatio,
       $a.serverDatagramsOutPerSecond,
+      $a.healthyServerDatagramsOutPerSecond,
+      $a.affectedServerDatagramsOutPerSecond,
       $a.staleDatagramsPerSecond,
       $a.nackOutPerSecond,
       $a.probeRttP99Millis,
@@ -446,10 +468,15 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       ["Receiver delivered Gbps", fmt($a.deliveredGbps)],
       ["Healthy delivered Gbps", fmt($a.healthyDeliveredGbps)],
       ["Affected delivered Gbps", fmt($a.affectedDeliveredGbps)],
+      ["Undelivered server Gbps", fmt($a.undeliveredServerGbps)],
+      ["Healthy undelivered server Gbps", fmt($a.healthyUndeliveredServerGbps)],
+      ["Affected undelivered server Gbps", fmt($a.affectedUndeliveredServerGbps)],
       ["Client Mbps p50", fmt($a.clientMbpsP50)],
       ["Client Mbps p99", fmt($a.clientMbpsP99)],
       ["Send/deliver byte ratio", fmt($a.sentToDeliveredBytesRatio)],
       ["Server datagrams out/s", fmt($a.serverDatagramsOutPerSecond)],
+      ["Healthy datagrams out/s", fmt($a.healthyServerDatagramsOutPerSecond)],
+      ["Affected datagrams out/s", fmt($a.affectedServerDatagramsOutPerSecond)],
       ["Stale datagrams/s", fmt($a.staleDatagramsPerSecond)],
       ["NACK out/s", fmt($a.nackOutPerSecond)],
       ["Probe p99 ms", fmt($a.probeRttP99Millis)],

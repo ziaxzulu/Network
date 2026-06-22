@@ -92,8 +92,8 @@ public final class BenchmarkResultWriter {
             writer.write("- Start at epoch ms: `" + startAt(result.config()) + "`\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
-            writer.write("| Name | Iteration | Clients | Active | Open | Disconnected State | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | Send/Deliver | Affected Send/Deliver | Datagram Out/s | Stale/s | NACK Out/s | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Max Queue |\n");
-            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+            writer.write("| Name | Iteration | Clients | Active | Open | Disconnected State | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Undelivered Gbps | Affected Undelivered Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | Send/Deliver | Affected Send/Deliver | Datagram Out/s | Affected Datagram Out/s | Stale/s | NACK Out/s | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Max Queue |\n");
+            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
                 writer.write("| " + iteration.name
                         + " | " + iteration.iteration
@@ -112,6 +112,8 @@ public final class BenchmarkResultWriter {
                         + " | " + format(iteration.deliveredLogicalPacketsPerSecond)
                         + " | " + format(iteration.healthyDeliveredGbps)
                         + " | " + format(iteration.affectedDeliveredGbps)
+                        + " | " + format(iteration.undeliveredServerGbps)
+                        + " | " + format(iteration.affectedUndeliveredServerGbps)
                         + " | " + format(iteration.perClientThroughput.p50Mbps())
                         + " | " + format(iteration.perClientThroughput.p99Mbps())
                         + " | " + format(iteration.healthyClientThroughput.p50Mbps())
@@ -119,6 +121,7 @@ public final class BenchmarkResultWriter {
                         + " | " + format(iteration.sentToDeliveredBytesRatio)
                         + " | " + format(iteration.affectedSentToDeliveredBytesRatio)
                         + " | " + format(iteration.serverDatagramsOutPerSecond)
+                        + " | " + format(iteration.affectedServerDatagramsOutPerSecond)
                         + " | " + format(iteration.staleDatagramsPerSecond)
                         + " | " + format(iteration.nackOutPerSecond)
                         + " | " + format(iteration.probeRtt.percentileMillis(95.0D))
@@ -275,6 +278,12 @@ public final class BenchmarkResultWriter {
             "delivered_gbps",
             "healthy_delivered_gbps",
             "affected_delivered_gbps",
+            "undelivered_server_bytes_out",
+            "undelivered_server_gbps",
+            "healthy_undelivered_server_bytes_out",
+            "healthy_undelivered_server_gbps",
+            "affected_undelivered_server_bytes_out",
+            "affected_undelivered_server_gbps",
             "server_bytes_out",
             "server_datagrams_out",
             "server_datagrams_out_s",
@@ -282,6 +291,8 @@ public final class BenchmarkResultWriter {
             "affected_server_bytes_out",
             "healthy_server_datagrams_out",
             "affected_server_datagrams_out",
+            "healthy_server_datagrams_out_s",
+            "affected_server_datagrams_out_s",
             "sent_delivered_bytes_ratio",
             "healthy_sent_delivered_bytes_ratio",
             "affected_sent_delivered_bytes_ratio",
@@ -347,6 +358,12 @@ public final class BenchmarkResultWriter {
             @JsonProperty("delivered_gbps") double deliveredGbps,
             @JsonProperty("healthy_delivered_gbps") double healthyDeliveredGbps,
             @JsonProperty("affected_delivered_gbps") double affectedDeliveredGbps,
+            @JsonProperty("undelivered_server_bytes_out") long undeliveredServerBytesOut,
+            @JsonProperty("undelivered_server_gbps") double undeliveredServerGbps,
+            @JsonProperty("healthy_undelivered_server_bytes_out") long healthyUndeliveredServerBytesOut,
+            @JsonProperty("healthy_undelivered_server_gbps") double healthyUndeliveredServerGbps,
+            @JsonProperty("affected_undelivered_server_bytes_out") long affectedUndeliveredServerBytesOut,
+            @JsonProperty("affected_undelivered_server_gbps") double affectedUndeliveredServerGbps,
             @JsonProperty("server_bytes_out") long serverBytesOut,
             @JsonProperty("server_datagrams_out") long serverDatagramsOut,
             @JsonProperty("server_datagrams_out_s") double serverDatagramsOutPerSecond,
@@ -354,6 +371,8 @@ public final class BenchmarkResultWriter {
             @JsonProperty("affected_server_bytes_out") long affectedServerBytesOut,
             @JsonProperty("healthy_server_datagrams_out") long healthyServerDatagramsOut,
             @JsonProperty("affected_server_datagrams_out") long affectedServerDatagramsOut,
+            @JsonProperty("healthy_server_datagrams_out_s") double healthyServerDatagramsOutPerSecond,
+            @JsonProperty("affected_server_datagrams_out_s") double affectedServerDatagramsOutPerSecond,
             @JsonProperty("sent_delivered_bytes_ratio") double sentToDeliveredBytesRatio,
             @JsonProperty("healthy_sent_delivered_bytes_ratio") double healthySentToDeliveredBytesRatio,
             @JsonProperty("affected_sent_delivered_bytes_ratio") double affectedSentToDeliveredBytesRatio,
@@ -420,6 +439,12 @@ public final class BenchmarkResultWriter {
                     iteration.deliveredGbps,
                     iteration.healthyDeliveredGbps,
                     iteration.affectedDeliveredGbps,
+                    iteration.undeliveredServerBytesOut,
+                    iteration.undeliveredServerGbps,
+                    iteration.healthyUndeliveredServerBytesOut,
+                    iteration.healthyUndeliveredServerGbps,
+                    iteration.affectedUndeliveredServerBytesOut,
+                    iteration.affectedUndeliveredServerGbps,
                     iteration.serverBytesOut,
                     iteration.serverDatagramsOut,
                     iteration.serverDatagramsOutPerSecond,
@@ -427,6 +452,8 @@ public final class BenchmarkResultWriter {
                     iteration.affectedServerBytesOut,
                     iteration.healthyServerDatagramsOut,
                     iteration.affectedServerDatagramsOut,
+                    iteration.healthyServerDatagramsOutPerSecond,
+                    iteration.affectedServerDatagramsOutPerSecond,
                     iteration.sentToDeliveredBytesRatio,
                     iteration.healthySentToDeliveredBytesRatio,
                     iteration.affectedSentToDeliveredBytesRatio,
@@ -616,6 +643,12 @@ public final class BenchmarkResultWriter {
             double offeredGbps,
             double healthyDeliveredGbps,
             double affectedDeliveredGbps,
+            long undeliveredServerBytesOut,
+            double undeliveredServerGbps,
+            long healthyUndeliveredServerBytesOut,
+            double healthyUndeliveredServerGbps,
+            long affectedUndeliveredServerBytesOut,
+            double affectedUndeliveredServerGbps,
             long serverBytesOut,
             long serverDatagramsOut,
             double serverDatagramsOutPerSecond,
@@ -623,6 +656,8 @@ public final class BenchmarkResultWriter {
             long affectedServerBytesOut,
             long healthyServerDatagramsOut,
             long affectedServerDatagramsOut,
+            double healthyServerDatagramsOutPerSecond,
+            double affectedServerDatagramsOutPerSecond,
             double sentToDeliveredBytesRatio,
             double healthySentToDeliveredBytesRatio,
             double affectedSentToDeliveredBytesRatio,
@@ -689,6 +724,12 @@ public final class BenchmarkResultWriter {
                     iteration.offeredGbps,
                     iteration.healthyDeliveredGbps,
                     iteration.affectedDeliveredGbps,
+                    iteration.undeliveredServerBytesOut,
+                    iteration.undeliveredServerGbps,
+                    iteration.healthyUndeliveredServerBytesOut,
+                    iteration.healthyUndeliveredServerGbps,
+                    iteration.affectedUndeliveredServerBytesOut,
+                    iteration.affectedUndeliveredServerGbps,
                     iteration.serverBytesOut,
                     iteration.serverDatagramsOut,
                     iteration.serverDatagramsOutPerSecond,
@@ -696,6 +737,8 @@ public final class BenchmarkResultWriter {
                     iteration.affectedServerBytesOut,
                     iteration.healthyServerDatagramsOut,
                     iteration.affectedServerDatagramsOut,
+                    iteration.healthyServerDatagramsOutPerSecond,
+                    iteration.affectedServerDatagramsOutPerSecond,
                     iteration.sentToDeliveredBytesRatio,
                     iteration.healthySentToDeliveredBytesRatio,
                     iteration.affectedSentToDeliveredBytesRatio,

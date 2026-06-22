@@ -549,6 +549,8 @@ jq -n \
     or n($row.staleDatagramsPerSecond) > 0
     or n($row.nackOutPerSecond) > 0
     or n($row.maxQueuedBytes) > 0
+    or n($row.affectedUndeliveredServerGbps) > 0
+    or n($row.affectedServerDatagramsOutPerSecond) > 0
     or (n($row.affectedSentToDeliveredBytesRatio) > (n($row.healthySentToDeliveredBytesRatio) * 1.05));
   def contention_scenario($row):
     (scenario($row) == "multi-client-fanout")

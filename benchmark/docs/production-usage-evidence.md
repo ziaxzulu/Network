@@ -57,7 +57,7 @@ The private source supported these benchmark assumptions:
 - Compression settings include threshold `1` with zlib in the inspected private path; public Nukkit and Geyser separately support `256` and `512` threshold-adjacent coverage.
 - Production proxy paths can pass through unmodified compressed batches or re-encode modified batches, so future compression-aware workloads should distinguish pass-through from re-encode behavior.
 - Backlog protection disconnects slow clients after queue limits are exceeded.
-- Production metrics expose active Rak channels, bytes/datagrams, ACK/NACK, stale datagrams, disconnect reasons, connection state, and per-session datagram percentiles; benchmark result rows should keep these indicators in the baseline.
+- Production metrics expose active Rak channels, bytes/datagrams, ACK/NACK, stale datagrams, disconnect reasons, connection state, and per-session datagram percentiles; benchmark result rows should keep these indicators and derived undelivered send-work rates in the baseline.
 - No production constant equivalent to `5Mbps` per client was found; the `5Mbps` benchmark target is a stress target, not a copied production configuration.
 
 ## Matrix Consequences

@@ -51,6 +51,9 @@ public final class BenchmarkIterationResult {
     public final long affectedServerBytesOut;
     public final long healthyServerDatagramsOut;
     public final long affectedServerDatagramsOut;
+    public final long undeliveredServerBytesOut;
+    public final long healthyUndeliveredServerBytesOut;
+    public final long affectedUndeliveredServerBytesOut;
     public final long staleDatagrams;
     public final long nackIn;
     public final long nackOut;
@@ -67,10 +70,15 @@ public final class BenchmarkIterationResult {
     public final double deliveredGbps;
     public final double healthyDeliveredGbps;
     public final double affectedDeliveredGbps;
+    public final double undeliveredServerGbps;
+    public final double healthyUndeliveredServerGbps;
+    public final double affectedUndeliveredServerGbps;
     public final double deliveredMessagesPerSecond;
     public final double deliveredLogicalPacketsPerSecond;
     public final double offeredGbps;
     public final double serverDatagramsOutPerSecond;
+    public final double healthyServerDatagramsOutPerSecond;
+    public final double affectedServerDatagramsOutPerSecond;
     public final double staleDatagramsPerSecond;
     public final double nackInPerSecond;
     public final double nackOutPerSecond;
@@ -204,6 +212,9 @@ public final class BenchmarkIterationResult {
         this.affectedServerBytesOut = affectedBytesOut;
         this.healthyServerDatagramsOut = healthyDatagramsOut;
         this.affectedServerDatagramsOut = affectedDatagramsOut;
+        this.undeliveredServerBytesOut = undeliveredBytes(bytesOut, receivedBytes);
+        this.healthyUndeliveredServerBytesOut = undeliveredBytes(healthyBytesOut, healthyReceivedBytes);
+        this.affectedUndeliveredServerBytesOut = undeliveredBytes(affectedBytesOut, affectedReceivedBytes);
         this.staleDatagrams = stale;
         this.nackIn = nacksIn;
         this.nackOut = nacksOut;
@@ -220,10 +231,15 @@ public final class BenchmarkIterationResult {
         this.deliveredGbps = BenchmarkMath.gigabitsPerSecond(receivedBytes, elapsedMillis);
         this.healthyDeliveredGbps = BenchmarkMath.gigabitsPerSecond(healthyReceivedBytes, elapsedMillis);
         this.affectedDeliveredGbps = BenchmarkMath.gigabitsPerSecond(affectedReceivedBytes, elapsedMillis);
+        this.undeliveredServerGbps = BenchmarkMath.gigabitsPerSecond(this.undeliveredServerBytesOut, elapsedMillis);
+        this.healthyUndeliveredServerGbps = BenchmarkMath.gigabitsPerSecond(this.healthyUndeliveredServerBytesOut, elapsedMillis);
+        this.affectedUndeliveredServerGbps = BenchmarkMath.gigabitsPerSecond(this.affectedUndeliveredServerBytesOut, elapsedMillis);
         this.deliveredMessagesPerSecond = BenchmarkMath.messagesPerSecond(receivedMessages, elapsedMillis);
         this.deliveredLogicalPacketsPerSecond = BenchmarkMath.messagesPerSecond(receivedLogicalPackets, elapsedMillis);
         this.offeredGbps = BenchmarkMath.gigabitsPerSecond(sentBytes, elapsedMillis);
         this.serverDatagramsOutPerSecond = BenchmarkMath.messagesPerSecond(datagramsOut, elapsedMillis);
+        this.healthyServerDatagramsOutPerSecond = BenchmarkMath.messagesPerSecond(healthyDatagramsOut, elapsedMillis);
+        this.affectedServerDatagramsOutPerSecond = BenchmarkMath.messagesPerSecond(affectedDatagramsOut, elapsedMillis);
         this.staleDatagramsPerSecond = BenchmarkMath.messagesPerSecond(stale, elapsedMillis);
         this.nackInPerSecond = BenchmarkMath.messagesPerSecond(nacksIn, elapsedMillis);
         this.nackOutPerSecond = BenchmarkMath.messagesPerSecond(nacksOut, elapsedMillis);
@@ -241,5 +257,9 @@ public final class BenchmarkIterationResult {
 
     private static double sendToDeliveredRatio(long serverBytesOut, long deliveredBytes) {
         return serverBytesOut / (double) Math.max(1L, deliveredBytes);
+    }
+
+    private static long undeliveredBytes(long serverBytesOut, long deliveredBytes) {
+        return Math.max(0L, serverBytesOut - deliveredBytes);
     }
 }

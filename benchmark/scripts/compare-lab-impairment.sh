@@ -284,8 +284,11 @@ jq -c -n \
 	      logicalPacketsPerBatch: ($row.logicalPacketsPerBatch // 1),
 	      batchGroups: ($row.batchGroups // 1),
 	      disappearanceMode: ($row.disappearanceMode // null),
-	      targetClientMbps: ($row.targetClientMbps // null),
+      targetClientMbps: ($row.targetClientMbps // null),
       deliveredGbps: ($row.deliveredGbps // null),
+      undeliveredServerGbps: ($row.undeliveredServerGbps // null),
+      affectedUndeliveredServerGbps: ($row.affectedUndeliveredServerGbps // null),
+      affectedServerDatagramsOutPerSecond: ($row.affectedServerDatagramsOutPerSecond // null),
       probeRttP99Millis: ($row.probeRttP99Millis // null),
       maxQueuedBytes: ($row.maxQueuedBytes // null),
       healthyFairnessIndex: ($row.healthyFairnessIndex // null),
@@ -329,6 +332,9 @@ jq -c -n \
         deliveredGbpsPct: $throughputDelta,
         probeRttP99MillisPct: $latencyDelta,
         maxQueuedBytesPct: $queueDelta,
+        undeliveredServerGbpsPct: pct_delta(n($base.undeliveredServerGbps); n($cand.undeliveredServerGbps)),
+        affectedUndeliveredServerGbpsPct: pct_delta(n($base.affectedUndeliveredServerGbps); n($cand.affectedUndeliveredServerGbps)),
+        affectedServerDatagramsOutPerSecondPct: pct_delta(n($base.affectedServerDatagramsOutPerSecond); n($cand.affectedServerDatagramsOutPerSecond)),
         healthyFairnessIndex: ((n($cand.healthyFairnessIndex) // 0) - (n($base.healthyFairnessIndex) // 0)),
         healthySentToDeliveredBytesRatioPct: pct_delta(n($base.healthySentToDeliveredBytesRatio); n($cand.healthySentToDeliveredBytesRatio)),
         affectedSentToDeliveredBytesRatioPct: pct_delta(n($base.affectedSentToDeliveredBytesRatio); n($cand.affectedSentToDeliveredBytesRatio))
@@ -459,8 +465,8 @@ write_report() {
     fi
     echo "## Rows"
     echo
-	    echo "| Status | Kind | Profile | Network | Case | Benchmark | Batch shape | Disappear mode | Delivered Gbps | Delta | p99 RTT ms | Delta | Max queue | Delta | Healthy fairness delta | Reasons |"
-	    echo "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+	    echo "| Status | Kind | Profile | Network | Case | Benchmark | Batch shape | Disappear mode | Delivered Gbps | Delta | Undelivered Gbps Delta | Affected Undelivered Gbps Delta | Affected Datagram Out/s Delta | p99 RTT ms | Delta | Max queue | Delta | Healthy fairness delta | Reasons |"
+	    echo "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -485,6 +491,9 @@ write_report() {
 	        (side(.candidate; "disappearanceMode") + " / " + side(.baseline; "disappearanceMode")),
 	        (side(.candidate; "deliveredGbps") + " / " + side(.baseline; "deliveredGbps")),
         pct(.deltas.deliveredGbpsPct),
+        pct(.deltas.undeliveredServerGbpsPct),
+        pct(.deltas.affectedUndeliveredServerGbpsPct),
+        pct(.deltas.affectedServerDatagramsOutPerSecondPct),
         (side(.candidate; "probeRttP99Millis") + " / " + side(.baseline; "probeRttP99Millis")),
         pct(.deltas.probeRttP99MillisPct),
         (side(.candidate; "maxQueuedBytes") + " / " + side(.baseline; "maxQueuedBytes")),
@@ -492,8 +501,8 @@ write_report() {
         fmt(.deltas.healthyFairnessIndex),
         "`" + ((.statusReasons // []) | join(",")) + "`"
       ] | @tsv
-	    ' "$jsonl_path" | while IFS=$'\t' read -r status kind profile network case_name benchmark batch_shape disappearance_mode delivered delivered_delta p99 p99_delta queue queue_delta fairness_delta reasons; do
-	      echo "| $status | $kind | $profile | $network | $case_name | $benchmark | $batch_shape | $disappearance_mode | $delivered | $delivered_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $reasons |"
+	    ' "$jsonl_path" | while IFS=$'\t' read -r status kind profile network case_name benchmark batch_shape disappearance_mode delivered delivered_delta undelivered_delta affected_undelivered_delta affected_datagram_delta p99 p99_delta queue queue_delta fairness_delta reasons; do
+	      echo "| $status | $kind | $profile | $network | $case_name | $benchmark | $batch_shape | $disappearance_mode | $delivered | $delivered_delta | $undelivered_delta | $affected_undelivered_delta | $affected_datagram_delta | $p99 | $p99_delta | $queue | $queue_delta | $fairness_delta | $reasons |"
 	    done
     echo
     if [[ "$failure_rows" -gt 0 || "$summary_failure_rows" -gt 0 || "$netem_failure_rows" -gt 0 || "$validation_bypass_rows" -gt 0 ]]; then

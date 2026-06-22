@@ -403,7 +403,9 @@ Important fields:
 - `healthyClientThroughput` and `affectedClientThroughput`: delivered Mbps percentiles split by clients not marked impaired/disappearing versus clients that are affected
 - `sentToDeliveredBytesRatio`: server outbound bytes divided by receiver-observed delivered bulk bytes; sustained increases can indicate retransmit or ACK/NACK overhead
 - `healthySentToDeliveredBytesRatio` and `affectedSentToDeliveredBytesRatio`: the same ratio split by healthy versus impaired/disappearing clients
+- `undeliveredServerGbps`, `healthyUndeliveredServerGbps`, and `affectedUndeliveredServerGbps`: server outbound byte rate not matched by receiver-observed payload delivery; useful for spotting send work consumed by slow, impaired, or disappeared clients
 - `serverDatagramsOutPerSecond`: server outbound datagram work rate
+- `healthyServerDatagramsOutPerSecond` and `affectedServerDatagramsOutPerSecond`: datagram work rate split by healthy versus impaired/disappearing clients
 - `staleDatagramsPerSecond`, `nackInPerSecond`, and `nackOutPerSecond`: normalized retry-pressure indicators for comparing runs with different durations
 - `packetLimit`, `globalPacketLimit`, and `configuredMaxQueuedBytes`: configured RakNet server/session overrides, or `null` when library defaults were used
 - `impairmentLatencyMillis`, `impairmentJitterMillis`, and `impairmentLossPercent`: benchmark-managed client impairment applied to marked impaired clients

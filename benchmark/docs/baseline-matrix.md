@@ -14,7 +14,7 @@ The benchmark suite is meant to answer two different questions:
 The current RakNet runner is a useful starting synthetic for established-channel server-to-client throughput:
 
 - It uses normal `RakServerChannel`, `RakClientChannel`, and `RakMessage` APIs.
-- It measures delivered payload throughput, offered throughput, probe RTT under load, per-client delivered Mbps percentiles, server send-work ratios, datagram/NACK/stale rates, Jain fairness, queue growth, ACK/NACK counters, stale datagrams, disconnects, benchmark-managed blackholed datagrams, open/active peer counts, and final RakNet state counts.
+- It measures delivered payload throughput, offered throughput, probe RTT under load, per-client delivered Mbps percentiles, server send-work ratios, undelivered server send work, healthy/affected datagram rates, datagram/NACK/stale rates, Jain fairness, queue growth, ACK/NACK counters, stale datagrams, disconnects, benchmark-managed blackholed datagrams, open/active peer counts, and final RakNet state counts.
 - It supports local loopback runs for regression checks and remote server/client worker roles for lab runs.
 - It can sweep payload size, reliability mode, offered rate, and client count.
 - It supports `--per-client-mbps` so fanout and fairness runs can express production-style per-client pull targets directly.

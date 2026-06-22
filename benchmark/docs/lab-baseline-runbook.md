@@ -345,13 +345,13 @@ Treat a lab baseline as usable only when:
 
 - every selected case produces `summary.json`, `timeseries.csv`, `latency.hdr`, and `report.md`
 - `suite-summary.jsonl` has one row per successful measured iteration
-- `suite-aggregate.jsonl` has one row per case/scenario and records median throughput, per-client delivered Mbps percentiles, send/deliver ratios, datagram/NACK/stale rates, median p99 probe RTT, packet-limit settings, spread, retry-pressure totals, and unstable flags
+- `suite-aggregate.jsonl` has one row per case/scenario and records median throughput, per-client delivered Mbps percentiles, send/deliver ratios, undelivered server send-work rates, healthy/affected datagram rates, datagram/NACK/stale rates, median p99 probe RTT, packet-limit settings, spread, retry-pressure totals, and unstable flags
 - `bandwidth-capacity.jsonl` has one row per bandwidth curve group and selects the highest stable delivered Gbps, with `bandwidth-capacity.md` kept beside it for review
 - at least three measured iterations exist for baseline-of-record runs
 - topology metadata and host captures prove at least two distinct hostnames for baseline-of-record remote runs
 - repeated runs under the same topology have non-zero delivered throughput and delivered throughput/p99 probe RTT spread within the configured stability threshold
 - no unexpected disconnects occur in best-case and fanout scenarios
-- blackhole or stop-reading scenarios show retry-pressure indicators such as stale datagrams, queue growth, NACKs, blackholed datagram counters, or rising send/deliver ratios
+- blackhole or stop-reading scenarios show retry-pressure indicators such as stale datagrams, queue growth, NACKs, blackholed datagram counters, affected datagram/send-work rates, or rising send/deliver ratios
 - healthy-client throughput, per-client delivered Mbps percentiles, send/deliver ratios, and p99 latency are reviewed separately from affected-client metrics
 - generated plans keep the planned contention client count and per-client offered Mbps, healthy-client Jain fairness at or above `0.95`, healthy-client send/deliver byte ratio at or below `1.2`, and affected-client send/deliver byte ratio at or below `5` unless the topology notes justify different validation gates
 

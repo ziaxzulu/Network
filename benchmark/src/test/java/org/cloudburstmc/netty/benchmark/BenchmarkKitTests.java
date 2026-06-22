@@ -342,6 +342,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("disappearing-clients")));
         Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("batched-game-traffic")));
         Assertions.assertTrue(summaryRows.stream().anyMatch(row -> row.path("scenario").asText().equals("resource-pack-transfer")));
+        Assertions.assertTrue(summaryRows.stream().allMatch(row -> row.has("undeliveredServerGbps")));
+        Assertions.assertTrue(summaryRows.stream().allMatch(row -> row.has("affectedServerDatagramsOutPerSecond")));
 
         List<JsonNode> aggregateRows = readJsonLines(suite.resolve("suite-aggregate.jsonl"));
         Assertions.assertEquals(9, aggregateRows.size());
@@ -349,6 +351,9 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("summaryKind").asText().equals("aggregate")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("activePeers")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("stateDisconnectedPeers")));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("undeliveredServerGbps")));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("affectedUndeliveredServerGbps")));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("affectedServerDatagramsOutPerSecond")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("unstableReasons").toString()
                 .contains("insufficient-iterations")));
         Assertions.assertTrue(aggregateRows.stream().anyMatch(row -> row.path("case").asText().equals("curve-1c-mtu")
@@ -1945,6 +1950,12 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summary.path("iterations").get(0).has("healthyFairnessIndex"));
         Assertions.assertEquals(128, summary.path("iterations").get(0).path("serverBytesOut").asLong());
         Assertions.assertEquals(2.0D, summary.path("iterations").get(0).path("serverDatagramsOutPerSecond").asDouble(), 0.001D);
+        Assertions.assertEquals(64, summary.path("iterations").get(0).path("undeliveredServerBytesOut").asLong());
+        Assertions.assertEquals(0.000000512D, summary.path("iterations").get(0).path("undeliveredServerGbps").asDouble(), 0.000000001D);
+        Assertions.assertEquals(64, summary.path("iterations").get(0).path("healthyUndeliveredServerBytesOut").asLong());
+        Assertions.assertEquals(0, summary.path("iterations").get(0).path("affectedUndeliveredServerBytesOut").asLong());
+        Assertions.assertEquals(2.0D, summary.path("iterations").get(0).path("healthyServerDatagramsOutPerSecond").asDouble(), 0.001D);
+        Assertions.assertEquals(0.0D, summary.path("iterations").get(0).path("affectedServerDatagramsOutPerSecond").asDouble(), 0.001D);
         Assertions.assertEquals(2.0D, summary.path("iterations").get(0).path("sentToDeliveredBytesRatio").asDouble(), 0.001D);
         Assertions.assertEquals(3.0D, summary.path("iterations").get(0).path("staleDatagramsPerSecond").asDouble(), 0.001D);
         Assertions.assertEquals(5.0D, summary.path("iterations").get(0).path("nackOutPerSecond").asDouble(), 0.001D);
@@ -1975,6 +1986,12 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(rows.get(0).containsKey("delivered_gbps"));
         Assertions.assertTrue(rows.get(0).containsKey("target_client_mbps"));
         Assertions.assertTrue(rows.get(0).containsKey("server_datagrams_out_s"));
+        Assertions.assertEquals("64", rows.get(0).get("undelivered_server_bytes_out"));
+        Assertions.assertTrue(rows.get(0).containsKey("undelivered_server_gbps"));
+        Assertions.assertEquals("64", rows.get(0).get("healthy_undelivered_server_bytes_out"));
+        Assertions.assertEquals("0", rows.get(0).get("affected_undelivered_server_bytes_out"));
+        Assertions.assertTrue(rows.get(0).containsKey("healthy_server_datagrams_out_s"));
+        Assertions.assertTrue(rows.get(0).containsKey("affected_server_datagrams_out_s"));
         Assertions.assertTrue(rows.get(0).containsKey("sent_delivered_bytes_ratio"));
         Assertions.assertTrue(rows.get(0).containsKey("stale_datagrams_s"));
         Assertions.assertTrue(rows.get(0).containsKey("nack_out_s"));
