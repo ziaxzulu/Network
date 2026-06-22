@@ -6,6 +6,7 @@ impairment_baseline="benchmark/build/benchmark-baselines/latest-impairment"
 out_dir=""
 expected_impairment_profiles="perfect,near-loss,regional-loss,poor,severe"
 required_curve_payload_sizes="64,256,512,1200,1340,1400,262144"
+required_impairment_contention_scenarios="multi-client-fanout,fairness,disappearing-clients"
 
 usage() {
   cat <<'USAGE'
@@ -20,6 +21,7 @@ Options:
   --impairment-baseline PATH       Promoted impairment campaign baseline directory. Default: benchmark/build/benchmark-baselines/latest-impairment.
   --expected-impairment-profiles CSV Required impairment profiles. Default: perfect,near-loss,regional-loss,poor,severe.
   --required-curve-payload-sizes CSV Required perfect-network curve payload sizes. Default: 64,256,512,1200,1340,1400,262144.
+  --required-impairment-contention-scenarios CSV Required contention scenarios per impairment profile. Default: multi-client-fanout,fairness,disappearing-clients.
   --out DIR                        Output directory. Default: directory containing the lab baseline, or benchmark/build/benchmark-results/baseline-readiness.
   --help                           Show this help.
 
@@ -45,6 +47,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --required-curve-payload-sizes)
       required_curve_payload_sizes="$2"
+      shift 2
+      ;;
+    --required-impairment-contention-scenarios)
+      required_impairment_contention_scenarios="$2"
       shift 2
       ;;
     --out)
@@ -128,6 +134,7 @@ lab_validation="$lab_baseline/validation.json"
 lab_aggregate="$lab_baseline/suite-aggregate.jsonl"
 lab_capacity="$lab_baseline/bandwidth-capacity.jsonl"
 required_curve_payloads_json="$(csv_json_number_array "$required_curve_payload_sizes")"
+required_impairment_contention_json="$(csv_json_array "$required_impairment_contention_scenarios")"
 
 if [[ ! -s "$lab_manifest" ]]; then
   append_issue "missing-lab-baseline-manifest" "lab-baseline" "promoted lab baseline manifest is missing" "{\"path\":\"$lab_manifest\"}"
@@ -173,10 +180,7 @@ if [[ -s "$lab_capacity" ]] && ! jq -s 'all(.[]; (.selected // false) == true)' 
 fi
 
 if [[ -s "$lab_aggregate" ]]; then
-  while IFS= read -r missing_payload; do
-    [[ -z "$missing_payload" ]] && continue
-    append_issue "lab-missing-curve-payload" "lab-baseline" "lab baseline is missing a required bandwidth-curve payload size" "{\"payloadSize\":$missing_payload}"
-  done < <(jq -r -s --argjson expected "$required_curve_payloads_json" '
+  missing_curve_payloads="$(jq -r -s --argjson expected "$required_curve_payloads_json" '
     def is_curve:
       ((.scenario // "") == "curve")
       or ((.scenario // "") == "bandwidth-latency-curve")
@@ -188,19 +192,24 @@ if [[ -s "$lab_aggregate" ]]; then
     | $expected[] as $payload
     | select(($actual | index($payload)) == null)
     | $payload
-  ' "$lab_aggregate")
+  ' "$lab_aggregate")"
+  while IFS= read -r missing_payload; do
+    [[ -z "$missing_payload" ]] && continue
+    append_issue "lab-missing-curve-payload" "lab-baseline" "lab baseline is missing a required bandwidth-curve payload size" "{\"payloadSize\":$missing_payload}"
+  done <<<"$missing_curve_payloads"
 fi
 
 if [[ -s "$lab_capacity" ]]; then
-  while IFS= read -r missing_payload; do
-    [[ -z "$missing_payload" ]] && continue
-    append_issue "lab-missing-capacity-payload" "lab-baseline" "lab baseline capacity selector is missing a required payload size" "{\"payloadSize\":$missing_payload}"
-  done < <(jq -r -s --argjson expected "$required_curve_payloads_json" '
+  missing_capacity_payloads="$(jq -r -s --argjson expected "$required_curve_payloads_json" '
     ([.[] | select((.summaryKind // "") == "bandwidth-capacity") | (.payloadSize // empty | tonumber)] | unique) as $actual
     | $expected[] as $payload
     | select(($actual | index($payload)) == null)
     | $payload
-  ' "$lab_capacity")
+  ' "$lab_capacity")"
+  while IFS= read -r missing_payload; do
+    [[ -z "$missing_payload" ]] && continue
+    append_issue "lab-missing-capacity-payload" "lab-baseline" "lab baseline capacity selector is missing a required payload size" "{\"payloadSize\":$missing_payload}"
+  done <<<"$missing_capacity_payloads"
 fi
 
 impairment_manifest="$impairment_baseline/impairment-baseline-manifest.json"
@@ -236,15 +245,64 @@ if [[ -s "$impairment_summary" ]]; then
     append_issue "impairment-missing-comparable-rows" "impairment-baseline" "impairment campaign has no comparable aggregate or capacity rows" "{\"path\":\"$impairment_summary\"}"
   fi
   expected_profiles_json="$(csv_json_array "$expected_impairment_profiles")"
-  while IFS= read -r missing_profile; do
-    [[ -z "$missing_profile" ]] && continue
-    append_issue "impairment-missing-profile" "impairment-baseline" "expected impairment profile is missing" "{\"profile\":\"$missing_profile\"}"
-  done < <(jq -r --argjson expected "$expected_profiles_json" '
+  missing_impairment_profiles="$(jq -r --argjson expected "$expected_profiles_json" '
     ([.profiles[].profile] | unique) as $actual
     | $expected[] as $profile
     | select(($actual | index($profile)) == null)
     | $profile
-  ' "$impairment_summary")
+  ' "$impairment_summary")"
+  while IFS= read -r missing_profile; do
+    [[ -z "$missing_profile" ]] && continue
+    append_issue "impairment-missing-profile" "impairment-baseline" "expected impairment profile is missing" "{\"profile\":\"$missing_profile\"}"
+  done <<<"$missing_impairment_profiles"
+
+  missing_impairment_payloads="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedPayloads "$required_curve_payloads_json" '
+    (.profiles // [])[]
+    | .profile as $profile
+    | select(($expectedProfiles | index($profile)) != null)
+    | ([.capacity.rows[]? | (.payloadSize // empty | tonumber)] | unique) as $actual
+    | $expectedPayloads[] as $payload
+    | select(($actual | index($payload)) == null)
+    | [$profile, $payload] | @tsv
+  ' "$impairment_summary")"
+  while IFS=$'\t' read -r profile payload_size; do
+    [[ -z "$profile" || -z "$payload_size" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --argjson payloadSize "$payload_size" '{profile:$profile,payloadSize:$payloadSize}')"
+    append_issue "impairment-missing-capacity-payload" "impairment-baseline" "impairment profile capacity selector is missing a required payload size" "$extra"
+  done <<<"$missing_impairment_payloads"
+
+  unselected_impairment_capacity="$(jq -r --argjson expectedProfiles "$expected_profiles_json" '
+    (.profiles // [])[]
+    | .profile as $profile
+    | select(($expectedProfiles | index($profile)) != null)
+    | .capacity.rows[]?
+    | select((.selected // false) != true)
+    | [$profile, (.case // ""), (.payloadSize // 0)] | @tsv
+  ' "$impairment_summary")"
+  while IFS=$'\t' read -r profile case_name payload_size; do
+    [[ -z "$profile" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --arg case "$case_name" --argjson payloadSize "${payload_size:-0}" '{profile:$profile,case:$case,payloadSize:$payloadSize}')"
+    append_issue "impairment-unselected-capacity" "impairment-baseline" "impairment profile has an unselected capacity row" "$extra"
+  done <<<"$unselected_impairment_capacity"
+
+  missing_impairment_contention="$(jq -r --argjson expectedProfiles "$expected_profiles_json" --argjson expectedScenarios "$required_impairment_contention_json" '
+    def scenario($row):
+      if (($row.benchmarkName // "") | startswith("curve-")) then "curve"
+      else ($row.benchmarkName // "unknown")
+      end;
+    (.profiles // [])[]
+    | .profile as $profile
+    | select(($expectedProfiles | index($profile)) != null)
+    | ([.aggregate.contentionRows[]? | scenario(.)] | unique) as $actual
+    | $expectedScenarios[] as $scenario
+    | select(($actual | index($scenario)) == null)
+    | [$profile, $scenario] | @tsv
+  ' "$impairment_summary")"
+  while IFS=$'\t' read -r profile scenario; do
+    [[ -z "$profile" || -z "$scenario" ]] && continue
+    extra="$(jq -n --arg profile "$profile" --arg scenario "$scenario" '{profile:$profile,scenario:$scenario}')"
+    append_issue "impairment-missing-contention-scenario" "impairment-baseline" "impairment profile is missing a required contention scenario" "$extra"
+  done <<<"$missing_impairment_contention"
 fi
 
 issues_array="$(jq -s '.' "$issues_jsonl")"
@@ -255,6 +313,7 @@ jq -n \
   --arg impairmentBaseline "$impairment_baseline" \
   --argjson expectedImpairmentProfiles "$(csv_json_array "$expected_impairment_profiles")" \
   --argjson requiredCurvePayloadSizes "$required_curve_payloads_json" \
+  --argjson requiredImpairmentContentionScenarios "$required_impairment_contention_json" \
   --argjson issues "$issues_array" \
   --slurpfile labValidation "$([[ -s "$lab_validation" ]] && printf '%s' "$lab_validation" || printf '%s' /dev/null)" \
   --slurpfile impairmentSummary "$([[ -s "$impairment_summary" ]] && printf '%s' "$impairment_summary" || printf '%s' /dev/null)" \
@@ -272,6 +331,7 @@ jq -n \
     },
     expectedImpairmentProfiles: $expectedImpairmentProfiles,
     requiredCurvePayloadSizes: $requiredCurvePayloadSizes,
+    requiredImpairmentContentionScenarios: $requiredImpairmentContentionScenarios,
     issues: $issues
   }' >"$readiness_json"
 
@@ -284,6 +344,7 @@ jq -n \
   echo "- Lab baseline: \`$lab_baseline\`"
   echo "- Impairment baseline: \`$impairment_baseline\`"
   echo "- Required curve payload sizes: \`$required_curve_payload_sizes\`"
+  echo "- Required impairment contention scenarios: \`$required_impairment_contention_scenarios\`"
   echo
   echo "## Lab Baseline"
   echo

@@ -485,6 +485,84 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testBaselineReadinessRequiresImpairmentProfilePayloadCoverage() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-impairment-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline, false);
+
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode missingReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingReadiness.path("ready").asBoolean());
+        Assertions.assertTrue(missingReadiness.path("requiredImpairmentContentionScenarios").isArray());
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("impairment-missing-capacity-payload"));
+
+        writeReadinessImpairmentBaseline(impairmentBaseline, true);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+        JsonNode readyReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(readyReadiness.path("ready").asBoolean());
+    }
+
+    @Test
+    public void testBaselineReadinessRequiresImpairmentContentionCoverage() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-impairment-contention-readiness-test");
+        Path labBaseline = output.resolve("lab");
+        Path impairmentBaseline = output.resolve("impairment");
+        Path readiness = output.resolve("readiness");
+
+        writeReadinessLabBaseline(labBaseline, 64, 256, 512, 1200, 1340, 1400, 262144);
+        writeReadinessImpairmentBaseline(impairmentBaseline, true, false);
+
+        ProcessResult missing = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(1, missing.exitCode, missing.output);
+        JsonNode missingReadiness = JSON.readTree(Files.readString(readiness.resolve("readiness.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingReadiness.path("ready").asBoolean());
+        Assertions.assertTrue(missingReadiness.findValuesAsText("code")
+                .contains("impairment-missing-contention-scenario"));
+
+        writeReadinessImpairmentBaseline(impairmentBaseline, true, true);
+        ProcessResult ready = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/check-baseline-readiness.sh").toString(),
+                "--lab-baseline", labBaseline.toString(),
+                "--impairment-baseline", impairmentBaseline.toString(),
+                "--out", readiness.toString()
+        );
+        Assertions.assertEquals(0, ready.exitCode, ready.output);
+    }
+
+    @Test
     public void testResultWriterProducesArtifacts() throws Exception {
         Path output = Files.createTempDirectory("raknet-benchmark-test");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
@@ -644,15 +722,60 @@ public class BenchmarkKitTests {
     }
 
     private static void writeReadinessImpairmentBaseline(Path impairmentBaseline) throws Exception {
+        writeReadinessImpairmentBaseline(impairmentBaseline, true);
+    }
+
+    private static void writeReadinessImpairmentBaseline(Path impairmentBaseline,
+                                                        boolean includeSplitPayload) throws Exception {
+        writeReadinessImpairmentBaseline(impairmentBaseline, includeSplitPayload, true);
+    }
+
+    private static void writeReadinessImpairmentBaseline(Path impairmentBaseline,
+                                                        boolean includeSplitPayload,
+                                                        boolean includeDisappearingContention) throws Exception {
         Files.createDirectories(impairmentBaseline);
         Files.writeString(impairmentBaseline.resolve("impairment-baseline-manifest.json"),
                 "{\"baselineKind\":\"raknet-lab-impairment-campaign\"}\n",
                 StandardCharsets.UTF_8);
+
+        int[] payloadSizes = includeSplitPayload
+                ? new int[]{64, 256, 512, 1200, 1340, 1400, 262144}
+                : new int[]{64, 256, 512, 1200, 1340, 1400};
+        StringBuilder profiles = new StringBuilder();
+        String[] profileNames = {"perfect", "near-loss", "regional-loss", "poor", "severe"};
+        for (int profileIndex = 0; profileIndex < profileNames.length; profileIndex++) {
+            if (profileIndex > 0) {
+                profiles.append(',');
+            }
+            profiles.append("{\"profile\":\"").append(profileNames[profileIndex]).append("\",")
+                    .append("\"aggregate\":{\"contentionRows\":[")
+                    .append("{\"benchmarkName\":\"multi-client-fanout\"},")
+                    .append("{\"benchmarkName\":\"fairness\"}");
+            if (includeDisappearingContention) {
+                profiles.append(",{\"benchmarkName\":\"disappearing-clients\"}");
+            }
+            profiles.append("]},\"capacity\":{\"rowCount\":").append(payloadSizes.length)
+                    .append(",\"selectedCount\":").append(payloadSizes.length)
+                    .append(",\"rows\":[");
+            for (int payloadIndex = 0; payloadIndex < payloadSizes.length; payloadIndex++) {
+                if (payloadIndex > 0) {
+                    profiles.append(',');
+                }
+                profiles.append("{\"case\":\"")
+                        .append(profileNames[profileIndex])
+                        .append("-curve-p")
+                        .append(payloadSizes[payloadIndex])
+                        .append("\",\"payloadSize\":")
+                        .append(payloadSizes[payloadIndex])
+                        .append(",\"selected\":true}");
+            }
+            profiles.append("]}}");
+        }
+
         Files.writeString(impairmentBaseline.resolve("impairment-summary.json"),
                 "{\"passed\":true,\"requireNetemEvidence\":true,\"validationPassedCount\":5,\"profileCount\":5,"
                         + "\"netemStatusEvidenceCount\":5,\"aggregateRowCount\":1,\"capacityRowCount\":1,"
-                        + "\"profiles\":[{\"profile\":\"perfect\"},{\"profile\":\"near-loss\"},"
-                        + "{\"profile\":\"regional-loss\"},{\"profile\":\"poor\"},{\"profile\":\"severe\"}]}\n",
+                        + "\"profiles\":[" + profiles + "]}\n",
                 StandardCharsets.UTF_8);
     }
 
