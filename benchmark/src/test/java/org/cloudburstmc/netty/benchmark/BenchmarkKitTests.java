@@ -509,6 +509,15 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, result.exitCode, result.output);
         Assertions.assertTrue(Files.exists(handoff.resolve("perfect-plan/check-plan-freshness.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("perfect-plan/merge-all.sh")));
+        Assertions.assertTrue(Files.isExecutable(handoff.resolve("perfect-plan/curve-plan/server-commands.sh")));
+        Assertions.assertTrue(Files.isExecutable(handoff.resolve("perfect-plan/curve-plan/receiver-receiver-a-commands.sh")));
+        Assertions.assertTrue(Files.isExecutable(handoff.resolve("perfect-plan/curve-plan/merge-commands.sh")));
+        Assertions.assertTrue(Files.isExecutable(handoff.resolve("perfect-plan/curve-raised-plan/server-commands.sh")));
+        Assertions.assertTrue(Files.isExecutable(handoff.resolve("perfect-plan/curve-raised-plan/receiver-receiver-a-commands.sh")));
+        Assertions.assertTrue(Files.isExecutable(handoff.resolve("perfect-plan/curve-raised-plan/merge-commands.sh")));
+        Assertions.assertTrue(Files.isExecutable(handoff.resolve("perfect-plan/contention-plan/server-commands.sh")));
+        Assertions.assertTrue(Files.isExecutable(handoff.resolve("perfect-plan/contention-plan/receiver-receiver-a-commands.sh")));
+        Assertions.assertTrue(Files.isExecutable(handoff.resolve("perfect-plan/contention-plan/merge-commands.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/check-plan-freshness.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/validate-all.sh")));
         Assertions.assertTrue(Files.exists(handoff.resolve("impairment-plan/summarize-campaign.sh")));
@@ -831,6 +840,45 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(invalidMergeSyntaxJson.findValuesAsText("code")
                 .contains("invalid-shell-syntax"));
         Files.writeString(perfectMergeScript, originalPerfectMergeScript, StandardCharsets.UTF_8);
+
+        Path receiverScript = handoff.resolve("perfect-plan/curve-plan/receiver-receiver-a-commands.sh");
+        String originalReceiverScript = Files.readString(receiverScript, StandardCharsets.UTF_8);
+        Files.writeString(receiverScript, originalReceiverScript + "\nif broken\n", StandardCharsets.UTF_8);
+        ProcessResult invalidReceiverSyntaxCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-receiver-syntax-tampered").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
+        );
+        Assertions.assertEquals(1, invalidReceiverSyntaxCheck.exitCode, invalidReceiverSyntaxCheck.output);
+        JsonNode invalidReceiverSyntaxJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-receiver-syntax-tampered/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(invalidReceiverSyntaxJson.findValuesAsText("code")
+                .contains("invalid-shell-syntax"));
+        Files.writeString(receiverScript, originalReceiverScript, StandardCharsets.UTF_8);
+
+        Path impairmentReceiverScript = handoff.resolve("impairment-plan/near-loss-plan/contention-plan/receiver-receiver-a-commands.sh");
+        String originalImpairmentReceiverScript = Files.readString(impairmentReceiverScript, StandardCharsets.UTF_8);
+        Files.delete(impairmentReceiverScript);
+        ProcessResult missingReceiverCheck = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/check-lab-handoff.sh").toString(),
+                "--handoff", handoff.toString(),
+                "--out", output.resolve("handoff-preflight-receiver-missing").toString(),
+                "--required-min-contention-clients", "2",
+                "--required-min-contention-target-client-mbps", "1"
+        );
+        Assertions.assertEquals(1, missingReceiverCheck.exitCode, missingReceiverCheck.output);
+        JsonNode missingReceiverJson = JSON.readTree(Files.readString(
+                output.resolve("handoff-preflight-receiver-missing/handoff-check.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertTrue(missingReceiverJson.findValuesAsText("code")
+                .contains("missing-receiver-command-script"));
+        Files.writeString(impairmentReceiverScript, originalImpairmentReceiverScript, StandardCharsets.UTF_8);
+        Assertions.assertTrue(impairmentReceiverScript.toFile().setExecutable(true));
 
         Path handoffManifestPath = handoff.resolve("handoff-manifest.json");
         String originalHandoffManifest = Files.readString(handoffManifestPath, StandardCharsets.UTF_8);

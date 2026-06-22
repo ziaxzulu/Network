@@ -625,6 +625,26 @@ check_curve_manifest() {
   done <<<"$missing_rates"
 }
 
+check_worker_plan_scripts() {
+  local label="$1"
+  local plan="$2"
+  check_path "$plan/server-commands.sh" "$label" true
+  check_path "$plan/merge-commands.sh" "$label" true
+
+  local receiver_count=0
+  local receiver_script
+  while IFS= read -r receiver_script; do
+    [[ -z "$receiver_script" ]] && continue
+    receiver_count=$((receiver_count + 1))
+    check_path "$receiver_script" "$label" true
+  done < <(find "$plan" -maxdepth 1 -type f -name 'receiver-*-commands.sh' 2>/dev/null | sort)
+
+  if [[ "$receiver_count" -eq 0 ]]; then
+    append_issue "missing-receiver-command-script" "$label" "worker plan has no receiver command script" \
+      "$(jq -n --arg path "$plan" '{path:$path}')"
+  fi
+}
+
 check_contention_manifest() {
   local label="$1"
   local path="$2"
@@ -767,6 +787,9 @@ check_contention_manifest() {
 check_curve_manifest "perfect-curve" "$perfect_plan/curve-plan/manifest.jsonl"
 check_curve_manifest "perfect-raised-curve" "$perfect_plan/curve-raised-plan/manifest.jsonl"
 check_contention_manifest "perfect-contention" "$perfect_plan/contention-plan/manifest.jsonl"
+check_worker_plan_scripts "perfect-curve-plan" "$perfect_plan/curve-plan"
+check_worker_plan_scripts "perfect-raised-curve-plan" "$perfect_plan/curve-raised-plan"
+check_worker_plan_scripts "perfect-contention-plan" "$perfect_plan/contention-plan"
 
 if [[ -s "$impairment_plan/manifest.jsonl" ]]; then
   missing_profiles="$(jq -r -s --argjson expected "$profiles_json" '
@@ -791,6 +814,9 @@ if [[ -s "$impairment_plan/manifest.jsonl" ]]; then
     check_curve_manifest "impairment-profile:$profile:curve" "$plan/curve-plan/manifest.jsonl"
     check_curve_manifest "impairment-profile:$profile:raised-curve" "$plan/curve-raised-plan/manifest.jsonl"
     check_contention_manifest "impairment-profile:$profile:contention" "$plan/contention-plan/manifest.jsonl"
+    check_worker_plan_scripts "impairment-profile:$profile:curve-plan" "$plan/curve-plan"
+    check_worker_plan_scripts "impairment-profile:$profile:raised-curve-plan" "$plan/curve-raised-plan"
+    check_worker_plan_scripts "impairment-profile:$profile:contention-plan" "$plan/contention-plan"
   done < <(jq -r '[.profile, .plan, .applyScript, .statusScript, .clearScript] | @tsv' "$impairment_plan/manifest.jsonl")
 fi
 
