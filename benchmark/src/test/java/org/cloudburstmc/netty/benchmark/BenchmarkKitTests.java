@@ -95,6 +95,36 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testConfigResolvesGradleRelativeOutputFromRepoRoot() {
+        String originalRepoRoot = System.getProperty("benchmark.repoRoot");
+        String originalDefaultOutputRoot = System.getProperty("benchmark.defaultOutputRoot");
+        try {
+            System.setProperty("benchmark.repoRoot", "/repo");
+            System.setProperty("benchmark.defaultOutputRoot", "/repo/benchmark/build/benchmark-results");
+
+            BenchmarkConfig defaultConfig = BenchmarkConfig.parse(new String[]{"baseline-bandwidth"});
+            Assertions.assertEquals(new java.io.File("/repo/benchmark/build/benchmark-results"),
+                    defaultConfig.outputRoot());
+
+            BenchmarkConfig explicitRelative = BenchmarkConfig.parse(new String[]{
+                    "baseline-bandwidth",
+                    "--out", "benchmark/build/benchmark-results/local"
+            });
+            Assertions.assertEquals(new java.io.File("/repo/benchmark/build/benchmark-results/local"),
+                    explicitRelative.outputRoot());
+
+            BenchmarkConfig explicitAbsolute = BenchmarkConfig.parse(new String[]{
+                    "baseline-bandwidth",
+                    "--out", "/tmp/raknet-benchmark"
+            });
+            Assertions.assertEquals(new java.io.File("/tmp/raknet-benchmark"), explicitAbsolute.outputRoot());
+        } finally {
+            restoreProperty("benchmark.repoRoot", originalRepoRoot);
+            restoreProperty("benchmark.defaultOutputRoot", originalDefaultOutputRoot);
+        }
+    }
+
+    @Test
     public void testProductionRateAndDisappearingParsing() {
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
                 "disappearing-clients",
@@ -3388,6 +3418,14 @@ public class BenchmarkKitTests {
             }
         }
         return rows;
+    }
+
+    private static void restoreProperty(String key, String value) {
+        if (value == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, value);
+        }
     }
 
     private static JsonNode findSource(JsonNode auditJson, String sourceId) {

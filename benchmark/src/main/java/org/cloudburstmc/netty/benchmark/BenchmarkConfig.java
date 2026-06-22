@@ -55,7 +55,7 @@ public final class BenchmarkConfig {
     private double perClientRateMbps = -1.0D;
     private long probeIntervalMillis = 100;
     private RakReliability reliability = RakReliability.RELIABLE_ORDERED;
-    private File outputRoot = new File("build/benchmark-results");
+    private File outputRoot = defaultOutputRoot();
     private String runId;
     private List<Integer> payloadSizes = Arrays.asList(64, 512, 1200);
     private List<Integer> batchPayloadSizes = Arrays.asList(128, 512, 1200);
@@ -182,7 +182,7 @@ public final class BenchmarkConfig {
         } else if ("reliabilities".equals(key)) {
             this.reliabilities = parseReliabilityList(value);
         } else if ("out".equals(key)) {
-            this.outputRoot = new File(value);
+            this.outputRoot = resolveOutputRoot(value);
         } else if ("run-id".equals(key)) {
             this.runId = value;
         } else {
@@ -494,6 +494,26 @@ public final class BenchmarkConfig {
 
     private static RakReliability parseReliability(String value) {
         return RakReliability.valueOf(value.trim().replace('-', '_').toUpperCase());
+    }
+
+    private static File defaultOutputRoot() {
+        String configured = System.getProperty("benchmark.defaultOutputRoot");
+        if (configured != null && !configured.isBlank()) {
+            return new File(configured);
+        }
+        return new File("build/benchmark-results");
+    }
+
+    private static File resolveOutputRoot(String value) {
+        File file = new File(value);
+        if (file.isAbsolute()) {
+            return file;
+        }
+        String repoRoot = System.getProperty("benchmark.repoRoot");
+        if (repoRoot != null && !repoRoot.isBlank()) {
+            return new File(repoRoot, value);
+        }
+        return file;
     }
 
     private static List<RakReliability> parseReliabilityList(String value) {

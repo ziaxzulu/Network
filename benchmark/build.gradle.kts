@@ -87,14 +87,20 @@ tasks.register<JavaExec>("raknetBenchmark") {
     description = "Runs established RakNet bandwidth-latency benchmarks. Pass arguments with -PbenchmarkArgs=\"...\"."
     mainClass.set("org.cloudburstmc.netty.benchmark.BenchmarkMain")
     classpath = sourceSets["main"].runtimeClasspath
+    workingDir = rootProject.projectDir
     javaLauncher.set(javaToolchains.launcherFor {
         languageVersion.set(benchmarkJavaVersion)
     })
     jvmArgs("-Xms1g", "-Xmx1g")
+    systemProperty("benchmark.repoRoot", rootProject.projectDir.absolutePath)
 
     argumentProviders.add(CommandLineArgumentProvider {
         parseBenchmarkArgs(project.findProperty("benchmarkArgs")?.toString().orEmpty())
     })
+
+    doFirst {
+        systemProperty("benchmark.defaultOutputRoot", layout.buildDirectory.dir("benchmark-results").get().asFile.absolutePath)
+    }
 }
 
 tasks.withType<Test> {

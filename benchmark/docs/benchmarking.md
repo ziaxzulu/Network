@@ -311,7 +311,7 @@ start_at_ms=<same-value-used-by-server>
 ./gradlew :benchmark:raknetBenchmark -PbenchmarkArgs="multi-client-fanout --role client --host <server-ip> --port 19132 --clients 250 --start-at-epoch-ms $start_at_ms --warmup 5s --duration 30s --iterations 3 --out $(pwd)/benchmark/build/benchmark-results/lab-receiver-a --run-id receiver-a-250"
 ```
 
-The server report contains send-side RakNet metrics and probe RTTs. Receiver reports contain delivered bytes/messages from that worker. Keep `--iterations`, `--warmup`, `--duration`, and `--start-at-epoch-ms` aligned between server and receiver workers for comparable merged artifacts. Use NTP-synchronized hosts and choose a timestamp far enough in the future for receivers to connect before warmup begins. Use absolute `--out` paths for direct `raknetBenchmark` invocations so artifacts land in the same place regardless of the Gradle task working directory.
+The server report contains send-side RakNet metrics and probe RTTs. Receiver reports contain delivered bytes/messages from that worker. Keep `--iterations`, `--warmup`, `--duration`, and `--start-at-epoch-ms` aligned between server and receiver workers for comparable merged artifacts. Use NTP-synchronized hosts and choose a timestamp far enough in the future for receivers to connect before warmup begins. The Gradle `raknetBenchmark` task runs from the repository root, so relative `--out` paths are resolved from that root.
 
 After copying receiver summaries back to the server-side checkout, merge the worker reports into a comparable lab artifact:
 
