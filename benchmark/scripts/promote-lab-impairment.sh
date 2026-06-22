@@ -9,6 +9,7 @@ allow_failed_summary=false
 allow_missing_netem_evidence=false
 allow_validation_bypasses=false
 update_latest=true
+required_retry_pressure_fields="undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond"
 
 usage() {
   cat <<'USAGE'
@@ -27,6 +28,9 @@ Options:
   --allow-failed-summary          Allow promotion when impairment-summary.json is failed.
   --allow-missing-netem-evidence  Allow promotion when the summary did not require netem evidence.
   --allow-validation-bypasses     Allow promotion when profile validation used bypass flags. Smoke only.
+  --required-retry-pressure-fields CSV
+                                  Required contention-row retry-pressure metric fields.
+                                  Default: undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond.
   --no-latest                     Do not update the latest-impairment symlink.
   --help                          Show this help.
 
@@ -68,6 +72,10 @@ while [[ $# -gt 0 ]]; do
     --allow-validation-bypasses)
       allow_validation_bypasses=true
       shift
+      ;;
+    --required-retry-pressure-fields)
+      required_retry_pressure_fields="$2"
+      shift 2
       ;;
     --no-latest)
       update_latest=false
@@ -169,6 +177,27 @@ fi
 if jq -e '.allowValidationBypasses == true' "$summary_json" >/dev/null && [[ "$allow_validation_bypasses" != "true" ]]; then
   echo "impairment campaign summary allowed profile validation bypasses; refusing to promote baseline" >&2
   echo "Use --allow-validation-bypasses only for non-baseline smoke packages." >&2
+  exit 1
+fi
+
+missing_retry_fields="$(jq -r --arg fields "$required_retry_pressure_fields" '
+  ($fields
+    | split(",")
+    | map(gsub("^\\s+|\\s+$"; ""))
+    | map(select(length > 0))) as $required
+  | [
+      .profiles[]? as $profile
+      | ($profile.aggregate.contentionRows[]? // empty) as $row
+      | $required[] as $field
+      | select(($row | has($field)) | not)
+      | "profile \($profile.profile // "unknown") case \($row.case // $row.benchmarkName // "unknown") missing \($field)"
+    ]
+  | .[:10]
+  | join("; ")
+' "$summary_json")"
+if [[ -n "$missing_retry_fields" ]]; then
+  echo "impairment contention rows are missing required retry-pressure fields; refusing to promote baseline" >&2
+  echo "$missing_retry_fields" >&2
   exit 1
 fi
 

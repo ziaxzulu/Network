@@ -10,6 +10,7 @@ extra_validation_args=()
 allow_existing=false
 update_latest=true
 allow_validation_bypasses=false
+required_retry_pressure_fields="undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond"
 
 usage() {
   cat <<'USAGE'
@@ -27,6 +28,9 @@ Options before --:
   --handoff-manifest PATH  Handoff manifest used to generate the lab plan; copied into the baseline package.
   --allow-existing         Allow writing into an existing baseline package directory.
   --allow-validation-bypasses Allow promotion when validation used bypass flags. Smoke only.
+  --required-retry-pressure-fields CSV
+                           Required aggregate retry-pressure metric fields.
+                           Default: undeliveredServerGbps,affectedUndeliveredServerGbps,affectedServerDatagramsOutPerSecond.
   --no-latest              Do not update the latest symlink.
   --help                   Show this help.
 
@@ -81,6 +85,10 @@ while [[ $# -gt 0 ]]; do
     --allow-validation-bypasses)
       allow_validation_bypasses=true
       shift
+      ;;
+    --required-retry-pressure-fields)
+      required_retry_pressure_fields="$2"
+      shift 2
       ;;
     --no-latest)
       update_latest=false
@@ -219,6 +227,30 @@ suite_aggregate="$(jq -r '.suiteAggregate' "$validation_json")"
 artifact_root="$(jq -r '.artifactRoot' "$validation_json")"
 capacity_file="$(jq -r '.capacityFile // ""' "$validation_json")"
 topology_file="$(jq -r '.topologyFile // ""' "$validation_json")"
+
+missing_retry_fields="$(jq -r -R -s --arg fields "$required_retry_pressure_fields" '
+  ($fields
+    | split(",")
+    | map(gsub("^\\s+|\\s+$"; ""))
+    | map(select(length > 0))) as $required
+  | split("\n")
+  | map(select(length > 0) | fromjson?)
+  | to_entries
+  | [
+      .[] as $entry
+      | $entry.value as $row
+      | $required[] as $field
+      | select(($row | has($field)) | not)
+      | "line \($entry.key + 1) case \($row.case // $row.benchmarkName // "unknown") missing \($field)"
+    ]
+  | .[:10]
+  | join("; ")
+' "$suite_aggregate")"
+if [[ -n "$missing_retry_fields" ]]; then
+  echo "suite aggregate is missing required retry-pressure fields; refusing to promote baseline" >&2
+  echo "$missing_retry_fields" >&2
+  exit 1
+fi
 
 mkdir -p "$destination"
 rm -f \

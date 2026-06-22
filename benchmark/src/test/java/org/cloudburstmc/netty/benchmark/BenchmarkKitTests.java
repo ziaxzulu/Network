@@ -1096,6 +1096,33 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testPromotionRejectsMissingRetryPressureFields() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-lab-promotion-retry-fields-test");
+        Path lab = output.resolve("lab");
+        writeValidationLabArtifacts(lab, 2, 2);
+        Files.writeString(lab.resolve("suite-aggregate.jsonl"),
+                Files.readString(lab.resolve("suite-aggregate.jsonl"), StandardCharsets.UTF_8)
+                        .replace("\"undeliveredServerGbps\":0,", ""),
+                StandardCharsets.UTF_8);
+
+        ProcessResult rejectedPromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-baseline.sh").toString(),
+                "--input", lab.toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "missing-retry-fields",
+                "--no-latest"
+        );
+        Assertions.assertEquals(1, rejectedPromotion.exitCode, rejectedPromotion.output);
+        Assertions.assertTrue(rejectedPromotion.output.contains("missing required retry-pressure fields"));
+        Assertions.assertTrue(rejectedPromotion.output.contains("undeliveredServerGbps"));
+        Assertions.assertFalse(Files.exists(output.resolve(
+                "baselines/missing-retry-fields/baseline-manifest.json")));
+    }
+
+    @Test
     public void testComparisonRejectsValidationBypassesByDefault() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -1184,7 +1211,8 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8);
         Files.writeString(combined.resolve("suite-aggregate.jsonl"),
                 "{\"case\":\"perfect\",\"benchmarkName\":\"multi-client-fanout\",\"deliveredGbps\":1,"
-                        + "\"probeRttP99Millis\":1}\n",
+                        + "\"probeRttP99Millis\":1"
+                        + readinessRetryFieldsJson() + "}\n",
                 StandardCharsets.UTF_8);
         Files.writeString(combined.resolve("bandwidth-capacity.jsonl"),
                 "{\"summaryKind\":\"bandwidth-capacity\",\"case\":\"perfect\",\"payloadSize\":512,"
@@ -1219,6 +1247,10 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(smokeSummaryJson.path("allowValidationBypasses").asBoolean());
         Assertions.assertEquals("allowLoosePrereqGates",
                 smokeSummaryJson.path("profiles").get(0).path("validation").path("bypassFlags").get(0).asText());
+        Assertions.assertTrue(smokeSummaryJson.path("profiles").get(0).path("aggregate")
+                .path("contentionRows").get(0).has("undeliveredServerGbps"));
+        Assertions.assertTrue(smokeSummaryJson.path("profiles").get(0).path("aggregate")
+                .path("contentionRows").get(0).has("affectedServerDatagramsOutPerSecond"));
 
         ProcessResult rejectedPromotion = runProcess(root, Duration.ofSeconds(15),
                 "bash",
@@ -1246,6 +1278,62 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8));
         Assertions.assertTrue(promotionManifest.path("allowValidationBypasses").asBoolean());
         Assertions.assertTrue(promotionManifest.path("summary").path("allowValidationBypasses").asBoolean());
+
+        Files.writeString(combined.resolve("suite-aggregate.jsonl"),
+                Files.readString(combined.resolve("suite-aggregate.jsonl"), StandardCharsets.UTF_8)
+                        .replace("\"undeliveredServerGbps\":0,", ""),
+                StandardCharsets.UTF_8);
+        ProcessResult missingRetrySummary = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/summarize-lab-impairment.sh").toString(),
+                "--manifest", campaign.resolve("manifest.jsonl").toString(),
+                "--out", campaign.resolve("summary-missing-retry").toString(),
+                "--allow-validation-bypasses"
+        );
+        Assertions.assertEquals(0, missingRetrySummary.exitCode, missingRetrySummary.output);
+        JsonNode missingRetrySummaryJson = JSON.readTree(Files.readString(
+                campaign.resolve("summary-missing-retry/impairment-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingRetrySummaryJson.path("profiles").get(0).path("aggregate")
+                .path("contentionRows").get(0).has("undeliveredServerGbps"));
+
+        ProcessResult missingRetryPromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-impairment.sh").toString(),
+                "--input", campaign.resolve("summary-missing-retry").toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "impairment-missing-summary-retry",
+                "--no-latest",
+                "--allow-validation-bypasses"
+        );
+        Assertions.assertEquals(1, missingRetryPromotion.exitCode, missingRetryPromotion.output);
+        Assertions.assertTrue(missingRetryPromotion.output.contains("undeliveredServerGbps"));
+    }
+
+    @Test
+    public void testImpairmentPromotionRejectsMissingRetryPressureFields() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-impairment-promotion-retry-fields-test");
+        Path summary = output.resolve("summary");
+        writeComparableImpairmentSummary(summary, false);
+        Files.writeString(summary.resolve("impairment-summary.json"),
+                Files.readString(summary.resolve("impairment-summary.json"), StandardCharsets.UTF_8)
+                        .replace(",\"affectedServerDatagramsOutPerSecond\":0", ""),
+                StandardCharsets.UTF_8);
+
+        ProcessResult rejectedPromotion = runProcess(root, Duration.ofSeconds(15),
+                "bash",
+                root.resolve("benchmark/scripts/promote-lab-impairment.sh").toString(),
+                "--input", summary.toString(),
+                "--out", output.resolve("baselines").toString(),
+                "--name", "impairment-missing-retry-fields",
+                "--no-latest"
+        );
+        Assertions.assertEquals(1, rejectedPromotion.exitCode, rejectedPromotion.output);
+        Assertions.assertTrue(rejectedPromotion.output.contains("missing required retry-pressure fields"));
+        Assertions.assertTrue(rejectedPromotion.output.contains("affectedServerDatagramsOutPerSecond"));
+        Assertions.assertFalse(Files.exists(output.resolve(
+                "baselines/impairment-missing-retry-fields/impairment-baseline-manifest.json")));
     }
 
     @Test
@@ -2236,7 +2324,8 @@ public class BenchmarkKitTests {
                     .append("\"affectedFairnessIndex\":1,")
                     .append("\"disconnects\":0,")
                     .append("\"unstable\":false,")
-                    .append("\"unstableReasons\":[],")
+                    .append("\"unstableReasons\":[]")
+                    .append(readinessRetryFieldsJson()).append(",")
                     .append("\"artifact\":\"").append(artifact).append("\"}\n");
         }
         Files.writeString(labRoot.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
@@ -2399,6 +2488,7 @@ public class BenchmarkKitTests {
                         + "\"affectedSentToDeliveredBytesRatio\":0,"
                         + "\"unstable\":false,"
                         + "\"unstableReasons\":[]"
+                        + readinessRetryFieldsJson()
                         + "}]}}]}\n",
                 StandardCharsets.UTF_8);
     }

@@ -418,7 +418,7 @@ Use `benchmark/scripts/validate-lab-baseline.sh` on the combined output before a
 
 After promotion, `check-baseline-readiness.sh` adds a final production-shape gate: the promoted perfect-network and impairment baselines must include `blackhole` disappearing-client rows, `10ms`, `20ms`, and `50ms` batched-game-traffic rows, plus resource-pack rows for `8192` and `262144` byte chunks at `200ms`. A package with only generic batch/resource scenario names or clean-close disappearance rows is not enough.
 
-After validation passes, use `benchmark/scripts/promote-lab-baseline.sh` with the generated `--handoff-manifest` to create the durable comparison package. It refuses validation bypass flags by default, copies the comparable aggregate, validation reports, capacity selector artifacts, topology/host/prereq evidence, planning manifests, and production-evidence fingerprint into a named baseline directory, and updates a `latest` symlink for candidate comparisons.
+After validation passes, use `benchmark/scripts/promote-lab-baseline.sh` with the generated `--handoff-manifest` to create the durable comparison package. It refuses validation bypass flags and aggregate rows missing required retry-pressure fields by default, copies the comparable aggregate, validation reports, capacity selector artifacts, topology/host/prereq evidence, planning manifests, and production-evidence fingerprint into a named baseline directory, and updates a `latest` symlink for candidate comparisons.
 
 For multi-rate remote bandwidth curves, prefer `benchmark/scripts/plan-remote-worker-curve.sh`. It generates per-host server/receiver scripts, fixed `--start-at-epoch-ms` values, merge commands, a campaign `suite-aggregate.jsonl`, and `bandwidth-capacity.*` selector artifacts.
 

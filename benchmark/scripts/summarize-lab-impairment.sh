@@ -267,30 +267,37 @@ while IFS=$'\t' read -r profile latency jitter loss artifact_root netem_evidence
         ),
         contentionRows: (
           $rows
-          | map(select(contention(.)) | {
-              case: (.case // null),
-              benchmarkName: (.benchmarkName // null),
-              clients: (.clients // null),
-              payloadSize: (.payloadSize // null),
-              reliability: (.reliability // null),
-              batched: (.batched // false),
-              batchIntervalMillis: (.batchIntervalMillis // null),
-              logicalPacketsPerBatch: (.logicalPacketsPerBatch // null),
-              batchGroups: (.batchGroups // null),
-              packetLimit: (.packetLimit // null),
-              globalPacketLimit: (.globalPacketLimit // null),
-	              configuredMaxQueuedBytes: (.configuredMaxQueuedBytes // null),
-	              targetClientMbps: (.targetClientMbps // null),
-	              disappearanceMode: (.disappearanceMode // null),
-	              deliveredGbps: (.deliveredGbps // null),
-              probeRttP99Millis: (.probeRttP99Millis // null),
-              healthyFairnessIndex: (.healthyFairnessIndex // null),
-              healthySentToDeliveredBytesRatio: (.healthySentToDeliveredBytesRatio // null),
-              affectedSentToDeliveredBytesRatio: (.affectedSentToDeliveredBytesRatio // null),
-              maxQueuedBytes: (.maxQueuedBytes // null),
-              unstable: (.unstable // false),
-              unstableReasons: (.unstableReasons // [])
-            })
+          | map(select(contention(.)) | . as $row | ({
+                case: ($row.case // null),
+                benchmarkName: ($row.benchmarkName // null),
+                clients: ($row.clients // null),
+                payloadSize: ($row.payloadSize // null),
+                reliability: ($row.reliability // null),
+                batched: ($row.batched // false),
+                batchIntervalMillis: ($row.batchIntervalMillis // null),
+                logicalPacketsPerBatch: ($row.logicalPacketsPerBatch // null),
+                batchGroups: ($row.batchGroups // null),
+                packetLimit: ($row.packetLimit // null),
+                globalPacketLimit: ($row.globalPacketLimit // null),
+                configuredMaxQueuedBytes: ($row.configuredMaxQueuedBytes // null),
+                targetClientMbps: ($row.targetClientMbps // null),
+                disappearanceMode: ($row.disappearanceMode // null),
+                deliveredGbps: ($row.deliveredGbps // null),
+                probeRttP99Millis: ($row.probeRttP99Millis // null),
+                healthyFairnessIndex: ($row.healthyFairnessIndex // null),
+                healthySentToDeliveredBytesRatio: ($row.healthySentToDeliveredBytesRatio // null),
+                affectedSentToDeliveredBytesRatio: ($row.affectedSentToDeliveredBytesRatio // null),
+                maxQueuedBytes: ($row.maxQueuedBytes // null),
+                unstable: ($row.unstable // false),
+                unstableReasons: ($row.unstableReasons // [])
+              }
+              + (if $row | has("undeliveredServerGbps") then {undeliveredServerGbps: $row.undeliveredServerGbps} else {} end)
+              + (if $row | has("healthyUndeliveredServerGbps") then {healthyUndeliveredServerGbps: $row.healthyUndeliveredServerGbps} else {} end)
+              + (if $row | has("affectedUndeliveredServerGbps") then {affectedUndeliveredServerGbps: $row.affectedUndeliveredServerGbps} else {} end)
+              + (if $row | has("serverDatagramsOutPerSecond") then {serverDatagramsOutPerSecond: $row.serverDatagramsOutPerSecond} else {} end)
+              + (if $row | has("healthyServerDatagramsOutPerSecond") then {healthyServerDatagramsOutPerSecond: $row.healthyServerDatagramsOutPerSecond} else {} end)
+              + (if $row | has("affectedServerDatagramsOutPerSecond") then {affectedServerDatagramsOutPerSecond: $row.affectedServerDatagramsOutPerSecond} else {} end)
+              + (if $row | has("sentToDeliveredBytesRatio") then {sentToDeliveredBytesRatio: $row.sentToDeliveredBytesRatio} else {} end)))
         )
       },
       capacity: {
