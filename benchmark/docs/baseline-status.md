@@ -187,6 +187,15 @@ benchmark/scripts/check-baseline-readiness.sh \
 The baseline is not accepted as the comparison baseline until this readiness check passes.
 Readiness also checks that the promoted artifacts have no validation bypass markers and that the perfect-network validation enforced the requested contention scale and per-client Mbps target. The recommended handoff uses `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
 
+Current readiness audit in this worktree:
+
+```bash
+benchmark/scripts/check-baseline-readiness.sh \
+  --out benchmark/build/benchmark-results/current-readiness-20260622T030252Z
+```
+
+The audit correctly reports `not-ready` because no promoted perfect-network baseline or promoted impairment baseline exists yet. Its blocking issues are the missing promoted lab baseline manifest, `validation.json`, `suite-aggregate.jsonl`, `bandwidth-capacity.jsonl`, impairment baseline manifest, and impairment campaign summary. This is the expected state before the separate-host lab campaign has been run, validated, and promoted.
+
 ## Adverse-Network Lab Plan
 
 The current host/NIC-level impairment campaign is generated with:
