@@ -84,16 +84,20 @@ The capacity selector did not choose a stable point for the local pilot. The bes
 Latest local best-case curve artifact in this worktree:
 
 ```text
-benchmark/build/benchmark-results/local-bestcase-mtu1340-20260621T224721Z/
+benchmark/build/benchmark-results/current-local-bestcase-mtu1340-20260622T071105Z/
 ```
 
-With payload `1340` and strict selector gates, the selected stable local point was:
+With payload `1340`, three measured iterations, and default stability policy, the capacity selector did not choose a stable local point. The positive-throughput rows delivered the offered rate up to the `500Mbps` target, but each was rejected for p99 probe-latency spread. The `1000Mbps` and `unlimited` rows were rejected as zero-delivery rows after disconnect/no active peers:
 
-| Selected | Target Mbps | Delivered Gbps | p99 RTT ms | Max queue bytes |
-| --- | ---: | ---: | ---: | ---: |
-| `curve-100_0mbps` | `100` | `0.099948992` | `9.015319` | `167500` |
+| Candidate | Target Mbps | Delivered Gbps | p99 RTT ms | Max queue bytes | Rejection |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `curve-100_0mbps` | `100` | `0.099984368` | `10.242443` | `148740` | `p99-spread` |
+| `curve-250_0mbps` | `250` | `0.249718112` | `11.406958` | `505197` | `p99-spread` |
+| `curve-500_0mbps` | `500` | `0.498546464` | `34.466579` | `790600` | `p99-spread` |
+| `curve-1000_0mbps` | `1000` | `0` | `0` | `0` | `zero-delivery` |
+| `curve-unlimited` | `0` | `0` | `0` | `0` | `zero-delivery` |
 
-The best observed local point was `curve-750_0mbps` at `0.748937792Gbps`, but it was rejected because it was unstable and had disconnect, p99 RTT, and queue-pressure failures. Zero-delivery curve rows are now rejected by the stability policy, capacity selector, and lab validator.
+The best observed current local point was `curve-500_0mbps` at `0.498546Gbps`, but it was rejected because unstable rows are not allowed. Zero-delivery curve rows are rejected by the stability policy, capacity selector, and lab validator. This makes the local loopback evidence useful for regression shape only; it is not a stable capacity baseline.
 
 Latest local 100-client contention artifact in this worktree:
 
