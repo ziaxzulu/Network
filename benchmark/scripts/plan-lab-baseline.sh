@@ -13,9 +13,11 @@ contention_clients="100"
 case_prefix="lab-baseline"
 curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 curve_rates_mbps="100,250,500,750,1000,1500,2000,unlimited"
-contention_cases="fanout,fairness,disappear-blackhole"
+contention_cases="fanout,fairness,disappear-blackhole,resource-pack"
 contention_payload_size="512"
 per_client_mbps="5"
+resource_pack_chunk_sizes="8192,262144"
+resource_pack_interval="200ms"
 impaired_clients="10%"
 disappearing_clients="10%"
 disappear_after="30s"
@@ -73,9 +75,11 @@ Options:
   --case NAME                       Alias for --case-prefix.
   --curve-payload-sizes CSV         Payload sizes for bandwidth curve. Default: 64,256,512,1200,1340,1400,262144.
   --curve-rates-mbps CSV            Offered Mbps points for bandwidth curve. Default: 100,250,500,750,1000,1500,2000,unlimited.
-  --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole.
+  --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole,resource-pack.
   --contention-payload-size N       Payload size for contention cases. Default: 512.
   --per-client-mbps N               Contention per-client offered rate. Default: 5.
+  --resource-pack-chunk-sizes CSV   Resource-pack chunk sizes. Default: 8192,262144.
+  --resource-pack-interval DURATION Resource-pack chunk interval. Default: 200ms.
   --impaired-clients N|PCT          Affected clients for fairness. Default: 10%.
   --disappearing-clients N|PCT      Affected clients for disappearance cases. Default: 10%.
   --disappear-after DURATION        Disappearance trigger inside measurement. Default: 30s.
@@ -181,6 +185,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --per-client-mbps)
       per_client_mbps="$2"
+      shift 2
+      ;;
+    --resource-pack-chunk-sizes|--chunk-sizes)
+      resource_pack_chunk_sizes="$2"
+      shift 2
+      ;;
+    --resource-pack-interval|--chunk-interval)
+      resource_pack_interval="$2"
       shift 2
       ;;
     --impaired-clients)
@@ -397,6 +409,11 @@ if ! positive_int "$contention_payload_size"; then
   echo "--contention-payload-size must be a positive integer" >&2
   exit 2
 fi
+resource_pack_interval_ms="$(duration_millis "$resource_pack_interval")"
+if [[ "$resource_pack_interval_ms" -le 0 ]]; then
+  echo "--resource-pack-interval must be greater than zero" >&2
+  exit 2
+fi
 if [[ -n "$raised_packet_limit" ]] && ! positive_int "$raised_packet_limit"; then
   echo "--raised-packet-limit must be a positive integer" >&2
   exit 2
@@ -419,9 +436,18 @@ for value_name in per_client_mbps max_p99_ms max_queue_bytes max_send_deliver_ra
     exit 2
   fi
 done
-for value in "$curve_payload_sizes" "$curve_rates_mbps" "$contention_cases"; do
+for value in "$curve_payload_sizes" "$curve_rates_mbps" "$contention_cases" "$resource_pack_chunk_sizes"; do
   if ! non_empty_csv "$value"; then
     echo "CSV options must be non-empty and cannot start or end with a comma: $value" >&2
+    exit 2
+  fi
+done
+
+IFS=',' read -r -a resource_pack_chunk_array <<<"$resource_pack_chunk_sizes"
+for chunk_size in "${resource_pack_chunk_array[@]}"; do
+  chunk_size="${chunk_size//[[:space:]]/}"
+  if ! positive_int "$chunk_size"; then
+    echo "--resource-pack-chunk-sizes entries must be positive integers: $chunk_size" >&2
     exit 2
   fi
 done
@@ -592,6 +618,8 @@ contention_cmd=(
   --cases "$contention_cases"
   --payload-size "$contention_payload_size"
   --per-client-mbps "$per_client_mbps"
+  --resource-pack-chunk-sizes "$resource_pack_chunk_sizes"
+  --resource-pack-interval "$resource_pack_interval"
   --impaired-clients "$impaired_clients"
   --disappearing-clients "$disappearing_clients"
   --disappear-after "$disappear_after"
@@ -654,6 +682,9 @@ for selected_case in "${contention_case_array[@]}"; do
       ;;
     disappear-*|disappearing-*|close|blackhole|stopread|stop-reading)
       add_required_scenario "disappearing-clients"
+      ;;
+    resource-pack|resource-pack-transfer|resource)
+      add_required_scenario "resource-pack-transfer"
       ;;
   esac
 done
@@ -886,6 +917,8 @@ cat >"$topology_template" <<EOF
 - Max queued bytes cap: \`${max_queued_bytes:-library default}\`
 - Contention clients: \`$validation_min_contention_clients\`
 - Contention per-client Mbps: \`$per_client_mbps\`
+- Resource-pack chunk sizes: \`$resource_pack_chunk_sizes\`
+- Resource-pack interval: \`$resource_pack_interval\`
 
 ## Hosts
 
@@ -923,6 +956,9 @@ EOF
     echo "- Raised-limiter curve packet limits: \`$raised_packet_limit/$raised_global_packet_limit\`"
   fi
   echo "- Contention plan: \`$contention_plan\`"
+  echo "- Contention cases: \`$contention_cases\`"
+  echo "- Resource-pack chunk sizes: \`$resource_pack_chunk_sizes\`"
+  echo "- Resource-pack interval: \`$resource_pack_interval\`"
   echo "- Max queued bytes cap: \`${max_queued_bytes:-library default}\`"
   echo "- Freshness check: \`$freshness_script\`"
   echo "- Combined merge: \`$merge_all_script\`"

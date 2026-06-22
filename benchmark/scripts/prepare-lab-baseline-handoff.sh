@@ -14,9 +14,11 @@ curve_receivers=("receiver-a=1")
 curve_payload_sizes="64,256,512,1200,1340,1400,262144"
 curve_rates_mbps="100,250,500,750,1000,1500,2000,unlimited"
 contention_receivers=()
-contention_cases="fanout,fairness,disappear-blackhole"
+contention_cases="fanout,fairness,disappear-blackhole,resource-pack"
 contention_payload_size="512"
 per_client_mbps="5"
+resource_pack_chunk_sizes="8192,262144"
+resource_pack_interval="200ms"
 raised_packet_limit="100000"
 raised_global_packet_limit="1000000"
 max_queued_bytes="67108864"
@@ -60,9 +62,11 @@ Options:
   --profiles CSV                    Impairment profiles. Default: perfect,near-loss,regional-loss,poor,severe.
   --target-host-role ROLE           Host/namespace role shaped by impairment netem scripts. Default: receiver-a.
   --case-prefix NAME                Case prefix. Default: lab.
-  --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole.
+  --contention-cases CSV            Contention cases. Default: fanout,fairness,disappear-blackhole,resource-pack.
   --contention-payload-size N       Payload size for contention. Default: 512.
   --per-client-mbps N               Contention per-client offered rate. Default: 5.
+  --resource-pack-chunk-sizes CSV   Resource-pack chunk sizes. Default: 8192,262144.
+  --resource-pack-interval DURATION Resource-pack chunk interval. Default: 200ms.
   --raised-packet-limit N           Raised-limiter packet limit. Default: 100000.
   --raised-global-packet-limit N    Raised-limiter global packet limit. Default: 1000000.
   --max-queued-bytes N              Queue cap for lab runs. Default: 67108864.
@@ -153,6 +157,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --per-client-mbps)
       per_client_mbps="$2"
+      shift 2
+      ;;
+    --resource-pack-chunk-sizes|--chunk-sizes)
+      resource_pack_chunk_sizes="$2"
+      shift 2
+      ;;
+    --resource-pack-interval|--chunk-interval)
+      resource_pack_interval="$2"
       shift 2
       ;;
     --raised-packet-limit)
@@ -271,9 +283,36 @@ for value_name in port contention_payload_size iterations raised_packet_limit ra
     exit 2
   fi
 done
-for value in "$profiles" "$curve_payload_sizes" "$curve_rates_mbps" "$contention_cases"; do
+for value in "$profiles" "$curve_payload_sizes" "$curve_rates_mbps" "$contention_cases" "$resource_pack_chunk_sizes"; do
   if ! non_empty_csv "$value"; then
     echo "CSV options must be non-empty and cannot start or end with a comma: $value" >&2
+    exit 2
+  fi
+done
+duration_millis() {
+  local value="${1,,}"
+  if [[ "$value" =~ ^([0-9]+)ms$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "$value" =~ ^([0-9]+)s$ ]]; then
+    echo "$((BASH_REMATCH[1] * 1000))"
+  elif [[ "$value" =~ ^([0-9]+)m$ ]]; then
+    echo "$((BASH_REMATCH[1] * 60000))"
+  elif [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "$value"
+  else
+    echo "Invalid duration: $1" >&2
+    exit 2
+  fi
+}
+if [[ "$(duration_millis "$resource_pack_interval")" -le 0 ]]; then
+  echo "--resource-pack-interval must be greater than zero" >&2
+  exit 2
+fi
+IFS=',' read -r -a resource_pack_chunk_array <<<"$resource_pack_chunk_sizes"
+for chunk_size in "${resource_pack_chunk_array[@]}"; do
+  chunk_size="${chunk_size//[[:space:]]/}"
+  if ! positive_int "$chunk_size"; then
+    echo "--resource-pack-chunk-sizes entries must be positive integers: $chunk_size" >&2
     exit 2
   fi
 done
@@ -341,6 +380,8 @@ common_baseline_args=(
   --contention-cases "$contention_cases"
   --contention-payload-size "$contention_payload_size"
   --per-client-mbps "$per_client_mbps"
+  --resource-pack-chunk-sizes "$resource_pack_chunk_sizes"
+  --resource-pack-interval "$resource_pack_interval"
   --raised-packet-limit "$raised_packet_limit"
   --raised-global-packet-limit "$raised_global_packet_limit"
   --max-queued-bytes "$max_queued_bytes"
@@ -390,6 +431,7 @@ profiles_json="$(json_array_from_csv "$profiles")"
 curve_payload_sizes_json="$(json_number_array_from_csv "$curve_payload_sizes")"
 curve_rates_mbps_json="$(json_array_from_csv "$curve_rates_mbps")"
 contention_cases_json="$(json_array_from_csv "$contention_cases")"
+resource_pack_chunk_sizes_json="$(json_number_array_from_csv "$resource_pack_chunk_sizes")"
 strict_prereq_args=(--expect-mtu "$expect_mtu" --expect-min-cpus "$expect_min_cpus" --require-clock-sync --require-no-netem)
 if "$require_cpu_performance"; then
   strict_prereq_args+=(--require-cpu-performance)
@@ -418,6 +460,7 @@ jq -n \
   --arg contentionPayloadSize "$contention_payload_size" \
   --arg contentionClientTotal "$contention_client_total" \
   --arg perClientMbps "$per_client_mbps" \
+  --arg resourcePackInterval "$resource_pack_interval" \
   --arg raisedPacketLimit "$raised_packet_limit" \
   --arg raisedGlobalPacketLimit "$raised_global_packet_limit" \
   --arg maxQueuedBytes "$max_queued_bytes" \
@@ -435,6 +478,7 @@ jq -n \
   --argjson curvePayloadSizesList "$curve_payload_sizes_json" \
   --argjson curveRatesMbpsList "$curve_rates_mbps_json" \
   --argjson contentionCases "$contention_cases_json" \
+  --argjson resourcePackChunkSizes "$resource_pack_chunk_sizes_json" \
   --argjson sudoNetem "$sudo_netem" \
   --argjson requireCpuPerformance "$require_cpu_performance" \
   '{
@@ -464,6 +508,8 @@ jq -n \
     contentionPayloadSize: ($contentionPayloadSize | tonumber),
     contentionClientTotal: ($contentionClientTotal | tonumber),
     perClientMbps: ($perClientMbps | tonumber),
+    resourcePackChunkSizes: $resourcePackChunkSizes,
+    resourcePackInterval: $resourcePackInterval,
     raisedPacketLimit: ($raisedPacketLimit | tonumber),
     raisedGlobalPacketLimit: ($raisedGlobalPacketLimit | tonumber),
     maxQueuedBytes: ($maxQueuedBytes | tonumber),
@@ -500,6 +546,8 @@ cat >"$readme" <<EOF
 - Contention clients: \`$contention_client_total\`
 - Contention cases: \`$contention_cases\`
 - Per-client Mbps: \`$per_client_mbps\`
+- Resource-pack chunk sizes: \`$resource_pack_chunk_sizes\`
+- Resource-pack interval: \`$resource_pack_interval\`
 - Raised packet limits: \`$raised_packet_limit/$raised_global_packet_limit\`
 - Max queued bytes: \`$max_queued_bytes\`
 - Expected MTU: \`$expect_mtu\`

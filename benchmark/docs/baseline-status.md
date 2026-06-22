@@ -100,7 +100,7 @@ benchmark/scripts/plan-lab-baseline.sh \
   --curve-receiver receiver-a=1 \
   --contention-receiver receiver-a=250 \
   --contention-receiver receiver-b=250 \
-  --contention-cases fanout,fairness,disappear-blackhole \
+  --contention-cases fanout,fairness,disappear-blackhole,resource-pack \
   --contention-payload-size 512 \
   --per-client-mbps 5 \
   --raised-packet-limit 100000 \
@@ -182,7 +182,7 @@ benchmark/scripts/plan-lab-impairment.sh \
   --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
   --contention-receiver receiver-a=250 \
   --contention-receiver receiver-b=250 \
-  --contention-cases fanout,fairness,disappear-blackhole \
+  --contention-cases fanout,fairness,disappear-blackhole,resource-pack \
   --contention-payload-size 512 \
   --per-client-mbps 5 \
   --raised-packet-limit 100000 \

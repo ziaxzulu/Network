@@ -9,9 +9,11 @@ port="19132"
 clients="100"
 clients_set=false
 receivers=()
-cases="fanout,fairness,disappear-blackhole"
+cases="fanout,fairness,disappear-blackhole,resource-pack"
 payload_size="512"
 per_client_mbps="5"
+resource_pack_chunk_sizes="8192,262144"
+resource_pack_interval="200ms"
 warmup="10s"
 duration="60s"
 iterations="3"
@@ -46,10 +48,12 @@ Options:
   --port PORT                       UDP port. Default: 19132.
   --clients N                       Total clients when no --receiver is supplied. Default: 100.
   --receiver NAME:CLIENTS           Receiver worker and client count. NAME=CLIENTS is also accepted. May be repeated.
-  --cases CSV                       Cases: fanout,fairness,disappear-close,disappear-stopread,disappear-blackhole.
-                                    Default: fanout,fairness,disappear-blackhole.
+  --cases CSV                       Cases: fanout,fairness,disappear-close,disappear-stopread,disappear-blackhole,resource-pack.
+                                    Default: fanout,fairness,disappear-blackhole,resource-pack.
   --payload-size N                  Payload size. Default: 512.
   --per-client-mbps N               Per-client offered rate. Default: 5.
+  --resource-pack-chunk-sizes CSV   Chunk sizes for resource-pack cases. Default: 8192,262144.
+  --resource-pack-interval DURATION Chunk interval for resource-pack cases. Default: 200ms.
   --warmup DURATION                 Warmup per case. Default: 10s.
   --duration DURATION               Measurement duration per case. Default: 60s.
   --iterations N                    Iterations per case. Default: 3.
@@ -122,6 +126,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --per-client-mbps)
       per_client_mbps="$2"
+      shift 2
+      ;;
+    --resource-pack-chunk-sizes|--chunk-sizes)
+      resource_pack_chunk_sizes="$2"
+      shift 2
+      ;;
+    --resource-pack-interval|--chunk-interval)
+      resource_pack_interval="$2"
       shift 2
       ;;
     --warmup)
@@ -309,6 +321,9 @@ canonical_case() {
     disappear-blackhole|disappearing-blackhole|blackhole)
       echo "disappear-blackhole"
       ;;
+    resource-pack|resource-pack-transfer|resource)
+      echo "resource-pack"
+      ;;
     *)
       echo "Unknown case: $1" >&2
       exit 2
@@ -332,6 +347,11 @@ if ! positive_int "$payload_size"; then
   echo "--payload-size must be a positive integer" >&2
   exit 2
 fi
+resource_pack_interval_ms="$(duration_millis "$resource_pack_interval")"
+if [[ "$resource_pack_interval_ms" -le 0 ]]; then
+  echo "--resource-pack-interval must be greater than zero" >&2
+  exit 2
+fi
 for value in "$per_client_mbps" "$impairment_loss"; do
   if ! non_negative_number "$value"; then
     echo "rate and loss values must be non-negative numbers: $value" >&2
@@ -350,6 +370,10 @@ if ! non_empty_csv "$cases"; then
   echo "--cases must be a non-empty CSV value" >&2
   exit 2
 fi
+if ! non_empty_csv "$resource_pack_chunk_sizes"; then
+  echo "--resource-pack-chunk-sizes must be a non-empty CSV value" >&2
+  exit 2
+fi
 
 IFS=',' read -r -a case_array_raw <<<"$cases"
 case_array=()
@@ -362,6 +386,34 @@ if [[ "${#case_array[@]}" -eq 0 ]]; then
   echo "No valid cases selected" >&2
   exit 2
 fi
+
+IFS=',' read -r -a resource_pack_chunk_array_raw <<<"$resource_pack_chunk_sizes"
+resource_pack_chunk_array=()
+for raw_chunk_size in "${resource_pack_chunk_array_raw[@]}"; do
+  raw_chunk_size="${raw_chunk_size//[[:space:]]/}"
+  [[ -z "$raw_chunk_size" ]] && continue
+  if ! positive_int "$raw_chunk_size"; then
+    echo "--resource-pack-chunk-sizes entries must be positive integers: $raw_chunk_size" >&2
+    exit 2
+  fi
+  resource_pack_chunk_array+=("$raw_chunk_size")
+done
+if [[ "${#resource_pack_chunk_array[@]}" -eq 0 ]]; then
+  echo "No valid resource-pack chunk sizes selected" >&2
+  exit 2
+fi
+
+expanded_case_array=()
+for selected_case in "${case_array[@]}"; do
+  if [[ "$selected_case" == "resource-pack" ]]; then
+    for chunk_size in "${resource_pack_chunk_array[@]}"; do
+      expanded_case_array+=("resource-pack:$chunk_size")
+    done
+  else
+    expanded_case_array+=("$selected_case")
+  fi
+done
+case_array=("${expanded_case_array[@]}")
 
 if [[ "${#receivers[@]}" -eq 0 ]]; then
   receivers=("receiver-a:$clients")
@@ -513,12 +565,19 @@ distributed_counts() {
 mapfile -t impaired_distribution < <(distributed_counts "$impaired_count")
 mapfile -t disappearing_distribution < <(distributed_counts "$disappearing_count")
 
+resource_pack_client_mbps() {
+  local chunk_size="$1"
+  awk -v bytes="$chunk_size" -v interval="$resource_pack_interval_ms" 'BEGIN { printf "%.9f", (bytes * 8 * (1000 / interval)) / 1000000 }'
+}
+
 case_index=0
 for selected_case in "${case_array[@]}"; do
   benchmark_name=""
   run_suffix=""
   server_case_args=""
   receiver_case_args=()
+  manifest_payload_size="$payload_size"
+  manifest_per_client_mbps="$per_client_mbps"
   affected_total=0
   affected_kind="none"
 
@@ -557,6 +616,16 @@ for selected_case in "${case_array[@]}"; do
       affected_total="$disappearing_count"
       affected_kind="disappearing-blackhole"
       ;;
+    resource-pack:*)
+      chunk_size="${selected_case#resource-pack:}"
+      benchmark_name="resource-pack-transfer"
+      run_suffix="resource-${clients}-${chunk_size}b-$(safe_name "$resource_pack_interval")"
+      server_case_args="--chunk-size $chunk_size --chunk-interval $resource_pack_interval"
+      manifest_payload_size="$chunk_size"
+      manifest_per_client_mbps="$(resource_pack_client_mbps "$chunk_size")"
+      affected_total=0
+      affected_kind="none"
+      ;;
   esac
 
   run_id="$case_prefix-$run_suffix"
@@ -587,6 +656,8 @@ for selected_case in "${case_array[@]}"; do
         mode="stop-reading"
       fi
       extra_receiver_args="--disappearing-clients $assigned --disappear-after $disappear_after --disappear-mode $mode"
+    elif [[ "$selected_case" == resource-pack:* ]]; then
+      extra_receiver_args="$server_case_args"
     fi
     if [[ -n "$affected_json" ]]; then
       affected_json="$affected_json,"
@@ -614,8 +685,8 @@ for selected_case in "${case_array[@]}"; do
     "$(json_escape "$benchmark_name")" \
     "$(json_escape "$run_id")" \
     "$clients" \
-    "$payload_size" \
-    "$per_client_mbps" \
+    "$manifest_payload_size" \
+    "$manifest_per_client_mbps" \
     "${max_queued_bytes:-null}" \
     "$(json_escape "$affected_kind")" \
     "$affected_total" \
@@ -639,6 +710,8 @@ chmod +x "$server_script" "$merge_script"
   echo "- Cases: \`$(IFS=,; echo "${case_array[*]}")\`"
   echo "- Payload size: \`$payload_size\`"
   echo "- Per-client Mbps: \`$per_client_mbps\`"
+  echo "- Resource-pack chunk sizes: \`$resource_pack_chunk_sizes\`"
+  echo "- Resource-pack interval: \`$resource_pack_interval\`"
   echo "- Impaired clients: \`$impaired_count\` from \`$impaired_clients\`"
   echo "- Disappearing clients: \`$disappearing_count\` from \`$disappearing_clients\`"
   echo "- Warmup: \`$warmup\`"

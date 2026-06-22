@@ -309,6 +309,45 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testRemoteContentionPlannerExpandsResourcePackRows() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-resource-contention-test");
+        Path plan = output.resolve("plan");
+        Path artifacts = output.resolve("artifacts");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/plan-remote-contention.sh").toString(),
+                "--out", plan.toString(),
+                "--artifact-root", artifacts.toString(),
+                "--server-host", "127.0.0.1",
+                "--clients", "4",
+                "--cases", "resource-pack",
+                "--resource-pack-chunk-sizes", "8192,262144",
+                "--resource-pack-interval", "200ms",
+                "--warmup", "1s",
+                "--duration", "1s",
+                "--iterations", "1",
+                "--start-delay", "1s",
+                "--start-offset", "180s"
+        );
+        Assertions.assertEquals(0, result.exitCode, result.output);
+
+        List<String> manifest = Files.readAllLines(plan.resolve("manifest.jsonl"), StandardCharsets.UTF_8);
+        Assertions.assertEquals(2, manifest.size());
+        Assertions.assertTrue(manifest.stream().allMatch(row -> row.contains("\"benchmarkName\":\"resource-pack-transfer\"")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"payloadSize\":8192")
+                && row.contains("\"perClientMbps\":0.327680000")));
+        Assertions.assertTrue(manifest.stream().anyMatch(row -> row.contains("\"payloadSize\":262144")
+                && row.contains("\"perClientMbps\":10.485760000")));
+
+        String serverCommands = Files.readString(plan.resolve("server-commands.sh"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(serverCommands.contains("--chunk-size 8192 --chunk-interval 200ms"));
+        Assertions.assertTrue(serverCommands.contains("--chunk-size 262144 --chunk-interval 200ms"));
+    }
+
+    @Test
     public void testLabHandoffGeneratorProducesBaselineAndImpairmentPlans() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -404,6 +443,10 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(2, handoffManifest.path("contentionClientTotal").asInt());
         Assertions.assertEquals(1, handoffManifest.path("contentionCases").size());
         Assertions.assertEquals("fanout", handoffManifest.path("contentionCases").get(0).asText());
+        Assertions.assertEquals(2, handoffManifest.path("resourcePackChunkSizes").size());
+        Assertions.assertEquals(8192, handoffManifest.path("resourcePackChunkSizes").get(0).asInt());
+        Assertions.assertEquals(262144, handoffManifest.path("resourcePackChunkSizes").get(1).asInt());
+        Assertions.assertEquals("200ms", handoffManifest.path("resourcePackInterval").asText());
         Assertions.assertEquals(64, handoffManifest.path("contentionPayloadSize").asInt());
         Assertions.assertEquals(1.0D, handoffManifest.path("perClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(1000, handoffManifest.path("raisedPacketLimit").asInt());
@@ -585,6 +628,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(5.0D, handoffCheckJson.path("expectedPerClientMbps").asDouble(), 0.001D);
         Assertions.assertEquals(500, handoffCheckJson.path("requiredMinContentionClients").asInt());
         Assertions.assertEquals(5.0D, handoffCheckJson.path("requiredMinContentionTargetClientMbps").asDouble(), 0.001D);
+        Assertions.assertTrue(handoffCheckJson.path("expectedContentionScenarios").toString()
+                .contains("\"resource-pack-transfer\""));
     }
 
     @Test
@@ -1359,7 +1404,7 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("validation.json"),
                 "{\"passed\":true,\"distinctHostnameCount\":2,\"hostReportCount\":2,\"rowCount\":"
-                        + (payloadSizes.length + 3)
+                        + (payloadSizes.length + 4)
                         + ",\"capacityRowCount\":" + payloadSizes.length
                         + ",\"prereqReportCount\":" + prereqReportCount
                         + ",\"readyPrereqReportCount\":" + readyPrereqReportCount
@@ -1370,7 +1415,8 @@ public class BenchmarkKitTests {
                         + ",\"minContentionClients\":" + minContentionClients
                         + ",\"minContentionTargetClientMbps\":" + minContentionTargetClientMbps
                         + ",\"scenarioCounts\":{\"curve\":" + payloadSizes.length
-                        + ",\"multi-client-fanout\":1,\"fairness\":1,\"disappearing-clients\":1}}\n",
+                        + ",\"multi-client-fanout\":1,\"fairness\":1,\"disappearing-clients\":1,"
+                        + "\"resource-pack-transfer\":1}}\n",
                 StandardCharsets.UTF_8);
 
         StringBuilder aggregate = new StringBuilder();
@@ -1390,6 +1436,7 @@ public class BenchmarkKitTests {
         aggregate.append("{\"case\":\"fanout\",\"benchmarkName\":\"multi-client-fanout\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"fairness\",\"benchmarkName\":\"fairness\",\"payloadSize\":512}\n");
         aggregate.append("{\"case\":\"disappear\",\"benchmarkName\":\"disappearing-clients\",\"payloadSize\":512}\n");
+        aggregate.append("{\"case\":\"resource-pack\",\"benchmarkName\":\"resource-pack-transfer\",\"payloadSize\":8192}\n");
         Files.writeString(labBaseline.resolve("suite-aggregate.jsonl"), aggregate.toString(), StandardCharsets.UTF_8);
         Files.writeString(labBaseline.resolve("bandwidth-capacity.jsonl"), capacity.toString(), StandardCharsets.UTF_8);
     }
@@ -1429,7 +1476,8 @@ public class BenchmarkKitTests {
             Files.writeString(prereqDir.resolve("prereq.md"), "# Prereq\n", StandardCharsets.UTF_8);
         }
 
-        String[] benchmarks = {"curve-100_0mbps", "multi-client-fanout", "fairness", "disappearing-clients"};
+        String[] benchmarks = {"curve-100_0mbps", "multi-client-fanout", "fairness", "disappearing-clients",
+                "resource-pack-transfer"};
         StringBuilder aggregate = new StringBuilder();
         for (String benchmark : benchmarks) {
             Path artifact = labRoot.resolve("artifacts").resolve(benchmark);
@@ -1502,6 +1550,7 @@ public class BenchmarkKitTests {
             if (includeDisappearingContention) {
                 profiles.append(",{\"benchmarkName\":\"disappearing-clients\"}");
             }
+            profiles.append(",{\"benchmarkName\":\"resource-pack-transfer\"}");
             profiles.append("]},\"capacity\":{\"rowCount\":").append(payloadSizes.length)
                     .append(",\"selectedCount\":").append(payloadSizes.length)
                     .append(",\"rows\":[");

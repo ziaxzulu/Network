@@ -5,7 +5,7 @@ input_path=""
 out_dir=""
 manifest_paths=()
 min_iterations="3"
-required_scenarios="curve,multi-client-fanout,fairness,disappearing-clients"
+required_scenarios="curve,multi-client-fanout,fairness,disappearing-clients,resource-pack-transfer"
 allow_unstable=false
 allow_disconnects=false
 allow_missing_capacity=false
@@ -39,7 +39,7 @@ Options:
   --curve-manifest PATH            Alias for --manifest.
   --contention-manifest PATH       Alias for --manifest.
   --min-iterations N               Minimum measured iterations per aggregate row. Default: 3.
-  --required-scenarios CSV         Required scenario families. Default: curve,multi-client-fanout,fairness,disappearing-clients.
+  --required-scenarios CSV         Required scenario families. Default: curve,multi-client-fanout,fairness,disappearing-clients,resource-pack-transfer.
   --allow-unstable                 Do not fail rows marked unstable.
   --allow-disconnects              Do not fail disconnects in curve or fanout rows.
   --allow-missing-capacity         Do not require bandwidth-capacity.jsonl.
@@ -54,9 +54,9 @@ Options:
   --min-healthy-fairness N         Fail fairness/disappearance rows below this healthy-client Jain fairness. Default: 0, disabled.
   --max-healthy-send-deliver-ratio N Fail fairness/disappearance rows above this healthy-client send/deliver ratio. Default: 0, disabled.
   --max-affected-send-deliver-ratio N Fail affected-client rows above this send/deliver ratio. Default: 0, disabled.
-  --max-contention-p99-ms N        Fail fanout/fairness/disappearance rows above this p99 probe RTT. Default: 0, disabled.
-  --min-contention-clients N       Fail fanout/fairness/disappearance rows below this client count. Default: 0, disabled.
-  --min-contention-target-client-mbps N Fail contention rows below this per-client offered rate. Default: 0, disabled.
+  --max-contention-p99-ms N        Fail fanout/fairness/disappearance/resource-pack rows above this p99 probe RTT. Default: 0, disabled.
+  --min-contention-clients N       Fail fanout/fairness/disappearance/resource-pack rows below this client count. Default: 0, disabled.
+  --min-contention-target-client-mbps N Fail fanout/fairness/disappearance rows below this per-client offered rate. Default: 0, disabled.
   --help                           Show this help.
 
 Outputs:
@@ -553,6 +553,11 @@ jq -n \
   def contention_scenario($row):
     (scenario($row) == "multi-client-fanout")
     or (scenario($row) == "fairness")
+    or (scenario($row) == "disappearing-clients")
+    or (scenario($row) == "resource-pack-transfer");
+  def rate_limited_contention_scenario($row):
+    (scenario($row) == "multi-client-fanout")
+    or (scenario($row) == "fairness")
     or (scenario($row) == "disappearing-clients");
   def affected_scenario($row):
     (scenario($row) == "fairness")
@@ -671,7 +676,7 @@ jq -n \
         + (if ($minContentionClients > 0 and contention_scenario($row) and n($row.clients) < $minContentionClients) then
             [issue("contention-clients-below-threshold"; "contention row has fewer clients than the configured threshold"; $row; {clients: n($row.clients), minContentionClients: $minContentionClients})]
           else [] end)
-        + (if ($minContentionTargetClientMbps > 0 and contention_scenario($row) and n($row.targetClientMbps) < $minContentionTargetClientMbps) then
+        + (if ($minContentionTargetClientMbps > 0 and rate_limited_contention_scenario($row) and n($row.targetClientMbps) < $minContentionTargetClientMbps) then
             [issue("contention-target-client-mbps-below-threshold"; "contention row has a lower per-client target Mbps than the configured threshold"; $row; {targetClientMbps: n($row.targetClientMbps), minContentionTargetClientMbps: $minContentionTargetClientMbps})]
           else [] end)
       ) | add

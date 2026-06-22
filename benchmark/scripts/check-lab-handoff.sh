@@ -204,10 +204,12 @@ expected_contention_scenarios_json="$(jq -c '
     | if $case == "fanout" or $case == "multi-client-fanout" then "multi-client-fanout"
       elif $case == "fairness" then "fairness"
       elif ($case | startswith("disappear")) or ($case | startswith("disappearing")) or $case == "close" or $case == "blackhole" or $case == "stopread" or $case == "stop-reading" then "disappearing-clients"
+      elif $case == "resource-pack" or $case == "resource-pack-transfer" or $case == "resource" then "resource-pack-transfer"
       else $case
       end;
   [(.contentionCases // [])[] | scenario(.)] | unique
 ' "$manifest")"
+expected_resource_pack_payloads_json="$(jq -c '.resourcePackChunkSizes // []' "$manifest")"
 
 if [[ "$expected_contention_clients" != "$computed_contention_clients" ]]; then
   append_issue "handoff-contention-client-total-mismatch" "handoff" "handoff contentionClientTotal does not match contention receiver distribution" \
@@ -335,9 +337,30 @@ check_contention_manifest() {
       "$(jq -n --arg path "$path" --arg case "$case_name" --arg benchmarkName "$benchmark_name" --argjson expected "$expected_contention_clients" --argjson actual "${actual_clients:-0}" '{path:$path,case:$case,benchmarkName:$benchmarkName,expectedClients:$expected,actualClients:$actual}')"
   done <<<"$client_mismatches"
 
+  if jq -n -e --argjson scenarios "$expected_contention_scenarios_json" '$scenarios | index("resource-pack-transfer") != null' >/dev/null; then
+    if jq -n -e --argjson expected "$expected_resource_pack_payloads_json" '$expected | length == 0' >/dev/null; then
+      append_issue "handoff-missing-resource-pack-chunk-sizes" "$label" "handoff manifest requires resource-pack-transfer but has no resourcePackChunkSizes" \
+        "$(jq -n --arg path "$manifest" '{path:$path}')"
+    fi
+
+    local missing_resource_payloads
+    missing_resource_payloads="$(jq -r -s --argjson expected "$expected_resource_pack_payloads_json" '
+      ([.[] | select((.benchmarkName // "") == "resource-pack-transfer") | (.payloadSize // empty | tonumber)] | unique) as $actual
+      | $expected[] as $payload
+      | select(($actual | index($payload)) == null)
+      | $payload
+    ' "$path")"
+    while IFS= read -r payload; do
+      [[ -z "$payload" ]] && continue
+      append_issue "contention-missing-resource-pack-payload" "$label" "contention manifest is missing a required resource-pack payload size" \
+        "$(jq -n --arg path "$path" --argjson payloadSize "$payload" '{path:$path,payloadSize:$payloadSize}')"
+    done <<<"$missing_resource_payloads"
+  fi
+
   local rate_mismatches
   rate_mismatches="$(jq -r -s --argjson expected "$expected_per_client_mbps" '
     .[]
+    | select((.benchmarkName // "") != "resource-pack-transfer")
     | select(((((.perClientMbps // -1) | tonumber) - $expected) | fabs) > 0.000001)
     | [(.case // ""), (.benchmarkName // ""), ((.perClientMbps // -1) | tostring)] | @tsv
   ' "$path")"
@@ -388,6 +411,7 @@ jq -n \
   --argjson expectedCurveRatesMbps "$curve_rates_json" \
   --argjson expectedProfiles "$profiles_json" \
   --argjson expectedContentionScenarios "$expected_contention_scenarios_json" \
+  --argjson expectedResourcePackPayloadSizes "$expected_resource_pack_payloads_json" \
   --argjson expectedContentionClients "$expected_contention_clients" \
   --argjson expectedPerClientMbps "$expected_per_client_mbps" \
   --argjson expectedMtu "$expected_mtu_json" \
@@ -408,6 +432,7 @@ jq -n \
     expectedCurveRowsPerCurvePlan: $expectedCurveRows,
     expectedProfiles: $expectedProfiles,
     expectedContentionScenarios: $expectedContentionScenarios,
+    expectedResourcePackPayloadSizes: $expectedResourcePackPayloadSizes,
     expectedContentionClients: $expectedContentionClients,
     expectedPerClientMbps: $expectedPerClientMbps,
     expectedMtu: $expectedMtu,

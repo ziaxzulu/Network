@@ -352,7 +352,7 @@ benchmark/scripts/plan-remote-contention.sh \
   --case remote-contention-100x5 \
   --server-host <server-ip> \
   --receiver receiver-a=100 \
-  --cases fanout,fairness,disappear-blackhole \
+  --cases fanout,fairness,disappear-blackhole,resource-pack \
   --payload-size 512 \
   --per-client-mbps 5 \
   --impaired-clients 10% \
