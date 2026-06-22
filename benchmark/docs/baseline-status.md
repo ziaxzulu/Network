@@ -64,40 +64,37 @@ The smoke capacity selector did not choose a stable point, which is expected for
 Latest local pilot artifact in this worktree:
 
 ```text
-benchmark/build/benchmark-results/current-915de92-local-pilot-20260622T120816Z/
+benchmark/build/benchmark-results/current-bae9ef3-local-pilot-20260622T123226Z/
 ```
 
-This run completed the representative pilot profile in git revision `915de9243a7c`. It produced parseable suite, aggregate, and capacity-selector artifacts, and the saved runner log did not contain `LEAK:`, `ResourceLeakDetector`, `Exception`, `ERROR`, or `FAILED` markers. It is branch-local loopback evidence that the benchmark shape executes and emits the retry-pressure fields, but it is still not a baseline-of-record result. Seven of the nine aggregate rows were unstable under the default stability policy, mostly because the short loopback run had p99 probe-latency spread. The selected local capacity row and immediate small-packet fanout row were stable locally; the table below lists the selected curve row plus the 100-client pilot workload rows:
+This run completed the representative pilot profile in git revision `bae9ef3749d2`. It produced parseable suite, aggregate, and capacity-selector artifacts. It is branch-local loopback evidence that the benchmark shape executes and emits the retry-pressure fields, but it is still not a baseline-of-record result. Six of the nine aggregate rows were unstable under the default stability policy, mostly because the short loopback run had p99 probe-latency spread. The selected local capacity row, the low-rate curve row, and the immediate small-packet fanout row were stable locally; the table below lists the selected curve row plus the 100-client pilot workload rows:
 
 | Case | Delivered Gbps | Healthy Gbps | Affected Gbps | Client p50 Mbps | Healthy p50 Mbps | Affected p50 Mbps | Healthy fairness | p99 RTT ms | Max queue bytes | Undelivered Gbps | Affected undelivered Gbps | Affected datagram out/s | Retry signal | Unstable reason |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| `pilot-curve-1c-mtu` / `curve-100_0mbps` | `0.09997632` | `0.09997632` | `0` | `99.97632` | `99.97632` | `0` | `1.0` | `10.157732` | `148817` | `0.0011693504` | `0` | `0` | none | none |
-| `pilot-fanout-100x5` | `0.49958912` | `0.49958912` | `0` | `4.9963008` | `4.9963008` | `0` | `0.9999993469102534` | `28.669274` | `367718` | `0.0120460976` | `0` | `0` | none | `throughput-spread`, `p99-spread` |
-| `pilot-immediate-100x1-p256` | `0.0999329792` | `0.0999329792` | `0` | `0.999424` | `0.999424` | `0` | `0.9999996913723092` | `10.069931` | `1792` | `0.0045203136` | `0` | `0` | none | none |
-| `pilot-fairness-100-10poor` | `0.449722368` | `0.4497066666666667` | `0.000021845333333333332` | `4.996437333333333` | `4.996437333333333` | `0.002048` | `0.9999997766099613` | `10.575237` | `4235264` | `0.014571878666666666` | `0.0037218733333333337` | `581.3333333333334` | `23.166666666666668` stale datagrams/s, `4.666666666666667` NACK out/s | `throughput-spread`, `p99-spread` |
-| `pilot-disappear-100-blackhole` | `0.4662975146666667` | `0.449742848` | `0.016620202666666667` | `4.99712` | `4.99712` | `1.6616106666666668` | `0.9999997795296135` | `42.364952` | `2475671` | `0.04711083333333334` | `0.036216468` | `6492.5` | `4345.833333333333` stale datagrams/s | `p99-spread` |
-| `pilot-batch-100-20ms` | `0.51136` | `0.51136` | `0` | `5.1008` | `5.1008` | `0` | `0.9999812033902818` | `26.236941` | `194161` | `0.010638568` | `0` | `0` | none | `p99-spread` |
-| `pilot-resource-100-8k-200ms` | `0.032768` | `0.032768` | `0` | `0.32768` | `0.32768` | `0` | `1.0` | `10.999343` | `8209` | `0.001000792` | `0` | `0` | none | `p99-spread` |
+| `pilot-curve-1c-mtu` / `curve-100_0mbps` | `0.09997248` | `0.09997248` | `0` | `99.97248` | `99.97248` | `0` | `1.0` | `10.62424` | `148800` | `0.0011693504` | `0` | `0` | none | none |
+| `pilot-fanout-100x5` | `0.4990377984` | `0.4990377984` | `0` | `4.9905664` | `4.9905664` | `0` | `0.9999996319800738` | `18.139339` | `266325` | `0.0120689024` | `0` | `0` | none | `p99-spread` |
+| `pilot-immediate-100x1-p256` | `0.0999481344` | `0.0999481344` | `0` | `0.999424` | `0.999424` | `0` | `0.9999997446544687` | `10.046832` | `1809` | `0.004521656` | `0` | `0` | none | none |
+| `pilot-fairness-100-10poor` | `0.4497974613333333` | `0.449773568` | `0.000027306666666666667` | `4.99712` | `4.997802666666667` | `0.002048` | `0.9999997698132459` | `12.021658` | `4232192` | `0.014955638666666667` | `0.004112421333333334` | `633.6666666666666` | `19.833333333333332` stale datagrams/s, `4.833333333333333` NACK out/s | `p99-spread` |
+| `pilot-disappear-100-blackhole` | `0.4663118506666667` | `0.4497353386666667` | `0.016576512` | `4.996437333333333` | `4.99712` | `1.6575146666666667` | `0.9999997781229638` | `29.63269` | `2481815` | `0.04616913066666666` | `0.034520788` | `6521.666666666667` | `4357.666666666667` stale datagrams/s | `p99-spread` |
+| `pilot-batch-100-20ms` | `0.51136` | `0.51136` | `0` | `5.1008` | `5.1008` | `0` | `0.9999812033902818` | `21.30098` | `228353` | `0.0106394368` | `0` | `0` | none | `p99-spread` |
+| `pilot-resource-100-8k-200ms` | `0.032768` | `0.032768` | `0` | `0.32768` | `0.32768` | `0` | `1.0` | `10.863943` | `8209` | `0.0010006864` | `0` | `0` | none | `p99-spread` |
 
-The capacity selector chose `curve-100_0mbps` at `0.09997632Gbps` as the stable local pilot capacity point. The best observed curve row was `curve-250_0mbps` at `0.2494464Gbps`, rejected because unstable rows are not allowed. This is useful as a current developer regression fixture and artifact-shape proof, but capacity selection for the baseline of record still requires separate-host lab evidence.
+The capacity selector chose `curve-100_0mbps` at `0.09997248Gbps` as the stable local pilot capacity point. The best observed curve row was `curve-250_0mbps` at `0.2494464Gbps`, rejected because unstable rows are not allowed. This is useful as a current developer regression fixture and artifact-shape proof, but capacity selection for the baseline of record still requires separate-host lab evidence.
 
 Latest raised-limiter local best-case curve artifact in this worktree:
 
 ```text
-benchmark/build/benchmark-results/current-915de92-raised-bestcase-mtu1340-20260622T120421Z/20260622-130422/
+benchmark/build/benchmark-results/current-bae9ef3-raised-bestcase-mtu1340-bounded-20260622T124301Z/raised-bestcase-mtu1340-bounded/
 ```
 
-This run used payload `1340`, three measured iterations, raised packet limits (`--packet-limit 100000 --global-packet-limit 1000000`), `64MiB` max queued bytes, and git revision `915de9243a7c`. It did not select a stable local capacity row because every positive-throughput row exceeded the default p99 spread threshold. The best observed local row was `curve-750_0mbps` at `0.747029632Gbps`; `curve-1000_0mbps` showed the overload knee with disconnects and high send/deliver ratio, while `1500Mbps` and `unlimited` delivered zero after overload.
+This run used payload `1340`, three measured iterations, raised packet limits (`--packet-limit 100000 --global-packet-limit 1000000`), `64MiB` max queued bytes, and git revision `bae9ef3749d2`. It did not select a stable local capacity row because every candidate exceeded the default p99 spread threshold. The best observed local row was `curve-750_0mbps` at `0.747046784Gbps`; `curve-1000_0mbps` showed the overload knee with disconnects, roughly full queue growth, and high send/deliver ratio. A wider 250/500/750/1000/1500/2000/unlimited sweep was intentionally interrupted after more than five minutes without producing an artifact because the overloaded high-rate points did not return promptly on this workstation.
 
 | Candidate | Target Mbps | Delivered Gbps | p99 RTT ms | Max queue bytes | Send/deliver | Rejection |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `curve-100_0mbps` | `100` | `0.099964` | `12.036056` | `144720` | `1.0105672909773744` | `p99-spread` |
-| `curve-250_0mbps` | `250` | `0.249447968` | `11.988956` | `326977` | `1.0152983695581757` | `p99-spread` |
-| `curve-500_0mbps` | `500` | `0.498889504` | `13.690078` | `857600` | `1.0740396272702641` | `p99-spread` |
-| `curve-750_0mbps` | `750` | `0.747029632` | `37.515789` | `1479360` | `1.1157136249763016` | `p99-spread` |
-| `curve-1000_0mbps` | `1000` | `0.022134656` | `960.725717` | `61228671` | `5.950363086736021` | `throughput-spread`, `p99-spread`, `disconnects` |
-| `curve-1500_0mbps` | `1500` | `0` | `0` | `0` | `0` | `zero-delivery` |
-| `curve-unlimited` | `0` | `0` | `0` | `0` | `0` | `zero-delivery` |
+| `curve-250_0mbps` | `250` | `0.24943296` | `11.038146` | `22139480` | `1.012493271137864` | `p99-spread` |
+| `curve-500_0mbps` | `500` | `0.498874496` | `13.290376` | `794620` | `1.0583977781965135` | `p99-spread` |
+| `curve-750_0mbps` | `750` | `0.747046784` | `36.93579` | `4802560` | `1.139175251439139` | `p99-spread` |
+| `curve-1000_0mbps` | `1000` | `0.036731008` | `1442.113599` | `66114311` | `3.91235516324518` | `throughput-spread`, `p99-spread`, `disconnects` |
 
 This is the strongest current local capacity observation, but it is still loopback-only. Treat it as an overload-knee clue, not as line-rate evidence. The absence of a selected stable row is also useful: on this host, short local runs can preserve throughput while p99 probe latency varies enough to fail the default baseline stability gate.
 
