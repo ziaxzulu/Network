@@ -2187,6 +2187,11 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(actionCodes.contains("promote-lab-baseline"));
         Assertions.assertTrue(actionCodes.contains("run-impairment-campaign"));
         Assertions.assertTrue(actionCodes.contains("promote-impairment-baseline"));
+        Assertions.assertEquals(4, readinessJson.path("proofChecklist").size());
+        Assertions.assertEquals("Fresh handoff", readinessJson.path("proofChecklist").get(0).path("stage").asText());
+        String proofChecklist = readinessJson.path("proofChecklist").toString();
+        Assertions.assertTrue(proofChecklist.contains("combined/bandwidth-capacity.jsonl"));
+        Assertions.assertTrue(proofChecklist.contains("promote-and-check.sh"));
 
         String report = Files.readString(readiness.resolve("readiness.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(report.contains("prepare-fresh-lab-handoff.sh"));

@@ -1062,6 +1062,73 @@ next_actions_json="$(jq -s '
   ] | reduce .[] as $action ([]; if any(.[]; .code == $action.code) then . else . + [$action] end)
 ' "$issues_jsonl")"
 
+proof_checklist_json="$(jq -n '
+  [
+    {
+      stage: "Fresh handoff",
+      requiredProof: [
+        "handoff-manifest.json",
+        "fresh-handoff-summary.json",
+        "source-audit.json",
+        "preflight/handoff-check.json"
+      ],
+      producedBy: [
+        "benchmark/scripts/prepare-fresh-lab-handoff.sh"
+      ]
+    },
+    {
+      stage: "Perfect-network execution",
+      requiredProof: [
+        "host/prereq reports from at least two distinct hosts",
+        "topology notes",
+        "complete server/receiver artifacts",
+        "combined/suite-aggregate.jsonl",
+        "combined/bandwidth-capacity.jsonl",
+        "combined/validation.json"
+      ],
+      producedBy: [
+        "perfect-plan/README.md",
+        "perfect-plan/merge-all.sh"
+      ]
+    },
+    {
+      stage: "Impairment execution",
+      requiredProof: [
+        "per-profile validation",
+        "per-profile aggregate",
+        "per-profile capacity",
+        "netem/*-status-*.txt",
+        "campaign-summary/impairment-summary.json"
+      ],
+      producedBy: [
+        "impairment-plan/README.md",
+        "impairment-plan/validate-all.sh",
+        "impairment-plan/summarize-campaign.sh"
+      ]
+    },
+    {
+      stage: "Promotion",
+      requiredProof: [
+        "baseline-manifest.json",
+        "copied planning manifests",
+        "copied handoff/source-audit metadata",
+        "validation.json",
+        "suite-aggregate.jsonl",
+        "bandwidth-capacity.jsonl",
+        "impairment-baseline-manifest.json",
+        "copied campaign manifest",
+        "copied per-profile evidence",
+        "campaign summary"
+      ],
+      producedBy: [
+        "promote-and-check.sh",
+        "promote-lab-baseline.sh",
+        "promote-lab-impairment.sh"
+      ]
+    }
+  ]
+')"
+
 jq -n \
   --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg labBaseline "$lab_baseline" \
@@ -1092,6 +1159,7 @@ jq -n \
   --argjson impairmentPackagedProfiles "$impairment_packaged_profiles_json" \
   --argjson issues "$issues_array" \
   --argjson nextActions "$next_actions_json" \
+  --argjson proofChecklist "$proof_checklist_json" \
   --slurpfile labValidation "$([[ -s "$lab_validation" ]] && printf '%s' "$lab_validation" || printf '%s' /dev/null)" \
   --slurpfile impairmentSummary "$([[ -s "$impairment_summary" ]] && printf '%s' "$impairment_summary" || printf '%s' /dev/null)" \
   '{
@@ -1130,6 +1198,7 @@ jq -n \
     requireSourceAudit: $requireSourceAudit,
     labSourceAudit: $labSourceAudit,
     labHandoffSourceAudit: $labHandoffSourceAudit,
+    proofChecklist: $proofChecklist,
     nextActions: $nextActions,
     issues: $issues
   }' >"$readiness_json"
@@ -1210,10 +1279,7 @@ jq -n \
   echo
   echo "| Stage | Required proof | Produced by |"
   echo "| --- | --- | --- |"
-  echo "| Fresh handoff | \`handoff-manifest.json\`, \`fresh-handoff-summary.json\`, source-audit \`source-audit.json\`, and passing \`preflight/handoff-check.json\` from the current checkout | \`benchmark/scripts/prepare-fresh-lab-handoff.sh\` |"
-  echo "| Perfect-network execution | Host/prereq reports from at least two distinct hosts, topology notes, complete server/receiver artifacts, \`combined/suite-aggregate.jsonl\`, \`combined/bandwidth-capacity.jsonl\`, and passing \`combined/validation.json\` | Generated \`perfect-plan/README.md\` run order, then \`perfect-plan/merge-all.sh\` |"
-  echo "| Impairment execution | Per-profile validation, aggregate, capacity, and \`netem/*-status-*.txt\` evidence, plus \`campaign-summary/impairment-summary.json\` | Generated \`impairment-plan/README.md\` run order, then \`impairment-plan/validate-all.sh\` and \`impairment-plan/summarize-campaign.sh\` |"
-  echo "| Promotion | Perfect-network \`baseline-manifest.json\`, copied planning manifests, copied handoff/source-audit metadata, \`validation.json\`, \`suite-aggregate.jsonl\`, \`bandwidth-capacity.jsonl\`, impairment \`impairment-baseline-manifest.json\`, copied campaign manifest, copied per-profile evidence, and campaign summary | Generated \`promote-and-check.sh\`, or \`promote-lab-baseline.sh\` plus \`promote-lab-impairment.sh\` |"
+  jq -r '.proofChecklist[] | "| \(.stage) | \(.requiredProof | join(", ")) | \(.producedBy | join(", ")) |"' "$readiness_json"
   echo
   echo "## Next Actions"
   echo
