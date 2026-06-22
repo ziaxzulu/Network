@@ -1054,11 +1054,45 @@ if [[ -s "$impairment_summary" ]]; then
 	fi
 
 issues_array="$(jq -s '.' "$issues_jsonl")"
-next_actions_json="$(jq -s --argjson handoffProvided "$handoff_provided_json" --argjson handoffReady "$handoff_ready_json" '
+next_actions_json="$(jq -s \
+  --argjson handoffProvided "$handoff_provided_json" \
+  --argjson handoffReady "$handoff_ready_json" \
+  --argjson handoffSummary "$handoff_summary_json" \
+  '
   def has_code($code): any(.[]; .code == $code);
   def has_any_code($codes): any(.[]; (.code as $code | ($codes | index($code)) != null));
   def has_prefix($prefix): any(.[]; (.code | startswith($prefix)));
   def has_handoff_issue: has_prefix("handoff-");
+  def execution_path($key):
+    if (($handoffSummary.execution // null) == null) then ""
+    else ($handoffSummary.execution[$key] // "")
+    end;
+  def maybe_path($key):
+    (execution_path($key)) as $path | if $path == "" then null else $path end;
+  def perfect_plan_command:
+    if execution_path("perfectPlan") != "" then
+      "\(execution_path("perfectPlan"))/check-plan-freshness.sh && \(execution_path("perfectPlan"))/merge-all.sh"
+    else
+      "<lab-handoff>/perfect-plan/check-plan-freshness.sh && <lab-handoff>/perfect-plan/merge-all.sh"
+    end;
+  def promote_perfect_command:
+    if execution_path("perfectArtifacts") != "" and execution_path("handoffManifest") != "" and execution_path("perfectPlan") != "" then
+      "benchmark/scripts/promote-lab-baseline.sh --input \(execution_path("perfectArtifacts"))/combined --handoff-manifest \(execution_path("handoffManifest")) --manifest \(execution_path("perfectPlan"))/curve-plan/manifest.jsonl --manifest \(execution_path("perfectPlan"))/curve-raised-plan/manifest.jsonl --manifest \(execution_path("perfectPlan"))/contention-plan/manifest.jsonl"
+    else
+      "benchmark/scripts/promote-lab-baseline.sh --input <perfect-artifacts>/combined --handoff-manifest <lab-handoff>/handoff-manifest.json --manifest <curve-manifest.jsonl> --manifest <raised-curve-manifest.jsonl> --manifest <contention-manifest.jsonl>"
+    end;
+  def impairment_plan_command:
+    if execution_path("impairmentPlan") != "" then
+      "\(execution_path("impairmentPlan"))/check-plan-freshness.sh && \(execution_path("impairmentPlan"))/validate-all.sh && \(execution_path("impairmentPlan"))/summarize-campaign.sh"
+    else
+      "<lab-handoff>/impairment-plan/check-plan-freshness.sh && <lab-handoff>/impairment-plan/validate-all.sh && <lab-handoff>/impairment-plan/summarize-campaign.sh"
+    end;
+  def promote_impairment_command:
+    if execution_path("impairmentArtifacts") != "" then
+      "benchmark/scripts/promote-lab-impairment.sh --input \(execution_path("impairmentArtifacts"))/campaign-summary"
+    else
+      "benchmark/scripts/promote-lab-impairment.sh --input <impairment-artifacts>/campaign-summary"
+    end;
   [
     if has_handoff_issue or
       (((($handoffProvided | not) or ($handoffReady | not)) and has_any_code([
@@ -1083,7 +1117,10 @@ next_actions_json="$(jq -s --argjson handoffProvided "$handoff_provided_json" --
       code: "run-perfect-lab-plan",
       title: "Run and merge the perfect-network lab plan",
       detail: "Run the generated perfect-plan server and receiver scripts on separate hosts, copy receiver artifacts back, and merge/validate the perfect-network baseline artifacts.",
-      command: "<lab-handoff>/perfect-plan/check-plan-freshness.sh && <lab-handoff>/perfect-plan/merge-all.sh"
+      command: perfect_plan_command,
+      readme: maybe_path("readme"),
+      plan: maybe_path("perfectPlan"),
+      artifactRoot: maybe_path("perfectArtifacts")
     } else empty end,
     if has_any_code([
       "missing-lab-baseline-manifest",
@@ -1101,7 +1138,10 @@ next_actions_json="$(jq -s --argjson handoffProvided "$handoff_provided_json" --
       code: "promote-lab-baseline",
       title: "Promote the perfect-network lab baseline",
       detail: "Create a promoted lab baseline package after merged perfect-network artifacts exist, passing the current handoff manifest so source and artifact collection evidence are packaged.",
-      command: "benchmark/scripts/promote-lab-baseline.sh --input <perfect-artifacts>/combined --handoff-manifest <lab-handoff>/handoff-manifest.json --manifest <curve-manifest.jsonl> --manifest <raised-curve-manifest.jsonl> --manifest <contention-manifest.jsonl>"
+      command: promote_perfect_command,
+      helper: maybe_path("promoteScript"),
+      handoffManifest: maybe_path("handoffManifest"),
+      artifactRoot: maybe_path("perfectArtifacts")
     } else empty end,
     if has_any_code([
       "failed-lab-validation",
@@ -1147,7 +1187,10 @@ next_actions_json="$(jq -s --argjson handoffProvided "$handoff_provided_json" --
       code: "run-impairment-campaign",
       title: "Run, validate, and summarize the impairment campaign",
       detail: "Run every generated impairment profile with netem evidence, merge profile artifacts, validate the campaign, and write the campaign summary before promotion.",
-      command: "<lab-handoff>/impairment-plan/check-plan-freshness.sh && <lab-handoff>/impairment-plan/validate-all.sh && <lab-handoff>/impairment-plan/summarize-campaign.sh"
+      command: impairment_plan_command,
+      readme: maybe_path("readme"),
+      plan: maybe_path("impairmentPlan"),
+      artifactRoot: maybe_path("impairmentArtifacts")
     } else empty end,
     if has_any_code([
       "missing-impairment-baseline-manifest",
@@ -1157,7 +1200,9 @@ next_actions_json="$(jq -s --argjson handoffProvided "$handoff_provided_json" --
       code: "promote-impairment-baseline",
       title: "Promote the adverse-network impairment campaign",
       detail: "Create a promoted impairment package after campaign summary artifacts exist.",
-      command: "benchmark/scripts/promote-lab-impairment.sh --input <impairment-artifacts>/campaign-summary"
+      command: promote_impairment_command,
+      helper: maybe_path("promoteScript"),
+      artifactRoot: maybe_path("impairmentArtifacts")
     } else empty end,
     if has_prefix("impairment-") or has_any_code(["failed-impairment-summary"]) then {
       code: "rerun-impairment-campaign",

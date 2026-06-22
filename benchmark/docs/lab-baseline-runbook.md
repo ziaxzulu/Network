@@ -389,6 +389,8 @@ Treat a lab baseline as usable only when:
 
 Before the lab campaign is executed and promoted, `check-baseline-readiness.sh` should remain `not-ready`. The expected first-run blockers are the missing promoted perfect-network and impairment packages, not a problem with the generated handoff. Use them as the closure checklist:
 
+When `--handoff` points at a fresh generated handoff, the readiness JSON `nextActions` include the concrete generated plan paths, artifact roots, promotion helper, and handoff manifest path from `fresh-handoff-summary.json`. Prefer those commands over reconstructing paths by hand.
+
 | Readiness issue | Required lab evidence |
 | --- | --- |
 | `missing-lab-baseline-manifest` | `promote-lab-baseline.sh` has produced `baseline-manifest.json` in the promoted perfect-network package. |

@@ -2536,6 +2536,46 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(actionCodes.contains("run-perfect-lab-plan"));
         Assertions.assertTrue(actionCodes.contains("run-impairment-campaign"));
 
+        Path perfectPlan = handoff.resolve("perfect-plan");
+        JsonNode perfectAction = findAction(readinessJson, "run-perfect-lab-plan");
+        Assertions.assertEquals(handoff.resolve("README.md").toString(), perfectAction.path("readme").asText());
+        Assertions.assertEquals(perfectPlan.toString(), perfectAction.path("plan").asText());
+        Assertions.assertEquals(handoff.resolve("perfect-artifacts").toString(),
+                perfectAction.path("artifactRoot").asText());
+        Assertions.assertTrue(perfectAction.path("command").asText()
+                .contains(perfectPlan.resolve("check-plan-freshness.sh").toString()));
+        Assertions.assertTrue(perfectAction.path("command").asText()
+                .contains(perfectPlan.resolve("merge-all.sh").toString()));
+
+        JsonNode promotePerfectAction = findAction(readinessJson, "promote-lab-baseline");
+        Assertions.assertEquals(handoff.resolve("promote-and-check.sh").toString(),
+                promotePerfectAction.path("helper").asText());
+        Assertions.assertEquals(handoff.resolve("handoff-manifest.json").toString(),
+                promotePerfectAction.path("handoffManifest").asText());
+        Assertions.assertEquals(handoff.resolve("perfect-artifacts").toString(),
+                promotePerfectAction.path("artifactRoot").asText());
+        Assertions.assertTrue(promotePerfectAction.path("command").asText()
+                .contains(handoff.resolve("perfect-artifacts").resolve("combined").toString()));
+        Assertions.assertTrue(promotePerfectAction.path("command").asText()
+                .contains(perfectPlan.resolve("curve-plan").resolve("manifest.jsonl").toString()));
+
+        Path impairmentPlan = handoff.resolve("impairment-plan");
+        JsonNode impairmentAction = findAction(readinessJson, "run-impairment-campaign");
+        Assertions.assertEquals(handoff.resolve("README.md").toString(), impairmentAction.path("readme").asText());
+        Assertions.assertEquals(impairmentPlan.toString(), impairmentAction.path("plan").asText());
+        Assertions.assertEquals(handoff.resolve("impairment-artifacts").toString(),
+                impairmentAction.path("artifactRoot").asText());
+        Assertions.assertTrue(impairmentAction.path("command").asText()
+                .contains(impairmentPlan.resolve("summarize-campaign.sh").toString()));
+
+        JsonNode promoteImpairmentAction = findAction(readinessJson, "promote-impairment-baseline");
+        Assertions.assertEquals(handoff.resolve("promote-and-check.sh").toString(),
+                promoteImpairmentAction.path("helper").asText());
+        Assertions.assertEquals(handoff.resolve("impairment-artifacts").toString(),
+                promoteImpairmentAction.path("artifactRoot").asText());
+        Assertions.assertTrue(promoteImpairmentAction.path("command").asText()
+                .contains(handoff.resolve("impairment-artifacts").resolve("campaign-summary").toString()));
+
         String report = Files.readString(readiness.resolve("readiness.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(report.contains("Fresh handoff ready: `true`"));
     }
@@ -3772,11 +3812,17 @@ public class BenchmarkKitTests {
     }
 
     private static void writeHandoffManifest(Path handoffManifest) throws Exception {
-        Files.createDirectories(handoffManifest.getParent());
-        Path artifactCollectionJson = handoffManifest.getParent().resolve("artifact-collection.json");
-        Path artifactCollectionMd = handoffManifest.getParent().resolve("artifact-collection.md");
-        String perfectArtifacts = handoffManifest.getParent().resolve("perfect-artifacts").toString();
-        String impairmentArtifacts = handoffManifest.getParent().resolve("impairment-artifacts").toString();
+        Path handoff = handoffManifest.getParent();
+        Files.createDirectories(handoff);
+        Path artifactCollectionJson = handoff.resolve("artifact-collection.json");
+        Path artifactCollectionMd = handoff.resolve("artifact-collection.md");
+        Path readme = handoff.resolve("README.md");
+        Path prereqScript = handoff.resolve("prereq-commands.sh");
+        Path promoteScript = handoff.resolve("promote-and-check.sh");
+        Path perfectPlan = handoff.resolve("perfect-plan");
+        Path impairmentPlan = handoff.resolve("impairment-plan");
+        String perfectArtifacts = handoff.resolve("perfect-artifacts").toString();
+        String impairmentArtifacts = handoff.resolve("impairment-artifacts").toString();
         writeArtifactCollection(artifactCollectionJson, artifactCollectionMd, handoffManifest,
                 perfectArtifacts, impairmentArtifacts);
         Files.writeString(handoffManifest,
@@ -3787,19 +3833,46 @@ public class BenchmarkKitTests {
                         + ",\"impairmentArtifacts\":\"" + jsonEscape(impairmentArtifacts) + "\""
                         + ",\"artifactCollectionJson\":\"" + jsonEscape(artifactCollectionJson.toString()) + "\""
                         + ",\"artifactCollectionMd\":\"" + jsonEscape(artifactCollectionMd.toString()) + "\""
+                        + ",\"readme\":\"" + jsonEscape(readme.toString()) + "\""
+                        + ",\"prereqScript\":\"" + jsonEscape(prereqScript.toString()) + "\""
+                        + ",\"promoteScript\":\"" + jsonEscape(promoteScript.toString()) + "\""
+                        + ",\"perfectPlan\":\"" + jsonEscape(perfectPlan.toString()) + "\""
+                        + ",\"impairmentPlan\":\"" + jsonEscape(impairmentPlan.toString()) + "\""
                         + "}\n",
                 StandardCharsets.UTF_8);
     }
 
     private static void writeReadyFreshHandoff(Path handoff) throws Exception {
         writeHandoffManifest(handoff.resolve("handoff-manifest.json"));
+        Path handoffManifest = handoff.resolve("handoff-manifest.json");
+        Path artifactCollectionJson = handoff.resolve("artifact-collection.json");
+        Path artifactCollectionMd = handoff.resolve("artifact-collection.md");
+        Path readme = handoff.resolve("README.md");
+        Path prereqScript = handoff.resolve("prereq-commands.sh");
+        Path promoteScript = handoff.resolve("promote-and-check.sh");
+        Path perfectPlan = handoff.resolve("perfect-plan");
+        Path impairmentPlan = handoff.resolve("impairment-plan");
+        Path perfectArtifacts = handoff.resolve("perfect-artifacts");
+        Path impairmentArtifacts = handoff.resolve("impairment-artifacts");
         Files.writeString(handoff.resolve("fresh-handoff-summary.json"),
                 "{\"kind\":\"raknet-fresh-lab-handoff\","
                         + "\"ready\":true,"
                         + "\"issueCount\":0,"
                         + "\"networkDirtyTrackedFiles\":false,"
                         + "\"sourceAuditIssueCount\":0,"
-                        + "\"handoffIssueCount\":0}\n",
+                        + "\"handoffIssueCount\":0,"
+                        + "\"execution\":{"
+                        + "\"handoffManifest\":\"" + jsonEscape(handoffManifest.toString()) + "\","
+                        + "\"readme\":\"" + jsonEscape(readme.toString()) + "\","
+                        + "\"artifactCollectionJson\":\"" + jsonEscape(artifactCollectionJson.toString()) + "\","
+                        + "\"artifactCollectionMd\":\"" + jsonEscape(artifactCollectionMd.toString()) + "\","
+                        + "\"prereqScript\":\"" + jsonEscape(prereqScript.toString()) + "\","
+                        + "\"promoteScript\":\"" + jsonEscape(promoteScript.toString()) + "\","
+                        + "\"perfectPlan\":\"" + jsonEscape(perfectPlan.toString()) + "\","
+                        + "\"impairmentPlan\":\"" + jsonEscape(impairmentPlan.toString()) + "\","
+                        + "\"perfectArtifacts\":\"" + jsonEscape(perfectArtifacts.toString()) + "\","
+                        + "\"impairmentArtifacts\":\"" + jsonEscape(impairmentArtifacts.toString()) + "\""
+                        + "}}\n",
                 StandardCharsets.UTF_8);
         Files.createDirectories(handoff.resolve("preflight"));
         Files.writeString(handoff.resolve("preflight/handoff-check.json"),
@@ -4460,6 +4533,15 @@ public class BenchmarkKitTests {
             }
         }
         throw new AssertionError("Missing source audit row for " + sourceId + ": " + auditJson);
+    }
+
+    private static JsonNode findAction(JsonNode readinessJson, String actionCode) {
+        for (JsonNode action : readinessJson.path("nextActions")) {
+            if (actionCode.equals(action.path("code").asText())) {
+                return action;
+            }
+        }
+        throw new AssertionError("Missing next action for " + actionCode + ": " + readinessJson);
     }
 
     private static List<String> textValues(JsonNode values) {
