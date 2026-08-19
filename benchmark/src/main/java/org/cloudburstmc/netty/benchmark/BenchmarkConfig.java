@@ -17,12 +17,14 @@
 package org.cloudburstmc.netty.benchmark;
 
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
+import org.cloudburstmc.netty.channel.raknet.config.RakRecoveryMode;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 public final class BenchmarkConfig {
     public static final int DEFAULT_PORT = 19132;
@@ -59,6 +61,7 @@ public final class BenchmarkConfig {
     private double perClientRateMbps = -1.0D;
     private long probeIntervalMillis = 100;
     private RakReliability reliability = RakReliability.RELIABLE_ORDERED;
+    private RakRecoveryMode recoveryMode = RakRecoveryMode.LEGACY;
     private File outputRoot = defaultOutputRoot();
     private String runId;
     private List<Integer> payloadSizes = Arrays.asList(64, 512, 1200);
@@ -192,6 +195,8 @@ public final class BenchmarkConfig {
             this.batchGroups = parsePositiveInt(key, value);
         } else if ("reliability".equals(key)) {
             this.reliability = parseReliability(value);
+        } else if ("recovery-mode".equals(key)) {
+            this.recoveryMode = parseRecoveryMode(value);
         } else if ("reliabilities".equals(key)) {
             this.reliabilities = parseReliabilityList(value);
         } else if ("out".equals(key)) {
@@ -421,6 +426,14 @@ public final class BenchmarkConfig {
         return this.reliability;
     }
 
+    public RakRecoveryMode recoveryMode() {
+        return this.recoveryMode;
+    }
+
+    public String recoveryModeName() {
+        return this.recoveryMode.name().toLowerCase(Locale.ROOT);
+    }
+
     public File outputRoot() {
         return this.outputRoot;
     }
@@ -535,6 +548,15 @@ public final class BenchmarkConfig {
 
     private static RakReliability parseReliability(String value) {
         return RakReliability.valueOf(value.trim().replace('-', '_').toUpperCase());
+    }
+
+    private static RakRecoveryMode parseRecoveryMode(String value) {
+        return switch (value.trim().toLowerCase(Locale.ROOT)) {
+            case "legacy" -> RakRecoveryMode.LEGACY;
+            case "bounded" -> RakRecoveryMode.BOUNDED;
+            default -> throw new IllegalArgumentException(
+                    "--recovery-mode must be one of: legacy, bounded");
+        };
     }
 
     private static File defaultOutputRoot() {

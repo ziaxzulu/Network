@@ -287,7 +287,7 @@ public final class RakNetBenchmarkRunner {
             for (int i = 0; i < config.clients(); i++) {
                 PeerStats peer = new PeerStats(i, i < benchmarkCase.impairedClients());
                 peers.add(peer);
-                ClientConnection connection = startClient(group, address, peer, connected, benchmarkCase);
+                ClientConnection connection = startClient(config, group, address, peer, connected, benchmarkCase);
                 channels.add(connection.channel());
                 blackholes.add(connection.blackhole());
                 impairments.add(connection.impairment());
@@ -421,6 +421,7 @@ public final class RakNetBenchmarkRunner {
                         ch.pipeline().addLast(new ServerProbeAckHandler(assignedPeer, probeRtt));
                     }
                 });
+        configureServerRecoveryMode(bootstrap, config);
         if (config.packetLimit() > 0) {
             bootstrap.option(RakChannelOption.RAK_PACKET_LIMIT, config.packetLimit());
         }
@@ -442,7 +443,7 @@ public final class RakNetBenchmarkRunner {
         for (int i = 0; i < benchmarkCase.clients(); i++) {
             PeerStats peer = new PeerStats(i, i < benchmarkCase.impairedClients());
             pendingPeers.add(peer);
-            ClientConnection connection = startClient(group, serverAddress, peer, connectedLatch, benchmarkCase);
+            ClientConnection connection = startClient(config, group, serverAddress, peer, connectedLatch, benchmarkCase);
             channels.add(connection.channel());
             blackholes.add(connection.blackhole());
             impairments.add(connection.impairment());
@@ -450,7 +451,8 @@ public final class RakNetBenchmarkRunner {
         return new ClientConnections(channels, blackholes, impairments);
     }
 
-    private ClientConnection startClient(EventLoopGroup group, InetSocketAddress serverAddress, PeerStats peer,
+    private ClientConnection startClient(BenchmarkConfig config, EventLoopGroup group,
+                                         InetSocketAddress serverAddress, PeerStats peer,
                                          CountDownLatch connectedLatch, BenchmarkCase benchmarkCase) {
         DatagramBlackholeHandler blackhole = shouldInstallBlackhole(benchmarkCase, peer)
                 ? new DatagramBlackholeHandler(peer) : null;
@@ -476,9 +478,18 @@ public final class RakNetBenchmarkRunner {
                         ch.pipeline().addLast(new ClientReceiverHandler(peer, connectedLatch, benchmarkCase.reliability()));
                     }
                 });
+        configureClientRecoveryMode(bootstrap, config);
         Channel channel = bootstrap.connect(serverAddress).awaitUninterruptibly().channel();
         channel.closeFuture().addListener(ignored -> peer.addDisconnect());
         return new ClientConnection(channel, blackhole, impairment);
+    }
+
+    static void configureServerRecoveryMode(ServerBootstrap bootstrap, BenchmarkConfig config) {
+        bootstrap.option(RakChannelOption.RAK_RECOVERY_MODE, config.recoveryMode());
+    }
+
+    static void configureClientRecoveryMode(Bootstrap bootstrap, BenchmarkConfig config) {
+        bootstrap.option(RakChannelOption.RAK_RECOVERY_MODE, config.recoveryMode());
     }
 
     private static boolean shouldInstallBlackhole(BenchmarkCase benchmarkCase, PeerStats peer) {

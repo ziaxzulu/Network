@@ -77,7 +77,7 @@ public final class BenchmarkResultWriter {
     private static void writeTimeseriesCsv(BenchmarkRunResult result, File file) throws IOException {
         List<TimeseriesCsv> rows = new ArrayList<>();
         for (BenchmarkIterationResult iteration : result.iterations()) {
-            rows.add(TimeseriesCsv.from(iteration));
+            rows.add(TimeseriesCsv.from(result.config(), iteration));
         }
         CSV.writer(TIMESERIES_SCHEMA).writeValue(file, rows);
     }
@@ -101,6 +101,7 @@ public final class BenchmarkResultWriter {
             writer.write("- Run ID: `" + result.runId() + "`\n");
             writer.write("- Scenario: `" + result.config().scenario().cliName() + "`\n");
             writer.write("- Role: `" + result.config().role().name().toLowerCase(Locale.ROOT) + "`\n");
+            writer.write("- Recovery mode: `" + result.config().recoveryModeName() + "`\n");
             writer.write("- Packet limit: `" + optionalLimit(result.config().packetLimit()) + "`\n");
             writer.write("- Global packet limit: `" + optionalLimit(result.config().globalPacketLimit()) + "`\n");
             writer.write("- Max queued bytes cap: `" + optionalLimit(result.config().maxQueuedBytes()) + "`\n");
@@ -203,6 +204,7 @@ public final class BenchmarkResultWriter {
             writer.write("# Direct Stable Bandwidth Capacity\n\n");
             writer.write("- Run ID: `" + result.runId() + "`\n");
             writer.write("- Scenario: `" + result.config().scenario().cliName() + "`\n");
+            writer.write("- Recovery mode: `" + result.config().recoveryModeName() + "`\n");
             writer.write("- Minimum iterations: `3`\n");
             writer.write("- Allow unstable rows: `false`\n\n");
             writer.write("| Case | Payload | Reliability | Selected | Stable Gbps | Stable target Mbps | Stable p99 ms | Stable spread | Best observed Gbps | Best observed target Mbps | Best observed reasons |\n");
@@ -469,6 +471,7 @@ public final class BenchmarkResultWriter {
     private record CapacityGroupKey(
             String runId,
             String scenario,
+            String recoveryMode,
             String caseName,
             int clients,
             int payloadSize,
@@ -486,6 +489,7 @@ public final class BenchmarkResultWriter {
             return new CapacityGroupKey(
                     result.runId(),
                     config.scenario().cliName(),
+                    config.recoveryModeName(),
                     result.runId(),
                     iteration.clients,
                     iteration.payloadSize,
@@ -522,6 +526,7 @@ public final class BenchmarkResultWriter {
             String summaryKind,
             String runId,
             String scenario,
+            String recoveryMode,
             String caseName,
             int clients,
             int payloadSize,
@@ -554,6 +559,7 @@ public final class BenchmarkResultWriter {
                     "direct-bandwidth-capacity",
                     key.runId,
                     key.scenario,
+                    key.recoveryMode,
                     key.caseName,
                     key.clients,
                     key.payloadSize,
@@ -578,6 +584,7 @@ public final class BenchmarkResultWriter {
 
     @JsonPropertyOrder({
             "case",
+            "recovery_mode",
             "clients",
             "payload_size",
             "reliability",
@@ -604,6 +611,7 @@ public final class BenchmarkResultWriter {
     })
     private record CapacityCsv(
             @JsonProperty("case") String caseName,
+            @JsonProperty("recovery_mode") String recoveryMode,
             int clients,
             @JsonProperty("payload_size") int payloadSize,
             String reliability,
@@ -633,6 +641,7 @@ public final class BenchmarkResultWriter {
             CapacityCandidate best = row.bestObservedCandidate;
             return new CapacityCsv(
                     row.caseName,
+                    row.recoveryMode,
                     row.clients,
                     row.payloadSize,
                     row.reliability,
@@ -662,6 +671,7 @@ public final class BenchmarkResultWriter {
 
     @JsonPropertyOrder({
             "name",
+            "recovery_mode",
             "iteration",
             "clients",
             "open_peers",
@@ -742,6 +752,7 @@ public final class BenchmarkResultWriter {
     })
     private record TimeseriesCsv(
             String name,
+            @JsonProperty("recovery_mode") String recoveryMode,
             int iteration,
             int clients,
             @JsonProperty("open_peers") int openPeers,
@@ -820,9 +831,10 @@ public final class BenchmarkResultWriter {
             @JsonProperty("nack_out_s") double nackOutPerSecond,
             @JsonProperty("max_queued_bytes") long maxQueuedBytes
     ) {
-        static TimeseriesCsv from(BenchmarkIterationResult iteration) {
+        static TimeseriesCsv from(BenchmarkConfig config, BenchmarkIterationResult iteration) {
             return new TimeseriesCsv(
                     iteration.name,
+                    config.recoveryModeName(),
                     iteration.iteration,
                     iteration.clients,
                     iteration.openPeers,
@@ -908,6 +920,7 @@ public final class BenchmarkResultWriter {
             String runId,
             String scenario,
             String role,
+            String recoveryMode,
             int clients,
             int impairedClients,
             int disappearingClients,
@@ -953,6 +966,7 @@ public final class BenchmarkResultWriter {
                     result.runId(),
                     config.scenario().cliName(),
                     config.role().name().toLowerCase(Locale.ROOT),
+                    config.recoveryModeName(),
                     config.clients(),
                     config.impairedClients(),
                     config.disappearingClients(),

@@ -54,6 +54,7 @@ public final class BenchmarkMain {
         System.out.println("  --chunk-size 262144 --chunk-interval 200ms for resource-pack-transfer");
         System.out.println("  --batch-interval 20ms --logical-packets-per-batch 8 --batch-payload-sizes 128,512,1200 --batch-groups 1");
         System.out.println("  --reliability reliable_ordered|reliable|unreliable");
+        System.out.println("  --recovery-mode legacy|bounded (default: legacy)");
         System.out.println("  --rate-mbps 1000 --per-client-mbps 5 --target-gbps 1 --rates-mbps 100,500,1000,unlimited");
         System.out.println("  --warmup 5s --duration 10s --iterations 3 --probe-interval 100ms --start-delay 3s");
         System.out.println("  --start-at-epoch-ms <epoch-ms> --disappear-after 5s");
