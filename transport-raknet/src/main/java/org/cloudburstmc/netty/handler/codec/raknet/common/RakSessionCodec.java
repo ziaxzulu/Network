@@ -823,7 +823,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         while ((packet = this.outgoingPackets.peek()) != null) {
             int size = packet.getSize();
+            boolean reliabilityBoundary = !datagram.getPackets().isEmpty()
+                    && datagram.getPackets().get(0).getReliability().isReliable()
+                    != packet.getReliability().isReliable();
             boolean startsDatagram = datagram.getPackets().isEmpty()
+                    || reliabilityBoundary
                     || datagram.getSize() + size > mtuSize - RAKNET_DATAGRAM_HEADER_SIZE;
             int chargedSize = size;
             if (this.recoveryMode == RakRecoveryMode.BOUNDED && startsDatagram) {
@@ -837,8 +841,9 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             this.outgoingPackets.remove();
             this.queuedBytes -= packet.getBuffer().readableBytes();
 
-            // Send full datagram
-            if (!datagram.tryAddPacket(packet, mtuSize)) {
+            // Datagram retransmission is whole-datagram. Keep reliable and unreliable encapsulated packets in
+            // separate datagrams so loss recovery cannot duplicate nominally unreliable application traffic.
+            if (reliabilityBoundary || !datagram.tryAddPacket(packet, mtuSize)) {
                 this.sendDatagram(ctx, datagram, curTime, this.sentDatagrams,
                         RakDatagramSendType.ORIGINAL, false);
 

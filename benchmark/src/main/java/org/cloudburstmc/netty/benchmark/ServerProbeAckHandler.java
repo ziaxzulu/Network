@@ -23,20 +23,18 @@ import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 
 final class ServerProbeAckHandler extends SimpleChannelInboundHandler<RakMessage> {
     private final PeerStats peer;
-    private final LatencyHistogram probeRtt;
+    private final ProbeTracker probeTracker;
 
-    ServerProbeAckHandler(PeerStats peer, LatencyHistogram probeRtt) {
+    ServerProbeAckHandler(PeerStats peer, ProbeTracker probeTracker) {
         this.peer = peer;
-        this.probeRtt = probeRtt;
+        this.probeTracker = probeTracker;
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, RakMessage message) throws Exception {
         ByteBuf content = message.content();
         if (BenchmarkPayload.type(content) == BenchmarkPayload.PROBE_ACK) {
-            long sentNanos = BenchmarkPayload.timestampNanos(content);
-            this.probeRtt.record(System.nanoTime() - sentNanos);
-            this.peer.addProbeAcked();
+            this.probeTracker.acknowledge(this.peer, BenchmarkPayload.sequence(content), System.nanoTime());
             return;
         }
         ctx.fireChannelRead(message.retain());

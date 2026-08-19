@@ -285,6 +285,7 @@ public class BenchmarkKitTests {
         peer.addBulkReceived(64);
         peer.addProbeSent();
         peer.addProbeAcked();
+        peer.addProbeAckSpillover();
         peer.addDisconnect();
         peer.addBlackholedDatagramIn();
         peer.addBlackholedDatagramOut();
@@ -297,6 +298,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, snapshot.bulkReceivedMessages);
         Assertions.assertEquals(0, snapshot.probesSent);
         Assertions.assertEquals(0, snapshot.probesAcked);
+        Assertions.assertEquals(0, snapshot.probeAckSpillover);
         Assertions.assertEquals(0, snapshot.disconnects);
         Assertions.assertEquals(0, snapshot.blackholedDatagramsIn);
         Assertions.assertEquals(0, snapshot.blackholedDatagramsOut);
@@ -336,8 +338,8 @@ public class BenchmarkKitTests {
 
         Assertions.assertTrue(summary.contains("| case-a | 2 |"));
         Assertions.assertTrue(summary.contains("| case-b | 2 |"));
-        Assertions.assertTrue(summary.contains("| case-a | 2 | 0.990099% | 0.000000% | true | `insufficient-iterations` |"));
-        Assertions.assertTrue(summary.contains("| case-b | 2 | 50.000000% | 50.000000% | true | `insufficient-iterations,throughput-spread,p99-spread` |"));
+        Assertions.assertTrue(summary.contains("| case-a | 2 | 10 | 1.000000 | 0.990099% | 0.000000% | true | `insufficient-iterations` |"));
+        Assertions.assertTrue(summary.contains("| case-b | 2 | 10 | 1.000000 | 50.000000% | 50.000000% | true | `insufficient-iterations,throughput-spread,p99-spread` |"));
     }
 
     @Test
@@ -348,7 +350,7 @@ public class BenchmarkKitTests {
                 iteration("case-zero", 3, 0, 0.0D)
         ));
 
-        Assertions.assertTrue(summary.contains("| case-zero | 3 | 0.000000% | 0.000000% | true | `zero-delivery` |"));
+        Assertions.assertTrue(summary.contains("| case-zero | 3 | 10 | 1.000000 | 0.000000% | 0.000000% | true | `zero-delivery` |"));
     }
 
     @Test
@@ -449,6 +451,19 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("undeliveredServerGbps")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("affectedUndeliveredServerGbps")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("affectedServerDatagramsOutPerSecond")));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("probeReliability").asText()
+                .equals("UNRELIABLE")));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("probePriority").asText()
+                .equals("HIGH")));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("probesSent").asInt() == 10));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("probesAcked").asInt() == 10));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("minimumProbeResponses").asInt() == 10));
+        Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("minimumProbeResponseRate").asDouble()
+                == 1.0D));
+        Assertions.assertTrue(aggregateRows.stream().noneMatch(row -> row.path("unstableReasons").toString()
+                .contains("probe-return")));
+        Assertions.assertTrue(aggregateRows.stream().noneMatch(row -> row.path("unstableReasons").toString()
+                .contains("probe-transport-provenance")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("unstableReasons").toString()
                 .contains("insufficient-iterations")));
         Assertions.assertTrue(aggregateRows.stream().anyMatch(row -> row.path("case").asText().equals("curve-1c-mtu")
@@ -462,6 +477,104 @@ public class BenchmarkKitTests {
         Assertions.assertFalse(capacity.path("selected").asBoolean());
         Assertions.assertTrue(capacity.path("selectedCandidate").isNull());
         Assertions.assertEquals("curve-100_0mbps", capacity.path("bestObservedCandidate").path("benchmarkName").asText());
+        Assertions.assertEquals(10, capacity.path("bestObservedCandidate").path("probesSent").asInt());
+        Assertions.assertEquals(1.0D,
+                capacity.path("bestObservedCandidate").path("minimumProbeResponseRate").asDouble(), 0.000001D);
+    }
+
+    @Test
+    public void testStableBandwidthSelectionFailsClosedOnCensoredProbeLatency() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-stable-bandwidth-probe-test");
+        Path input = output.resolve("suite-aggregate.jsonl");
+        String common = "\"summaryKind\":\"aggregate\",\"case\":\"curve\",\"clients\":1,"
+                + "\"payloadSize\":1200,\"reliability\":\"RELIABLE_ORDERED\","
+                + "\"probeReliability\":\"UNRELIABLE\",\"probePriority\":\"HIGH\","
+                + "\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\",\"measuredIterations\":3,"
+                + "\"disconnects\":0,\"maxQueuedBytes\":0,\"sentToDeliveredBytesRatio\":1,"
+                + "\"nackOutPerSecond\":0,\"unstable\":false,\"unstableReasons\":[],";
+        Files.writeString(input,
+                "{" + common + "\"benchmarkName\":\"curve-missing\",\"targetMbps\":200,"
+                        + "\"deliveredGbps\":0.2,\"probeRttP99Millis\":null,\"probesSent\":30,"
+                        + "\"probesAcked\":0,\"probeAckSpillover\":0,\"probeResponseRate\":0,"
+                        + "\"minimumProbeResponses\":0,\"minimumProbeResponseRate\":0}\n"
+                        + "{" + common + "\"benchmarkName\":\"curve-valid\",\"targetMbps\":100,"
+                        + "\"deliveredGbps\":0.1,\"probeRttP99Millis\":10,\"probesSent\":36,"
+                        + "\"probesAcked\":30,\"probeAckSpillover\":0,\"probeResponseRate\":0.833333333333,"
+                        + "\"minimumProbeResponses\":10,\"minimumProbeResponseRate\":0.833333333333}\n"
+                        + "{" + common + "\"benchmarkName\":\"curve-low-return\",\"targetMbps\":300,"
+                        + "\"deliveredGbps\":0.3,\"probeRttP99Millis\":5,\"probesSent\":300,"
+                        + "\"probesAcked\":30,\"probeAckSpillover\":0,\"probeResponseRate\":0.1,"
+                        + "\"minimumProbeResponses\":10,\"minimumProbeResponseRate\":0.1}\n"
+                        + "{" + common + "\"benchmarkName\":\"curve-spillover\",\"targetMbps\":400,"
+                        + "\"deliveredGbps\":0.4,\"probeRttP99Millis\":4,\"probesSent\":30,"
+                        + "\"probesAcked\":30,\"probeAckSpillover\":3,\"probeResponseRate\":1,"
+                        + "\"minimumProbeResponses\":10,\"minimumProbeResponseRate\":1}\n",
+                StandardCharsets.UTF_8);
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/select-stable-bandwidth.sh").toString(),
+                "--input", input.toString(),
+                "--out", output.toString());
+        Assertions.assertEquals(0, result.exitCode, result.output);
+
+        JsonNode capacity = readJsonLines(output.resolve("bandwidth-capacity.jsonl")).get(0);
+        Assertions.assertEquals("curve-valid",
+                capacity.path("selectedCandidate").path("benchmarkName").asText());
+        Assertions.assertEquals("UNRELIABLE", capacity.path("probeReliability").asText());
+        Assertions.assertEquals("HIGH", capacity.path("probePriority").asText());
+        Assertions.assertEquals("curve-valid",
+                capacity.path("bestObservedCandidate").path("benchmarkName").asText(),
+                "missing or insufficient-return latency evidence must sort after valid evidence");
+        Assertions.assertEquals(36, capacity.path("selectedCandidate").path("probesSent").asInt());
+        Assertions.assertEquals(30, capacity.path("selectedCandidate").path("probesAcked").asInt());
+        Assertions.assertEquals(0, capacity.path("selectedCandidate").path("probeAckSpillover").asInt());
+
+        JsonNode missing = candidate(capacity.path("rejectedCandidates"), "curve-missing");
+        Assertions.assertTrue(missing.path("probeRttP99Millis").isNull());
+        Assertions.assertTrue(missing.path("rejectionReasons").toString().contains("missing-probe-p99"));
+        Assertions.assertTrue(missing.path("rejectionReasons").toString()
+                .contains("insufficient-probe-responses"));
+        JsonNode lowReturn = candidate(capacity.path("rejectedCandidates"), "curve-low-return");
+        Assertions.assertFalse(lowReturn.path("rejectionReasons").toString()
+                .contains("insufficient-probe-responses"));
+        Assertions.assertTrue(lowReturn.path("rejectionReasons").toString()
+                .contains("insufficient-probe-return-rate"));
+        JsonNode spillover = candidate(capacity.path("rejectedCandidates"), "curve-spillover");
+        Assertions.assertTrue(spillover.path("rejectionReasons").toString().contains("probe-ack-spillover"));
+
+        String csv = Files.readString(output.resolve("bandwidth-capacity.csv"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(csv.lines().findFirst().orElseThrow()
+                .contains("probe_reliability,probe_priority,probe_semantics"));
+        Assertions.assertTrue(csv.lines().findFirst().orElseThrow().contains("selected_probes_sent"));
+        Assertions.assertTrue(csv.lines().findFirst().orElseThrow().contains("best_observed_probe_response_rate"));
+        String report = Files.readString(output.resolve("bandwidth-capacity.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(report.contains("Stable probes ACKed/sent"));
+        Assertions.assertTrue(report.contains("30/36"));
+
+        Path invalidInput = output.resolve("invalid-provenance.jsonl");
+        Path invalidOutput = output.resolve("invalid-provenance");
+        Files.writeString(invalidInput,
+                "{" + common.replace("\"probePriority\":\"HIGH\"", "\"probePriority\":\"LOW\"")
+                        + "\"benchmarkName\":\"curve-invalid-provenance\",\"targetMbps\":100,"
+                        + "\"deliveredGbps\":0.1,\"probeRttP99Millis\":10,\"probesSent\":30,"
+                        + "\"probesAcked\":30,\"probeAckSpillover\":-1,\"probeResponseRate\":1,"
+                        + "\"minimumProbeResponses\":10,\"minimumProbeResponseRate\":1}\n",
+                StandardCharsets.UTF_8);
+        ProcessResult invalidResult = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/select-stable-bandwidth.sh").toString(),
+                "--input", invalidInput.toString(),
+                "--out", invalidOutput.toString());
+        Assertions.assertEquals(0, invalidResult.exitCode, invalidResult.output);
+        JsonNode invalidCapacity = readJsonLines(invalidOutput.resolve("bandwidth-capacity.jsonl")).get(0);
+        Assertions.assertFalse(invalidCapacity.path("selected").asBoolean());
+        Assertions.assertTrue(invalidCapacity.path("bestObservedCandidate").path("rejectionReasons").toString()
+                .contains("invalid-probe-transport-provenance"));
+        Assertions.assertTrue(invalidCapacity.path("bestObservedCandidate").path("rejectionReasons").toString()
+                .contains("invalid-probe-ack-spillover"));
     }
 
     @Test
@@ -2751,9 +2864,13 @@ public class BenchmarkKitTests {
                 + "\"elapsedMillis\":1000,\"offeredGbps\":0.01,\"serverBytesOut\":750000,"
                 + "\"healthyServerBytesOut\":625000,\"affectedServerBytesOut\":125000,"
                 + "\"serverDatagramsOut\":1500,\"healthyServerDatagramsOut\":1250,"
-                + "\"affectedServerDatagramsOut\":250,\"probeRttP99Millis\":10,\"maxQueuedBytes\":4096}";
+                + "\"affectedServerDatagramsOut\":250,\"probesSent\":12,\"probesAcked\":10,"
+                + "\"probeAckSpillover\":0,\"probeResponseRate\":0.833333333333,\"probeRttCount\":10,"
+                + "\"probeRttP95Millis\":9,\"probeRttP99Millis\":10,\"maxQueuedBytes\":4096}";
         Files.writeString(server.resolve("summary.json"),
                 "{\"runId\":\"server-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"server\","
+                        + "\"probeReliability\":\"UNRELIABLE\",\"probePriority\":\"HIGH\","
+                        + "\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\","
                         + "\"startAtEpochMillis\":1000,\"impairmentLatencyMillis\":0,"
                         + "\"impairmentJitterMillis\":0,\"impairmentLossPercent\":0,"
                         + "\"environment\":{\"gitRevision\":\"test-revision\"},\"iterations\":["
@@ -2801,16 +2918,72 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(5.0D, summary.path("externalImpairment").path("lossPercent").asDouble(), 0.001D);
         Assertions.assertEquals(10_000,
                 summary.path("externalImpairment").path("limitPackets").asInt());
+        Assertions.assertEquals("UNRELIABLE", summary.path("aggregate").path("probeReliability").asText());
+        Assertions.assertEquals(36, summary.path("aggregate").path("probesSent").asInt());
+        Assertions.assertEquals(30, summary.path("aggregate").path("probesAcked").asInt());
+        Assertions.assertEquals(0, summary.path("aggregate").path("probeAckSpillover").asInt());
+        Assertions.assertEquals(10.0D / 12.0D,
+                summary.path("aggregate").path("minimumProbeResponseRate").asDouble(), 0.000001D);
+        Assertions.assertFalse(summary.path("aggregate").path("unstable").asBoolean());
 
         String report = Files.readString(merged.resolve("README.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(report.contains("Impairment: `100ms/10ms/5%` (external qdisc: `true`)"));
         Assertions.assertTrue(report.contains("Netem queue limit: `10000 packets`"));
         Assertions.assertTrue(report.contains("Netem evidence: `" + evidence + "`"));
         String csv = Files.readString(merged.resolve("lab-summary.csv"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(csv.lines().findFirst().orElseThrow()
+                .contains("probe_reliability,probe_priority,probe_semantics"));
         Assertions.assertTrue(csv.lines().findFirst().orElseThrow().contains(
                 "impairment_profile,external_impairment,external_blackhole_at_epoch_ms,"
                         + "external_recovery_at_epoch_ms,netem_limit_packets,netem_evidence_dir"));
         Assertions.assertTrue(csv.contains("\"100ms/10ms/5%\",true,,,10000,\"" + evidence + "\""));
+
+        Path missingProbeServer = output.resolve("server-missing-probes");
+        Path missingProbeMerged = output.resolve("merged-missing-probes");
+        Files.createDirectories(missingProbeServer);
+        Files.writeString(missingProbeServer.resolve("summary.json"),
+                Files.readString(server.resolve("summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"probeResponseRate\":0.833333333333,\"probeRttCount\":10,"
+                                        + "\"probeRttP95Millis\":9,\"probeRttP99Millis\":10",
+                                "\"probeResponseRate\":0,\"probeRttCount\":0,"
+                                        + "\"probeRttP95Millis\":null,\"probeRttP99Millis\":null"),
+                StandardCharsets.UTF_8);
+        ProcessResult missingProbeResult = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/merge-worker-results.sh").toString(),
+                "--server", missingProbeServer.toString(),
+                "--receiver", receiver.toString(),
+                "--out", missingProbeMerged.toString(),
+                "--case", "missing-probes");
+        Assertions.assertEquals(0, missingProbeResult.exitCode, missingProbeResult.output);
+        JsonNode missingProbeSummary = JSON.readTree(Files.readString(
+                missingProbeMerged.resolve("lab-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertTrue(missingProbeSummary.path("aggregate").path("probeRttP99Millis").isNull());
+        Assertions.assertTrue(missingProbeSummary.path("aggregate").path("unstableReasons").toString()
+                .contains("missing-probe-p99"));
+        Assertions.assertTrue(missingProbeSummary.path("aggregate").path("unstableReasons").toString()
+                .contains("insufficient-probe-responses"));
+
+        Path spilloverServer = output.resolve("server-spillover");
+        Path spilloverMerged = output.resolve("merged-spillover");
+        Files.createDirectories(spilloverServer);
+        Files.writeString(spilloverServer.resolve("summary.json"),
+                Files.readString(server.resolve("summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"probeAckSpillover\":0", "\"probeAckSpillover\":1"),
+                StandardCharsets.UTF_8);
+        ProcessResult spilloverResult = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/merge-worker-results.sh").toString(),
+                "--server", spilloverServer.toString(),
+                "--receiver", receiver.toString(),
+                "--out", spilloverMerged.toString(),
+                "--case", "probe-spillover");
+        Assertions.assertEquals(0, spilloverResult.exitCode, spilloverResult.output);
+        JsonNode spilloverSummary = JSON.readTree(Files.readString(
+                spilloverMerged.resolve("lab-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertEquals(3, spilloverSummary.path("aggregate").path("probeAckSpillover").asInt());
+        Assertions.assertTrue(spilloverSummary.path("aggregate").path("unstableReasons").toString()
+                .contains("probe-ack-spillover"));
 
         Path blackholeMerged = output.resolve("blackhole-merged");
         ProcessResult blackholeResult = runProcess(root, Duration.ofSeconds(10),
@@ -4107,8 +4280,9 @@ public class BenchmarkKitTests {
         });
         BenchmarkRunResult run = new BenchmarkRunResult(config, EnvironmentInfo.capture());
         LatencyHistogram histogram = new LatencyHistogram();
-        histogram.record(1_000_000L);
-        histogram.record(2_000_000L);
+        for (int i = 0; i < 10; i++) {
+            histogram.record(i % 2 == 0 ? 1_000_000L : 2_000_000L);
+        }
         PeerStats peer = new PeerStats(0, false);
         peer.addBulkSent(64, 4);
         peer.addBulkReceived(64, 4);
@@ -4117,8 +4291,10 @@ public class BenchmarkKitTests {
         peer.addStaleDatagrams(3);
         peer.addNackIn(4);
         peer.addNackOut(5);
-        peer.addProbeSent();
-        peer.addProbeAcked();
+        for (int i = 0; i < 10; i++) {
+            peer.addProbeSent();
+            peer.addProbeAcked();
+        }
         peer.addBlackholedDatagramIn();
         peer.addBlackholedDatagramOut();
         run.add(new BenchmarkIterationResult(
@@ -4149,7 +4325,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(Files.exists(directory.resolve("bandwidth-capacity.csv")));
         Assertions.assertTrue(Files.exists(directory.resolve("bandwidth-capacity.md")));
         Assertions.assertTrue(Files.readString(directory.resolve("report.md"), StandardCharsets.UTF_8)
-                .contains("| unit | 1 | 0.000000% | 0.000000% | true | `insufficient-iterations` |"));
+                .contains("| unit | 1 | 10 | 1.000000 | 0.000000% | 0.000000% | true | `insufficient-iterations` |"));
         Assertions.assertTrue(Files.readString(directory.resolve("report.md"), StandardCharsets.UTF_8)
                 .contains("Direct capacity artifacts are written to"));
         JsonNode summary = JSON.readTree(Files.readString(directory.resolve("summary.json"), StandardCharsets.UTF_8));
@@ -4175,6 +4351,9 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("unit", summary.path("stability").get(0).path("name").asText());
         Assertions.assertTrue(summary.path("stability").get(0).path("unstable").asBoolean());
         Assertions.assertEquals("insufficient-iterations", summary.path("stability").get(0).path("unstableReasons").get(0).asText());
+        Assertions.assertEquals(10, summary.path("stability").get(0).path("minimumProbeResponses").asInt());
+        Assertions.assertEquals(1.0D,
+                summary.path("stability").get(0).path("minimumProbeResponseRate").asDouble(), 0.001D);
         Assertions.assertTrue(summary.has("disappearingClients"));
         Assertions.assertEquals("close", summary.path("disappearanceMode").asText());
         Assertions.assertEquals(20, summary.path("batchIntervalMillis").asLong());
@@ -4240,6 +4419,13 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("true", rows.get(0).get("batched"));
         Assertions.assertEquals("4", rows.get(0).get("logical_packets_received"));
         Assertions.assertTrue(rows.get(0).containsKey("delivered_logical_packets_s"));
+        Assertions.assertEquals("UNRELIABLE", rows.get(0).get("probe_reliability"));
+        Assertions.assertEquals("HIGH", rows.get(0).get("probe_priority"));
+        Assertions.assertEquals("10", rows.get(0).get("probes_sent"));
+        Assertions.assertEquals("10", rows.get(0).get("probes_acked"));
+        Assertions.assertEquals("0", rows.get(0).get("probe_ack_spillover"));
+        Assertions.assertEquals("1.0", rows.get(0).get("probe_response_rate"));
+        Assertions.assertEquals("10", rows.get(0).get("probe_rtt_count"));
         Assertions.assertTrue(rows.get(0).containsKey("healthy_fairness"));
         Assertions.assertTrue(rows.get(0).containsKey("disconnects"));
         Assertions.assertEquals("1", rows.get(0).get("open_peers"));
@@ -4290,6 +4476,12 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("curve-250_0mbps", capacity.path("selectedCandidate").path("benchmarkName").asText());
         Assertions.assertEquals(0.25D, capacity.path("selectedCandidate").path("deliveredGbps").asDouble(), 0.000001D);
         Assertions.assertEquals("curve-250_0mbps", capacity.path("bestObservedCandidate").path("benchmarkName").asText());
+        Assertions.assertEquals("UNRELIABLE", capacity.path("probeReliability").asText());
+        Assertions.assertEquals("HIGH", capacity.path("probePriority").asText());
+        Assertions.assertEquals(10, capacity.path("minimumProbeResponsesPerIteration").asInt());
+        Assertions.assertEquals(0.5D, capacity.path("minimumProbeResponseRate").asDouble(), 0.000001D);
+        Assertions.assertEquals(30, capacity.path("selectedCandidate").path("probesSent").asLong());
+        Assertions.assertEquals(30, capacity.path("selectedCandidate").path("probesAcked").asLong());
 
         List<Map<String, String>> rows = CSV
                 .readerFor(new TypeReference<Map<String, String>>() {
@@ -4300,6 +4492,9 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(1, rows.size());
         Assertions.assertEquals("true", rows.get(0).get("selected"));
         Assertions.assertEquals("curve-250_0mbps", rows.get(0).get("selected_benchmark"));
+        Assertions.assertEquals("UNRELIABLE", rows.get(0).get("probe_reliability"));
+        Assertions.assertEquals("HIGH", rows.get(0).get("probe_priority"));
+        Assertions.assertEquals("1.0", rows.get(0).get("selected_probe_response_rate"));
         Assertions.assertTrue(Files.readString(directory.resolve("bandwidth-capacity.md"), StandardCharsets.UTF_8)
                 .contains("| `capacity` | 1200 | `RELIABLE_ORDERED` | true | 0.250000 | 250.000000 |"));
     }
@@ -5024,9 +5219,15 @@ public class BenchmarkKitTests {
 
     private static BenchmarkIterationResult iteration(String name, int iteration, int receivedBytes, double p99Millis) {
         LatencyHistogram histogram = new LatencyHistogram();
-        histogram.record((long) (p99Millis * 1_000_000.0D));
+        for (int i = 0; i < 10; i++) {
+            histogram.record((long) (p99Millis * 1_000_000.0D));
+        }
         PeerStats peer = new PeerStats(0, false);
         peer.addBulkReceived(receivedBytes);
+        for (int i = 0; i < 10; i++) {
+            peer.addProbeSent();
+            peer.addProbeAcked();
+        }
         return new BenchmarkIterationResult(
                 name,
                 iteration,
@@ -5056,15 +5257,30 @@ public class BenchmarkKitTests {
         return rows;
     }
 
+    private static JsonNode candidate(JsonNode rows, String benchmarkName) {
+        for (JsonNode row : rows) {
+            if (benchmarkName.equals(row.path("benchmarkName").asText())) {
+                return row;
+            }
+        }
+        throw new AssertionError("Missing candidate " + benchmarkName + " in " + rows);
+    }
+
     private static void addCapacityIteration(BenchmarkRunResult run, String name, int iteration,
                                              double targetMbps, int deliveredBytes) {
         LatencyHistogram histogram = new LatencyHistogram();
-        histogram.record(10_000_000L);
+        for (int i = 0; i < 10; i++) {
+            histogram.record(10_000_000L);
+        }
         PeerStats peer = new PeerStats(0, false);
         peer.addBulkSent(deliveredBytes);
         peer.addBulkReceived(deliveredBytes);
         peer.addServerBytesOut(deliveredBytes);
         peer.addServerDatagramsOut(1);
+        for (int i = 0; i < 10; i++) {
+            peer.addProbeSent();
+            peer.addProbeAcked();
+        }
         run.add(new BenchmarkIterationResult(
                 name,
                 iteration,
@@ -5197,7 +5413,7 @@ public class BenchmarkKitTests {
                   local stale="${5:-0}"
                   local nack_out="${6:-0}"
                   cat <<JSON
-	                {"name":"$name","iteration":1,"clients":$clients,"payloadSize":$payload_size,"reliability":"RELIABLE_ORDERED","targetMbps":1.0,"targetClientMbps":$target_client_mbps,"disappearanceMode":"$disappearance_mode","batched":$batched,"batchIntervalMillis":$batch_interval,"logicalPacketsPerBatch":$logical_packets,"batchGroups":$batch_groups,"elapsedMillis":1000,"offeredGbps":$delivered_gbps,"deliveredGbps":$delivered_gbps,"healthyDeliveredGbps":$delivered_gbps,"affectedDeliveredGbps":0.0,"serverBytesOut":1024,"serverDatagramsOut":10,"serverDatagramsOutPerSecond":10.0,"sentToDeliveredBytesRatio":1.0,"healthySentToDeliveredBytesRatio":1.0,"affectedSentToDeliveredBytesRatio":1.0,"perClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"healthyClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"affectedClientThroughput":{"minMbps":0.5,"p50Mbps":0.5,"p95Mbps":0.5,"p99Mbps":0.5,"maxMbps":0.5},"deliveredMessagesPerSecond":1000.0,"deliveredLogicalPacketsPerSecond":1000.0,"probeRttP95Millis":$p99,"probeRttP99Millis":$p99,"fairnessIndex":1.0,"healthyFairnessIndex":1.0,"affectedFairnessIndex":1.0,"affectedClients":$affected_clients,"disconnects":0,"blackholedDatagramsIn":0,"blackholedDatagramsOut":0,"staleDatagrams":$stale,"staleDatagramsPerSecond":$stale,"nackIn":0,"nackInPerSecond":0.0,"nackOut":$nack_out,"nackOutPerSecond":$nack_out,"maxQueuedBytes":1024}
+	                {"name":"$name","iteration":1,"clients":$clients,"payloadSize":$payload_size,"reliability":"RELIABLE_ORDERED","targetMbps":1.0,"targetClientMbps":$target_client_mbps,"disappearanceMode":"$disappearance_mode","batched":$batched,"batchIntervalMillis":$batch_interval,"logicalPacketsPerBatch":$logical_packets,"batchGroups":$batch_groups,"elapsedMillis":1000,"offeredGbps":$delivered_gbps,"deliveredGbps":$delivered_gbps,"healthyDeliveredGbps":$delivered_gbps,"affectedDeliveredGbps":0.0,"serverBytesOut":1024,"serverDatagramsOut":10,"serverDatagramsOutPerSecond":10.0,"sentToDeliveredBytesRatio":1.0,"healthySentToDeliveredBytesRatio":1.0,"affectedSentToDeliveredBytesRatio":1.0,"perClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"healthyClientThroughput":{"minMbps":1.0,"p50Mbps":1.0,"p95Mbps":1.0,"p99Mbps":1.0,"maxMbps":1.0},"affectedClientThroughput":{"minMbps":0.5,"p50Mbps":0.5,"p95Mbps":0.5,"p99Mbps":0.5,"maxMbps":0.5},"deliveredMessagesPerSecond":1000.0,"deliveredLogicalPacketsPerSecond":1000.0,"probesSent":10,"probesAcked":10,"probeAckSpillover":0,"probeResponseRate":1.0,"probeRttCount":10,"probeRttP95Millis":$p99,"probeRttP99Millis":$p99,"fairnessIndex":1.0,"healthyFairnessIndex":1.0,"affectedFairnessIndex":1.0,"affectedClients":$affected_clients,"disconnects":0,"blackholedDatagramsIn":0,"blackholedDatagramsOut":0,"staleDatagrams":$stale,"staleDatagramsPerSecond":$stale,"nackIn":0,"nackInPerSecond":0.0,"nackOut":$nack_out,"nackOutPerSecond":$nack_out,"maxQueuedBytes":1024}
                 JSON
                 }
 
@@ -5226,7 +5442,7 @@ public class BenchmarkKitTests {
                 esac
 
                 cat >"$artifact/summary.json" <<JSON
-                {"runId":"$run_id","scenario":"$scenario","impairmentLatencyMillis":$impairment_latency,"impairmentJitterMillis":$impairment_jitter,"impairmentLossPercent":$impairment_loss,"iterations":[$iterations]}
+                {"runId":"$run_id","scenario":"$scenario","probeReliability":"UNRELIABLE","probePriority":"HIGH","probeSemantics":"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples","impairmentLatencyMillis":$impairment_latency,"impairmentJitterMillis":$impairment_jitter,"impairmentLossPercent":$impairment_loss,"iterations":[$iterations]}
                 JSON
                 printf 'mock benchmark wrote %s\\n' "$artifact"
                 """;

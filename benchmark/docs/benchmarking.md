@@ -2,7 +2,7 @@
 
 This benchmark kit measures established RakNet channel behavior. It does not measure unconnected ping/pong, OCR1/OCR2, cookie handling, or DDoS-offload paths.
 
-The primary benchmark shape is server-to-client bulk traffic with a separate small probe stream. Bulk messages load the RakNet stack; probes are echoed by clients so the server can report probe RTT while the bulk stream is active.
+The primary benchmark shape is server-to-client bulk traffic with a separate small probe stream. Bulk messages retain the configured workload reliability at normal priority. Probe requests and ACKs use exactly `UNRELIABLE/HIGH` through the weighted scheduler, are isolated from reliable messages at the physical datagram boundary, and therefore consume no reliable/ordering index and are never retransmitted. The server tracks globally unique probe IDs in one active measurement window; warmup, duplicate, wrong-peer, and late prior-window ACKs cannot enter the RTT histogram.
 
 See [`baseline-status.md`](baseline-status.md) for the current baseline handoff state, [`baseline-matrix.md`](baseline-matrix.md) for the recommended recurring baseline matrix and current production-synthetic gaps, [`production-usage-evidence.md`](production-usage-evidence.md) for the source evidence behind the synthetic, and [`lab-baseline-runbook.md`](lab-baseline-runbook.md) for the lab workflow that captures host state, remote-worker topology, impairment profiles, and baseline-versus-candidate comparison artifacts.
 
@@ -437,6 +437,7 @@ Important fields:
 - `deliveredLogicalPacketsPerSecond`: synthetic logical game packets delivered per second for batch runs
 - `disappearanceMode`: clean close, stop-reading, or benchmark-managed blackhole behavior for disappearance runs
 - `probeRttP95Millis` and `probeRttP99Millis`: latency under bulk load
+- `probesSent`, `probesAcked`, `probeAckSpillover`, `probeResponseRate`, and `probeRttCount`: active-window probe return provenance. `probeResponseRate` is bounded to matching sent probes; raw spillover remains separate.
 - `fairnessIndex`: Jain fairness index across clients, where `1.0` is perfectly even delivery
 - `healthyFairnessIndex`: Jain fairness for clients not marked impaired/disappearing
 - `affectedDeliveredGbps` and `affectedFairnessIndex`: throughput and fairness for impaired/disappearing clients
@@ -445,4 +446,4 @@ Important fields:
 - `staleDatagrams`, `nackIn`, `nackOut`: raw retransmission-pressure counters
 - `maxQueuedBytes`: largest observed RakNet queued payload bytes per channel
 
-Treat a case as unstable when it has zero delivered throughput, fewer than three measured iterations, throughput spread is above 10 percent, or p99 probe RTT spread is above 10 percent across measured iterations. Increase duration, reduce unrelated host activity, and rerun before comparing code changes.
+Treat a case as unstable when it has zero delivered throughput, fewer than three measured iterations, fewer than 10 matching probe responses in any iteration, less than 50 percent matching probe return in any iteration, any probe ACK spillover, missing probe transport provenance, missing p99 RTT, throughput spread above 10 percent, or available p99 probe RTT spread above 10 percent. Missing or partial RTT evidence is emitted as `null`/unavailable, never as zero latency. Capacity selection requires the exact `UNRELIABLE/HIGH` semantics and zero spillover; rejected candidates remain visible with reasons. Increase duration, reduce unrelated host activity, and rerun before comparing code changes.

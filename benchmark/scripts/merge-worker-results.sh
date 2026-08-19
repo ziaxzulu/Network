@@ -211,10 +211,18 @@ jq -s \
   --argjson externalNetemLimitPackets "$external_netem_limit_json" \
   --argjson externalBlackholeAtEpochMillis "$external_blackhole_at_epoch_json" \
   --argjson externalRecoveryAtEpochMillis "$external_recovery_at_epoch_json" \
+  --argjson minimumProbeResponsesPerIteration 10 \
+  --argjson minimumProbeResponseRate 0.5 \
+  --arg expectedProbeSemantics "UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples" \
   --arg netemEvidenceDir "$netem_evidence_dir" \
   --arg outputRoot "$output_root" '
   def median:
     if length == 0 then 0
+    else sort as $s | $s[((length - 1) / 2 | floor)]
+    end;
+
+  def median_or_null:
+    if length == 0 then null
     else sort as $s | $s[((length - 1) / 2 | floor)]
     end;
 
@@ -248,6 +256,9 @@ jq -s \
       end
     end;
 
+  def spread_pct_or_null($values):
+    if ($values | length) == 0 then null else spread_pct($values) end;
+
   def fairness($values):
     if ($values | length) == 0 then 1
     else
@@ -279,15 +290,36 @@ jq -s \
       elapsedMillis: (map(.elapsedMillis // 0) | max_or_zero)
     } | gbps(.bytes; .elapsedMillis))
   ) as $receiver_iteration_gbps |
-  ($server_iterations | map(.probeRttP99Millis // 0)) as $server_p99_values |
+  ($server_iterations | map(.probeRttP99Millis | select(type == "number"))) as $server_p99_values |
+  ($server_iterations | map(.probeRttP95Millis | select(type == "number"))) as $server_p95_values |
+  (($server_p99_values | length) == $server_iteration_count and $server_iteration_count > 0) as $server_p99_complete |
+  (($server_p95_values | length) == $server_iteration_count and $server_iteration_count > 0) as $server_p95_complete |
+  ($server_iterations | map(.probesSent // 0) | sum_or_zero) as $server_probes_sent |
+  ($server_iterations | map(.probesAcked // 0) | sum_or_zero) as $server_probes_acked |
+  ($server_iterations | map(.probeAckSpillover | select(type == "number" and . >= 0 and floor == .))) as $server_probe_ack_spillover_values |
+  (($server_probe_ack_spillover_values | length) == $server_iteration_count and $server_iteration_count > 0) as $server_probe_ack_spillover_complete |
+  (if $server_probe_ack_spillover_complete then ($server_probe_ack_spillover_values | sum_or_zero) else null end) as $server_probe_ack_spillover |
+  ($server_iterations | map(.probeRttCount // 0) | if length == 0 then 0 else min end) as $minimum_probe_responses |
+  ($server_iterations | map(.probeResponseRate | select(type == "number"))) as $server_probe_response_rates |
+  (($server_probe_response_rates | length) == $server_iteration_count and $server_iteration_count > 0) as $server_probe_rates_complete |
+  (if $server_probe_rates_complete then ($server_probe_response_rates | min) else null end) as $minimum_probe_response_rate |
+  (if $server_probes_sent <= 0 then null
+   else ([ $server_probes_sent, $server_probes_acked ] | min) / $server_probes_sent
+   end) as $probe_response_rate |
   (spread_pct($receiver_iteration_gbps)) as $delivered_gbps_spread_pct |
-  (spread_pct($server_p99_values)) as $probe_p99_spread_pct |
+  (if $server_p99_complete then spread_pct_or_null($server_p99_values) else null end) as $probe_p99_spread_pct |
   ($receiver_iteration_gbps | max_or_zero) as $max_receiver_gbps |
   (
     []
     + (if $server_iteration_count < 3 then ["insufficient-iterations"] else [] end)
     + (if $delivered_gbps_spread_pct > 10 then ["throughput-spread"] else [] end)
-    + (if $probe_p99_spread_pct > 10 then ["p99-spread"] else [] end)
+    + (if $server_p99_complete | not then ["missing-probe-p99"] else [] end)
+    + (if (($server.probeReliability // null) != "UNRELIABLE") or (($server.probePriority // null) != "HIGH") or (($server.probeSemantics // null) != $expectedProbeSemantics) then ["invalid-probe-transport-provenance"] else [] end)
+    + (if ($server_probe_ack_spillover_complete | not) then ["invalid-probe-ack-spillover"] else [] end)
+    + (if $server_probe_ack_spillover != null and $server_probe_ack_spillover > 0 then ["probe-ack-spillover"] else [] end)
+    + (if $minimum_probe_responses < $minimumProbeResponsesPerIteration then ["insufficient-probe-responses"] else [] end)
+    + (if (($minimum_probe_response_rate == null) or ($minimum_probe_response_rate < $minimumProbeResponseRate)) then ["insufficient-probe-return-rate"] else [] end)
+    + (if $probe_p99_spread_pct != null and $probe_p99_spread_pct > 10 then ["p99-spread"] else [] end)
     + (if $max_receiver_gbps <= 0 then ["zero-delivery"] else [] end)
   ) as $unstable_reasons |
   ($receiver_iterations | map(.bulkReceivedBytes // 0) | sum_or_zero) as $receiver_bytes |
@@ -377,6 +409,11 @@ jq -s \
       receiverClients: $receiver_clients,
       payloadSize: ($server_iterations[0].payloadSize // 0),
       reliability: ($server_iterations[0].reliability // "unknown"),
+      probeReliability: ($server.probeReliability // null),
+      probePriority: ($server.probePriority // null),
+      probeSemantics: ($server.probeSemantics // null),
+      minimumProbeResponsesPerIteration: $minimumProbeResponsesPerIteration,
+      minimumProbeResponseRateRequired: $minimumProbeResponseRate,
       batched: ($server_iterations[0].batched // false),
       batchIntervalMillis: ($server_iterations[0].batchIntervalMillis // $server.batchIntervalMillis // 0),
       logicalPacketsPerBatch: ($server_iterations[0].logicalPacketsPerBatch // $server.logicalPacketsPerBatch // 1),
@@ -440,8 +477,15 @@ jq -s \
       affectedClientMbpsP50: $affected_client_mbps_p50,
       affectedClientMbpsP99: $affected_client_mbps_p99,
       deliveredGbpsSpreadPct: $delivered_gbps_spread_pct,
-      probeRttP95Millis: ($server_iterations | map(.probeRttP95Millis // 0) | median),
-      probeRttP99Millis: ($server_iterations | map(.probeRttP99Millis // 0) | median),
+      probesSent: $server_probes_sent,
+      probesAcked: $server_probes_acked,
+      probeAckSpillover: $server_probe_ack_spillover,
+      probeResponseRate: $probe_response_rate,
+      minimumProbeResponses: $minimum_probe_responses,
+      minimumProbeResponseRate: $minimum_probe_response_rate,
+      probeRttCount: ($server_iterations | map(.probeRttCount // 0) | sum_or_zero),
+      probeRttP95Millis: (if $server_p95_complete then ($server_p95_values | median_or_null) else null end),
+      probeRttP99Millis: (if $server_p99_complete then ($server_p99_values | median_or_null) else null end),
       probeRttP99MillisSpreadPct: $probe_p99_spread_pct,
       fairnessIndex: fairness($receiver_peer_bytes),
       healthyFairnessIndex: fairness($healthy_peer_bytes),
@@ -535,7 +579,7 @@ jq -s \
 jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
 
 {
-  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,impairment_profile,external_impairment,external_blackhole_at_epoch_ms,external_recovery_at_epoch_ms,netem_limit_packets,netem_evidence_dir,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,undelivered_server_gbps,healthy_undelivered_server_gbps,affected_undelivered_server_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,healthy_server_datagrams_out_s,affected_server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
+  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,probe_reliability,probe_priority,probe_semantics,minimum_probe_responses_required,minimum_probe_response_rate_required,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,impairment_profile,external_impairment,external_blackhole_at_epoch_ms,external_recovery_at_epoch_ms,netem_limit_packets,netem_evidence_dir,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,undelivered_server_gbps,healthy_undelivered_server_gbps,affected_undelivered_server_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,healthy_server_datagrams_out_s,affected_server_datagrams_out_s,stale_datagrams_s,nack_out_s,probes_sent,probes_acked,probe_ack_spillover,probe_response_rate,minimum_probe_responses,minimum_probe_response_rate,probe_rtt_count,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
   jq -r '
     .aggregate as $a |
     [
@@ -547,6 +591,11 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.receiverClients,
       $a.payloadSize,
       $a.reliability,
+      $a.probeReliability,
+      $a.probePriority,
+      $a.probeSemantics,
+      $a.minimumProbeResponsesPerIteration,
+      $a.minimumProbeResponseRateRequired,
       $a.batched,
       $a.batchIntervalMillis,
       $a.logicalPacketsPerBatch,
@@ -575,6 +624,13 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.affectedServerDatagramsOutPerSecond,
       $a.staleDatagramsPerSecond,
       $a.nackOutPerSecond,
+      $a.probesSent,
+      $a.probesAcked,
+      $a.probeAckSpillover,
+      $a.probeResponseRate,
+      $a.minimumProbeResponses,
+      $a.minimumProbeResponseRate,
+      $a.probeRttCount,
       $a.probeRttP99Millis,
       $a.maxQueuedBytes,
       $a.configuredMaxQueuedBytes,
@@ -598,6 +654,8 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
     "- Receiver runs: `" + (.receivers | map(.runId // "unknown") | join(", ")) + "`\n" +
     "- Start at epoch ms: `" + (($a.startAtEpochMillis // 0) | tostring) + "`\n" +
     "- Impairment: `" + ($a.impairmentProfile // "unknown") + "` (external qdisc: `" + (($a.externalImpairment // false) | tostring) + "`)\n" +
+    "- Probe transport: `" + ($a.probeReliability // "unavailable") + "/" + ($a.probePriority // "unavailable") + "`\n" +
+    "- Probe evidence gates: at least `" + (($a.minimumProbeResponsesPerIteration // 0) | tostring) + "` responses and `" + (($a.minimumProbeResponseRateRequired // 0) | tostring) + "` bounded return per iteration\n" +
     (if $a.externalBlackholeAtEpochMillis == null then "" else "- External blackhole at epoch ms: `" + ($a.externalBlackholeAtEpochMillis | tostring) + "`\n" end) +
     (if $a.externalRecoveryAtEpochMillis == null then "" else "- External recovery at epoch ms: `" + ($a.externalRecoveryAtEpochMillis | tostring) + "`\n" end) +
     (if $a.externalNetemLimitPackets == null then "" else "- Netem queue limit: `" + ($a.externalNetemLimitPackets | tostring) + " packets`\n" end) +
@@ -631,6 +689,12 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       ["Affected datagrams out/s", fmt($a.affectedServerDatagramsOutPerSecond)],
       ["Stale datagrams/s", fmt($a.staleDatagramsPerSecond)],
       ["NACK out/s", fmt($a.nackOutPerSecond)],
+      ["Probes ACKed/sent", (($a.probesAcked // 0) | tostring) + "/" + (($a.probesSent // 0) | tostring)],
+      ["Probe ACK spillover", $a.probeAckSpillover],
+      ["Probe return", fmt($a.probeResponseRate)],
+      ["Minimum probe responses", $a.minimumProbeResponses],
+      ["Minimum probe return", fmt($a.minimumProbeResponseRate)],
+      ["Probe RTT samples", $a.probeRttCount],
       ["Probe p99 ms", fmt($a.probeRttP99Millis)],
       ["Max queued bytes", $a.maxQueuedBytes],
       ["Fairness", fmt($a.fairnessIndex)],

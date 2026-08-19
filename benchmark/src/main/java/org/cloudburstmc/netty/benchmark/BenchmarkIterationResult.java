@@ -45,6 +45,7 @@ public final class BenchmarkIterationResult {
     public final long logicalPacketsReceived;
     public final long probesSent;
     public final long probesAcked;
+    public final long probeAckSpillover;
     public final long serverBytesOut;
     public final long serverDatagramsOut;
     public final long healthyServerBytesOut;
@@ -124,6 +125,7 @@ public final class BenchmarkIterationResult {
         long receivedLogicalPackets = 0L;
         long sentProbes = 0L;
         long ackedProbes = 0L;
+        long spilledProbeAcks = 0L;
         long bytesOut = 0L;
         long datagramsOut = 0L;
         long healthyBytesOut = 0L;
@@ -159,6 +161,7 @@ public final class BenchmarkIterationResult {
             receivedLogicalPackets += peer.logicalPacketsReceived;
             sentProbes += peer.probesSent;
             ackedProbes += peer.probesAcked;
+            spilledProbeAcks += peer.probeAckSpillover;
             bytesOut += peer.serverBytesOut;
             datagramsOut += peer.serverDatagramsOut;
             stale += peer.staleDatagrams;
@@ -206,6 +209,7 @@ public final class BenchmarkIterationResult {
         this.logicalPacketsReceived = receivedLogicalPackets;
         this.probesSent = sentProbes;
         this.probesAcked = ackedProbes;
+        this.probeAckSpillover = spilledProbeAcks;
         this.serverBytesOut = bytesOut;
         this.serverDatagramsOut = datagramsOut;
         this.healthyServerBytesOut = healthyBytesOut;

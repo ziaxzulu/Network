@@ -20,8 +20,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import org.cloudburstmc.netty.channel.raknet.RakState;
-import org.cloudburstmc.netty.channel.raknet.RakPriority;
-import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 
 import java.util.concurrent.CountDownLatch;
@@ -29,12 +27,10 @@ import java.util.concurrent.CountDownLatch;
 final class ClientReceiverHandler extends SimpleChannelInboundHandler<RakMessage> {
     private final PeerStats peer;
     private final CountDownLatch connectedLatch;
-    private final RakReliability reliability;
 
-    ClientReceiverHandler(PeerStats peer, CountDownLatch connectedLatch, RakReliability reliability) {
+    ClientReceiverHandler(PeerStats peer, CountDownLatch connectedLatch) {
         this.peer = peer;
         this.connectedLatch = connectedLatch;
-        this.reliability = reliability;
     }
 
     @Override
@@ -65,11 +61,8 @@ final class ClientReceiverHandler extends SimpleChannelInboundHandler<RakMessage
         if (type == BenchmarkPayload.PROBE) {
             long sequence = BenchmarkPayload.sequence(content);
             long sentNanos = BenchmarkPayload.timestampNanos(content);
-            ctx.writeAndFlush(new RakMessage(
-                    BenchmarkPayload.probeAck(ctx.alloc(), sequence, sentNanos),
-                    this.reliability,
-                    RakPriority.IMMEDIATE
-            ));
+            ctx.writeAndFlush(BenchmarkMessages.probeAck(
+                    BenchmarkPayload.probeAck(ctx.alloc(), sequence, sentNanos)));
             return;
         }
         ctx.fireChannelRead(message.retain());

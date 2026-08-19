@@ -9,6 +9,8 @@ max_queue_bytes="0"
 max_send_deliver_ratio="0"
 max_nack_out_s="0"
 allow_unstable=false
+minimum_probe_responses_per_iteration="10"
+minimum_probe_response_rate="0.5"
 
 usage() {
   cat <<'USAGE'
@@ -146,16 +148,37 @@ jq -c -s \
   --argjson maxQueueBytes "$max_queue_bytes" \
   --argjson maxSendDeliverRatio "$max_send_deliver_ratio" \
   --argjson maxNackOutPerSecond "$max_nack_out_s" \
+  --argjson minimumProbeResponsesPerIteration "$minimum_probe_responses_per_iteration" \
+  --argjson minimumProbeResponseRate "$minimum_probe_response_rate" \
+  --arg expectedProbeSemantics "UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples" \
   --argjson allowUnstable "$allow_unstable_json" '
   def n($value): ($value // 0) | tonumber;
   def curve_row: ((.benchmarkName // "") | startswith("curve-"));
+  def probe_evidence_available($row):
+    (($row.probeReliability // null) == "UNRELIABLE")
+    and (($row.probePriority // null) == "HIGH")
+    and (($row.probeSemantics // null) == $expectedProbeSemantics)
+    and (($row.probeAckSpillover | type) == "number")
+    and ($row.probeAckSpillover >= 0)
+    and (($row.probeAckSpillover | floor) == $row.probeAckSpillover)
+    and ($row.probeAckSpillover == 0)
+    and (($row.probeRttP99Millis | type) == "number")
+    and (($row.minimumProbeResponses | type) == "number")
+    and ($row.minimumProbeResponses >= $minimumProbeResponsesPerIteration)
+    and (($row.minimumProbeResponseRate | type) == "number")
+    and ($row.minimumProbeResponseRate >= $minimumProbeResponseRate);
   def candidate_reasons($row):
     []
     + (if (($allowUnstable | not) and (($row.unstable // false) == true)) then ["unstable"] else [] end)
     + (if n($row.measuredIterations) < $minIterations then ["insufficient-iterations"] else [] end)
     + (if n($row.deliveredGbps) <= 0 then ["zero-delivery"] else [] end)
     + (if n($row.disconnects) > 0 then ["disconnects"] else [] end)
-    + (if $maxP99Millis > 0 and n($row.probeRttP99Millis) > $maxP99Millis then ["p99-rtt"] else [] end)
+    + (if (($row.probeReliability // null) != "UNRELIABLE") or (($row.probePriority // null) != "HIGH") or (($row.probeSemantics // null) != $expectedProbeSemantics) then ["invalid-probe-transport-provenance"] else [] end)
+    + (if $row.probeAckSpillover == null then ["missing-probe-ack-spillover"] elif (($row.probeAckSpillover | type) != "number") or $row.probeAckSpillover < 0 or (($row.probeAckSpillover | floor) != $row.probeAckSpillover) then ["invalid-probe-ack-spillover"] elif $row.probeAckSpillover > 0 then ["probe-ack-spillover"] else [] end)
+    + (if (($row.probeRttP99Millis | type) != "number") then ["missing-probe-p99"] else [] end)
+    + (if (($row.minimumProbeResponses | type) != "number") or $row.minimumProbeResponses < $minimumProbeResponsesPerIteration then ["insufficient-probe-responses"] else [] end)
+    + (if (($row.minimumProbeResponseRate | type) != "number") or $row.minimumProbeResponseRate < $minimumProbeResponseRate then ["insufficient-probe-return-rate"] else [] end)
+    + (if $maxP99Millis > 0 and (($row.probeRttP99Millis | type) == "number") and $row.probeRttP99Millis > $maxP99Millis then ["p99-rtt"] else [] end)
     + (if $maxQueueBytes > 0 and n($row.maxQueuedBytes) > $maxQueueBytes then ["queue-bytes"] else [] end)
     + (if $maxSendDeliverRatio > 0 and n($row.sentToDeliveredBytesRatio) > $maxSendDeliverRatio then ["send-deliver-ratio"] else [] end)
     + (if $maxNackOutPerSecond > 0 and n($row.nackOutPerSecond) > $maxNackOutPerSecond then ["nack-out-rate"] else [] end);
@@ -170,6 +193,15 @@ jq -c -s \
       deliveredMessagesPerSecond: ($row.deliveredMessagesPerSecond // null),
       deliveredLogicalPacketsPerSecond: ($row.deliveredLogicalPacketsPerSecond // null),
       probeRttP99Millis: ($row.probeRttP99Millis // null),
+      probeReliability: ($row.probeReliability // null),
+      probePriority: ($row.probePriority // null),
+      probeSemantics: ($row.probeSemantics // null),
+      probesSent: ($row.probesSent // null),
+      probesAcked: ($row.probesAcked // null),
+      probeAckSpillover: ($row.probeAckSpillover // null),
+      probeResponseRate: ($row.probeResponseRate // null),
+      minimumProbeResponses: ($row.minimumProbeResponses // null),
+      minimumProbeResponseRate: ($row.minimumProbeResponseRate // null),
       openPeers: ($row.openPeers // null),
       activePeers: ($row.activePeers // null),
       activePeersMin: ($row.activePeersMin // null),
@@ -196,6 +228,9 @@ jq -c -s \
     n(.clients),
     n(.payloadSize),
     (.reliability // ""),
+    (.probeReliability // ""),
+    (.probePriority // ""),
+    (.probeSemantics // ""),
     (.impairmentProfile // "0ms/0ms/0%"),
     n(.packetLimit),
     n(.globalPacketLimit),
@@ -206,6 +241,9 @@ jq -c -s \
     n(.clients),
     n(.payloadSize),
     (.reliability // ""),
+    (.probeReliability // ""),
+    (.probePriority // ""),
+    (.probeSemantics // ""),
     (.impairmentProfile // "0ms/0ms/0%"),
     n(.packetLimit),
     n(.globalPacketLimit),
@@ -219,8 +257,8 @@ jq -c -s \
       rejectionReasons: $reasons
     })
   ) as $candidates |
-  ($candidates | map(select(.eligible)) | sort_by([(n(.deliveredGbps) * -1), n(.probeRttP99Millis), n(.maxQueuedBytes)]) | .[0] // null) as $selected |
-  ($candidates | sort_by([(n(.deliveredGbps) * -1), n(.probeRttP99Millis), n(.maxQueuedBytes)]) | .[0] // null) as $bestObserved |
+  ($candidates | map(select(.eligible)) | sort_by([(n(.deliveredGbps) * -1), .probeRttP99Millis, n(.maxQueuedBytes)]) | .[0] // null) as $selected |
+  ($candidates | sort_by([(if probe_evidence_available(.) then 0 else 1 end), (n(.deliveredGbps) * -1), (if (.probeRttP99Millis | type) == "number" then .probeRttP99Millis else 1e300 end), n(.maxQueuedBytes)]) | .[0] // null) as $bestObserved |
   {
     summaryKind: "bandwidth-capacity",
     inputSummary: $inputSummary,
@@ -228,6 +266,9 @@ jq -c -s \
     clients: ($first.clients // null),
     payloadSize: ($first.payloadSize // null),
     reliability: ($first.reliability // null),
+    probeReliability: ($first.probeReliability // null),
+    probePriority: ($first.probePriority // null),
+    probeSemantics: ($first.probeSemantics // null),
     batched: ($first.batched // false),
     impairmentProfile: ($first.impairmentProfile // "0ms/0ms/0%"),
     impairmentLatencyMillis: ($first.impairmentLatencyMillis // 0),
@@ -242,6 +283,8 @@ jq -c -s \
     maxQueueBytes: $maxQueueBytes,
     maxSendDeliverRatio: $maxSendDeliverRatio,
     maxNackOutPerSecond: $maxNackOutPerSecond,
+    minimumProbeResponsesPerIteration: $minimumProbeResponsesPerIteration,
+    minimumProbeResponseRate: $minimumProbeResponseRate,
     allowUnstable: $allowUnstable,
     candidateCount: ($candidates | length),
     eligibleCandidateCount: ($candidates | map(select(.eligible)) | length),
@@ -253,7 +296,7 @@ jq -c -s \
 ' "$input_summary" >"$jsonl_out"
 
 {
-  echo "case,clients,payload_size,reliability,impairment_profile,packet_limit,global_packet_limit,configured_max_queued_bytes,selected,eligible_candidates,candidate_count,selected_benchmark,selected_target_mbps,selected_delivered_gbps,selected_p99_ms,selected_spread_pct,selected_max_queue_bytes,selected_send_deliver_ratio,selected_nack_out_s,best_observed_benchmark,best_observed_target_mbps,best_observed_delivered_gbps,best_observed_p99_ms,best_observed_reasons"
+  echo "case,clients,payload_size,reliability,probe_reliability,probe_priority,probe_semantics,impairment_profile,packet_limit,global_packet_limit,configured_max_queued_bytes,minimum_probe_responses_per_iteration,minimum_probe_response_rate,selected,eligible_candidates,candidate_count,selected_benchmark,selected_target_mbps,selected_delivered_gbps,selected_p99_ms,selected_probes_sent,selected_probes_acked,selected_probe_ack_spillover,selected_probe_response_rate,selected_minimum_probe_responses,selected_minimum_probe_response_rate,selected_spread_pct,selected_max_queue_bytes,selected_send_deliver_ratio,selected_nack_out_s,best_observed_benchmark,best_observed_target_mbps,best_observed_delivered_gbps,best_observed_p99_ms,best_observed_probes_sent,best_observed_probes_acked,best_observed_probe_ack_spillover,best_observed_probe_response_rate,best_observed_minimum_probe_responses,best_observed_minimum_probe_response_rate,best_observed_reasons"
   jq -r '
     def value($candidate; $name):
       if $candidate == null then null else $candidate[$name] end;
@@ -262,10 +305,15 @@ jq -c -s \
       .clients,
       .payloadSize,
       .reliability,
+      .probeReliability,
+      .probePriority,
+      .probeSemantics,
       .impairmentProfile,
       .packetLimit,
       .globalPacketLimit,
       .configuredMaxQueuedBytes,
+      .minimumProbeResponsesPerIteration,
+      .minimumProbeResponseRate,
       .selected,
       .eligibleCandidateCount,
       .candidateCount,
@@ -273,6 +321,12 @@ jq -c -s \
       value(.selectedCandidate; "targetMbps"),
       value(.selectedCandidate; "deliveredGbps"),
       value(.selectedCandidate; "probeRttP99Millis"),
+      value(.selectedCandidate; "probesSent"),
+      value(.selectedCandidate; "probesAcked"),
+      value(.selectedCandidate; "probeAckSpillover"),
+      value(.selectedCandidate; "probeResponseRate"),
+      value(.selectedCandidate; "minimumProbeResponses"),
+      value(.selectedCandidate; "minimumProbeResponseRate"),
       value(.selectedCandidate; "deliveredGbpsSpreadPct"),
       value(.selectedCandidate; "maxQueuedBytes"),
       value(.selectedCandidate; "sentToDeliveredBytesRatio"),
@@ -281,6 +335,12 @@ jq -c -s \
       value(.bestObservedCandidate; "targetMbps"),
       value(.bestObservedCandidate; "deliveredGbps"),
       value(.bestObservedCandidate; "probeRttP99Millis"),
+      value(.bestObservedCandidate; "probesSent"),
+      value(.bestObservedCandidate; "probesAcked"),
+      value(.bestObservedCandidate; "probeAckSpillover"),
+      value(.bestObservedCandidate; "probeResponseRate"),
+      value(.bestObservedCandidate; "minimumProbeResponses"),
+      value(.bestObservedCandidate; "minimumProbeResponseRate"),
       (value(.bestObservedCandidate; "rejectionReasons") // [] | join(";"))
     ] | @csv
   ' "$jsonl_out"
@@ -295,13 +355,15 @@ jq -c -s \
   echo "- Max queue bytes: \`$(if [[ "$max_queue_bytes" == "0" ]]; then echo "disabled"; else echo "$max_queue_bytes"; fi)\`"
   echo "- Max send/deliver ratio: \`$(if [[ "$max_send_deliver_ratio" == "0" ]]; then echo "disabled"; else echo "$max_send_deliver_ratio"; fi)\`"
   echo "- Max NACK out/s: \`$(if [[ "$max_nack_out_s" == "0" ]]; then echo "disabled"; else echo "$max_nack_out_s"; fi)\`"
+  echo "- Minimum probe responses per iteration: \`$minimum_probe_responses_per_iteration\`"
+  echo "- Minimum per-iteration probe return rate: \`$minimum_probe_response_rate\`"
   echo "- Allow unstable rows: \`$allow_unstable\`"
   echo
   if [[ ! -s "$jsonl_out" ]]; then
     echo "No bandwidth-latency curve aggregate rows were found."
   else
-    echo "| Case | Payload | Reliability | Impairment | Packet limit | Global limit | Queue cap | Selected | Stable Gbps | Stable target Mbps | Stable p99 ms | Stable spread | Best observed Gbps | Best observed target Mbps | Best observed reasons |"
-    echo "| --- | ---: | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+    echo "| Case | Payload | Reliability | Impairment | Packet limit | Global limit | Queue cap | Selected | Stable Gbps | Stable target Mbps | Stable p99 ms | Stable probes ACKed/sent | Stable return | Stable minimum count | Stable minimum return | Stable spread | Best observed Gbps | Best observed target Mbps | Best probes ACKed/sent | Best return | Best observed reasons |"
+    echo "| --- | ---: | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
     jq -r '
       def fmt($value):
         if $value == null then "n/a"
@@ -325,17 +387,23 @@ jq -c -s \
         fmt(field(.selectedCandidate; "deliveredGbps")),
         fmt(field(.selectedCandidate; "targetMbps")),
         fmt(field(.selectedCandidate; "probeRttP99Millis")),
+        ((field(.selectedCandidate; "probesAcked") // "n/a") | tostring) + "/" + ((field(.selectedCandidate; "probesSent") // "n/a") | tostring),
+        fmt(field(.selectedCandidate; "probeResponseRate")),
+        fmt(field(.selectedCandidate; "minimumProbeResponses")),
+        fmt(field(.selectedCandidate; "minimumProbeResponseRate")),
         pct(field(.selectedCandidate; "deliveredGbpsSpreadPct")),
         fmt(field(.bestObservedCandidate; "deliveredGbps")),
         fmt(field(.bestObservedCandidate; "targetMbps")),
+        ((field(.bestObservedCandidate; "probesAcked") // "n/a") | tostring) + "/" + ((field(.bestObservedCandidate; "probesSent") // "n/a") | tostring),
+        fmt(field(.bestObservedCandidate; "probeResponseRate")),
         "`" + ((field(.bestObservedCandidate; "rejectionReasons") // []) | join(",")) + "`"
       ] | @tsv
-    ' "$jsonl_out" | while IFS=$'\t' read -r case_name payload reliability impairment packet_limit global_limit queue_cap selected stable_gbps stable_target stable_p99 stable_spread best_gbps best_target best_reasons; do
-      echo "| $case_name | $payload | $reliability | $impairment | $packet_limit | $global_limit | $queue_cap | $selected | $stable_gbps | $stable_target | $stable_p99 | $stable_spread | $best_gbps | $best_target | $best_reasons |"
+    ' "$jsonl_out" | while IFS=$'\t' read -r case_name payload reliability impairment packet_limit global_limit queue_cap selected stable_gbps stable_target stable_p99 stable_probe_counts stable_probe_rate stable_min_count stable_min_rate stable_spread best_gbps best_target best_probe_counts best_probe_rate best_reasons; do
+      echo "| $case_name | $payload | $reliability | $impairment | $packet_limit | $global_limit | $queue_cap | $selected | $stable_gbps | $stable_target | $stable_p99 | $stable_probe_counts | $stable_probe_rate | $stable_min_count | $stable_min_rate | $stable_spread | $best_gbps | $best_target | $best_probe_counts | $best_probe_rate | $best_reasons |"
     done
   fi
   echo
-  echo "Stable Gbps is the highest delivered curve row that passes the configured gates. Best observed Gbps is shown separately so failed or unstable high-throughput rows are visible instead of silently discarded."
+  echo "Stable Gbps is the highest delivered curve row that passes the configured gates. Best observed prefers candidates with sufficient probe evidence; all failed or unstable high-throughput rows remain visible in the JSON rejection list."
 } >"$report_out"
 
 echo "Bandwidth capacity JSONL: $jsonl_out"

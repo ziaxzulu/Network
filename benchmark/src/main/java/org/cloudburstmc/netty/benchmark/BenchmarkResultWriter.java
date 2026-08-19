@@ -43,6 +43,8 @@ public final class BenchmarkResultWriter {
     private static final CsvMapper CSV = new CsvMapper();
     private static final CsvSchema TIMESERIES_SCHEMA = CSV.schemaFor(TimeseriesCsv.class).withHeader();
     private static final CsvSchema CAPACITY_SCHEMA = CSV.schemaFor(CapacityCsv.class).withHeader();
+    private static final int MIN_PROBE_RESPONSES_PER_ITERATION = 10;
+    private static final double MIN_PROBE_RESPONSE_RATE = 0.50D;
 
     public File write(BenchmarkRunResult result) throws IOException {
         File directory = result.outputDirectory();
@@ -85,8 +87,15 @@ public final class BenchmarkResultWriter {
     private static void writeLatencyData(BenchmarkRunResult result, File file) throws IOException {
         try (BufferedWriter writer = writer(file)) {
             writer.write("# Simple latency sample export. Values are probe RTT nanoseconds, grouped by iteration.\n");
+            writer.write("# Probe transport: " + BenchmarkMessages.probeSemantics() + ".\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
-                writer.write("# " + iteration.name + " iteration=" + iteration.iteration + "\n");
+                Double responseRate = boundedProbeResponseRate(iteration.probesSent, iteration.probesAcked);
+                writer.write("# " + iteration.name + " iteration=" + iteration.iteration
+                        + " probesSent=" + iteration.probesSent
+                        + " probesAcked=" + iteration.probesAcked
+                        + " probeAckSpillover=" + iteration.probeAckSpillover
+                        + " boundedProbeResponseRate=" + (responseRate == null ? "unavailable" : format(responseRate))
+                        + "\n");
                 for (Long sample : iteration.probeRtt.sortedNanos()) {
                     writer.write(Long.toString(sample));
                     writer.write('\n');
@@ -102,6 +111,8 @@ public final class BenchmarkResultWriter {
             writer.write("- Scenario: `" + result.config().scenario().cliName() + "`\n");
             writer.write("- Role: `" + result.config().role().name().toLowerCase(Locale.ROOT) + "`\n");
             writer.write("- Recovery mode: `" + result.config().recoveryModeName() + "`\n");
+            writer.write("- Workload reliability: per-case table value; applies to bulk/batch traffic only\n");
+            writer.write("- Probe transport: `" + BenchmarkMessages.probeSemantics() + "`\n");
             writer.write("- Packet limit: `" + optionalLimit(result.config().packetLimit()) + "`\n");
             writer.write("- Global packet limit: `" + optionalLimit(result.config().globalPacketLimit()) + "`\n");
             writer.write("- Max queued bytes cap: `" + optionalLimit(result.config().maxQueuedBytes()) + "`\n");
@@ -126,8 +137,8 @@ public final class BenchmarkResultWriter {
                         + "` / `" + valueOrUnavailable(timeline.maxDirectBufferPoolMemoryUsedBytes())
                         + "` / `" + valueOrUnavailable(timeline.maxResidentSetSizeBytes()) + "`\n\n");
             }
-            writer.write("| Name | Iteration | Clients | Active | Open | Disconnected State | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Undelivered Gbps | Affected Undelivered Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | Send/Deliver | Affected Send/Deliver | Datagram Out/s | Affected Datagram Out/s | Stale/s | NACK Out/s | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Max Queue |\n");
-            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+            writer.write("| Name | Iteration | Clients | Active | Open | Disconnected State | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Undelivered Gbps | Affected Undelivered Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | Send/Deliver | Affected Send/Deliver | Datagram Out/s | Affected Datagram Out/s | Stale/s | NACK Out/s | Probe ACKed/Sent | ACK Spillover | Probe Return | RTT Samples | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Max Queue |\n");
+            writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
                 writer.write("| " + iteration.name
                         + " | " + iteration.iteration
@@ -158,8 +169,13 @@ public final class BenchmarkResultWriter {
                         + " | " + format(iteration.affectedServerDatagramsOutPerSecond)
                         + " | " + format(iteration.staleDatagramsPerSecond)
                         + " | " + format(iteration.nackOutPerSecond)
-                        + " | " + format(iteration.probeRtt.percentileMillis(95.0D))
-                        + " | " + format(iteration.probeRtt.percentileMillis(99.0D))
+                        + " | " + iteration.probesAcked + "/" + iteration.probesSent
+                        + " | " + iteration.probeAckSpillover
+                        + " | " + (boundedProbeResponseRate(iteration.probesSent, iteration.probesAcked) == null
+                        ? "unavailable" : format(boundedProbeResponseRate(iteration.probesSent, iteration.probesAcked)))
+                        + " | " + iteration.probeRtt.count()
+                        + " | " + valueOrUnavailable(probePercentile(iteration, 95.0D))
+                        + " | " + valueOrUnavailable(probePercentile(iteration, 99.0D))
                         + " | " + format(iteration.fairnessIndex)
                         + " | " + format(iteration.healthyFairnessIndex)
                         + " | " + format(iteration.affectedFairnessIndex)
@@ -211,10 +227,15 @@ public final class BenchmarkResultWriter {
             writer.write("- Run ID: `" + result.runId() + "`\n");
             writer.write("- Scenario: `" + result.config().scenario().cliName() + "`\n");
             writer.write("- Recovery mode: `" + result.config().recoveryModeName() + "`\n");
+            writer.write("- Probe transport: `" + BenchmarkMessages.probeSemantics() + "`\n");
+            writer.write("- Minimum returned probes per iteration: `"
+                    + MIN_PROBE_RESPONSES_PER_ITERATION + "`\n");
+            writer.write("- Minimum bounded probe return per iteration: `"
+                    + format(MIN_PROBE_RESPONSE_RATE) + "`\n");
             writer.write("- Minimum iterations: `3`\n");
             writer.write("- Allow unstable rows: `false`\n\n");
-            writer.write("| Case | Payload | Reliability | Selected | Stable Gbps | Stable target Mbps | Stable p99 ms | Stable spread | Best observed Gbps | Best observed target Mbps | Best observed reasons |\n");
-            writer.write("| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
+            writer.write("| Case | Payload | Reliability | Selected | Stable Gbps | Stable target Mbps | Stable p99 ms | Probe ACKed/Sent | Probe Return | Min Probe Responses | Stable spread | Best observed Gbps | Best observed target Mbps | Best observed reasons |\n");
+            writer.write("| --- | ---: | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |\n");
             for (CapacityRow row : rows) {
                 CapacityCandidate selected = row.selectedCandidate;
                 CapacityCandidate best = row.bestObservedCandidate;
@@ -225,12 +246,20 @@ public final class BenchmarkResultWriter {
                         + " | " + candidateField(selected, selected == null ? "" : format(selected.deliveredGbps))
                         + " | " + candidateField(selected, selected == null ? "" : format(selected.targetMbps))
                         + " | " + candidateField(selected, selected == null ? "" : format(selected.probeRttP99Millis))
+                        + " | " + candidateField(selected, selected == null ? ""
+                        : selected.probesAcked + "/" + selected.probesSent)
+                        + " | " + candidateField(selected, selected == null ? ""
+                        : selected.probeResponseRate == null ? "unavailable" : format(selected.probeResponseRate))
+                        + " | " + candidateField(selected, selected == null ? ""
+                        : Integer.toString(selected.minimumProbeResponses))
                         + " | " + candidateField(selected, selected == null ? "" : format(selected.deliveredGbpsSpreadPct) + "%")
                         + " | " + candidateField(best, best == null ? "" : format(best.deliveredGbps))
                         + " | " + candidateField(best, best == null ? "" : format(best.targetMbps))
                         + " | `" + (best == null ? "" : String.join(",", best.rejectionReasons)) + "` |\n");
             }
-            writer.write("\nStable Gbps is the highest delivered row that has at least three measured iterations, is not marked unstable, has positive delivery, and has no disconnects. Best observed Gbps is shown separately so failed high-rate rows remain visible.\n");
+            writer.write("\nStable Gbps is the highest delivered row that has at least three measured iterations, at least "
+                    + MIN_PROBE_RESPONSES_PER_ITERATION
+                    + " matching returned probes in every active measurement window, is not marked unstable, has positive delivery, and has no disconnects. Probe Return is bounded to exact tracked sends; any foreign, duplicate, or late ACK is retained as spillover and disqualifies the candidate. Best observed prefers candidates with sufficient uncontaminated probe evidence, while rejected high-rate rows remain visible in JSON.\n");
         }
     }
 
@@ -241,25 +270,34 @@ public final class BenchmarkResultWriter {
     static String stabilitySummary(List<BenchmarkIterationResult> iterations) {
         StringBuilder summary = new StringBuilder();
         summary.append("Stability is calculated per benchmark case.\n\n");
-        summary.append("| Name | Iterations | Delivered Gbps Spread | Probe p99 RTT Spread | Unstable | Reasons |\n");
-        summary.append("| --- | ---: | ---: | ---: | --- | --- |\n");
+        summary.append("| Name | Iterations | Min Probe Responses | Min Probe Return | Delivered Gbps Spread | Probe p99 RTT Spread | Unstable | Reasons |\n");
+        summary.append("| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |\n");
         for (StabilityRow row : stabilityRows(iterations)) {
             summary.append("| ")
                     .append(row.name)
                     .append(" | ")
                     .append(row.iterations)
                     .append(" | ")
+                    .append(row.minimumProbeResponses)
+                    .append(" | ")
+                    .append(row.minimumProbeResponseRate == null
+                            ? "unavailable" : format(row.minimumProbeResponseRate))
+                    .append(" | ")
                     .append(format(row.deliveredGbpsRelativeSpreadPct))
                     .append("% | ")
-                    .append(format(row.probeP99RelativeSpreadPct))
-                    .append("% | ")
+                    .append(valueOrUnavailable(row.probeP99RelativeSpreadPct))
+                    .append(row.probeP99RelativeSpreadPct == null ? " | " : "% | ")
                     .append(row.unstable)
                     .append(" | `")
                     .append(String.join(",", row.unstableReasons))
                     .append("` |\n");
         }
         summary.append('\n');
-        summary.append("Rows with zero delivered throughput, fewer than three measured iterations, or spread above 10% should be treated as unstable and repeated with longer duration or less host contention.\n");
+        summary.append("Rows with zero delivered throughput, fewer than three measured iterations, fewer than ")
+                .append(MIN_PROBE_RESPONSES_PER_ITERATION)
+                .append(" returned probes or less than ")
+                .append(format(MIN_PROBE_RESPONSE_RATE * 100.0D))
+                .append("% bounded probe return in any iteration, any active-window ACK spillover, missing p99, or available spread above 10% should be treated as unstable and repeated with longer duration or less host contention. Probe RTT is conditional on uncontaminated best-effort probe return.\n");
         return summary.toString();
     }
 
@@ -309,7 +347,7 @@ public final class BenchmarkResultWriter {
             CapacityCandidate selected = null;
             CapacityCandidate bestObserved = null;
             for (CapacityCandidate candidate : candidates) {
-                if (bestObserved == null || capacityCompare(candidate, bestObserved) < 0) {
+                if (bestObserved == null || bestObservedCompare(candidate, bestObserved) < 0) {
                     bestObserved = candidate;
                 }
                 if (candidate.rejectionReasons.isEmpty()
@@ -332,15 +370,37 @@ public final class BenchmarkResultWriter {
                                                        StabilityRow stability) {
         List<Double> delivered = new ArrayList<>();
         List<Double> p99 = new ArrayList<>();
+        boolean probeP99AvailableForEveryIteration = true;
         long maxQueuedBytes = 0L;
         long disconnects = 0L;
+        long probesSent = 0L;
+        long probesAcked = 0L;
+        long accumulatedProbeAckSpillover = 0L;
+        int minimumProbeResponses = Integer.MAX_VALUE;
+        Double minimumProbeResponseRate = null;
+        boolean probeResponseRateAvailableForEveryIteration = true;
         double maxSendDeliverRatio = 0.0D;
         double maxNackOutPerSecond = 0.0D;
         for (BenchmarkIterationResult iteration : iterations) {
             delivered.add(iteration.deliveredGbps);
-            p99.add(iteration.probeRtt.percentileMillis(99.0D));
+            if (iteration.probeRtt.count() > 0) {
+                p99.add(iteration.probeRtt.percentileMillis(99.0D));
+            } else {
+                probeP99AvailableForEveryIteration = false;
+            }
             maxQueuedBytes = Math.max(maxQueuedBytes, iteration.maxQueuedBytes);
             disconnects += iteration.disconnects;
+            probesSent += iteration.probesSent;
+            probesAcked += iteration.probesAcked;
+            accumulatedProbeAckSpillover += iteration.probeAckSpillover;
+            minimumProbeResponses = Math.min(minimumProbeResponses, iteration.probeRtt.count());
+            Double iterationResponseRate = boundedProbeResponseRate(iteration.probesSent, iteration.probesAcked);
+            if (iterationResponseRate != null) {
+                minimumProbeResponseRate = minimumProbeResponseRate == null
+                        ? iterationResponseRate : Math.min(minimumProbeResponseRate, iterationResponseRate);
+            } else {
+                probeResponseRateAvailableForEveryIteration = false;
+            }
             maxSendDeliverRatio = Math.max(maxSendDeliverRatio, iteration.sentToDeliveredBytesRatio);
             maxNackOutPerSecond = Math.max(maxNackOutPerSecond, iteration.nackOutPerSecond);
         }
@@ -357,18 +417,41 @@ public final class BenchmarkResultWriter {
         if (disconnects > 0L) {
             rejectionReasons.add("disconnects");
         }
+        if (accumulatedProbeAckSpillover > 0L && !rejectionReasons.contains("probe-ack-spillover")) {
+            rejectionReasons.add("probe-ack-spillover");
+        }
+        if (!probeP99AvailableForEveryIteration) {
+            rejectionReasons.add("missing-probe-p99");
+        }
+        if (minimumProbeResponses < MIN_PROBE_RESPONSES_PER_ITERATION
+                && !rejectionReasons.contains("insufficient-probe-responses")) {
+            rejectionReasons.add("insufficient-probe-responses");
+        }
+        if (!probeResponseRateAvailableForEveryIteration
+                || minimumProbeResponseRate == null || minimumProbeResponseRate < MIN_PROBE_RESPONSE_RATE) {
+            rejectionReasons.add("insufficient-probe-return-rate");
+        }
+        if (!probeResponseRateAvailableForEveryIteration) {
+            minimumProbeResponseRate = null;
+        }
 
         return new CapacityCandidate(
                 name,
                 first.targetMbps,
                 medianDeliveredGbps,
-                median(p99),
+                probeP99AvailableForEveryIteration && !p99.isEmpty() ? median(p99) : null,
                 stability == null ? 0.0D : stability.deliveredGbpsRelativeSpreadPct,
-                stability == null ? 0.0D : stability.probeP99RelativeSpreadPct,
+                stability == null ? null : stability.probeP99RelativeSpreadPct,
                 maxQueuedBytes,
                 maxSendDeliverRatio,
                 maxNackOutPerSecond,
                 disconnects,
+                probesSent,
+                probesAcked,
+                accumulatedProbeAckSpillover,
+                boundedProbeResponseRate(probesSent, probesAcked),
+                minimumProbeResponses == Integer.MAX_VALUE ? 0 : minimumProbeResponses,
+                minimumProbeResponseRate,
                 iterations.size(),
                 stability != null && stability.unstable,
                 rejectionReasons
@@ -380,23 +463,65 @@ public final class BenchmarkResultWriter {
         if (delivered != 0) {
             return delivered;
         }
-        int p99 = Double.compare(left.probeRttP99Millis, right.probeRttP99Millis);
+        int p99 = compareNullableLatency(left.probeRttP99Millis, right.probeRttP99Millis);
         if (p99 != 0) {
             return p99;
         }
         return Long.compare(left.maxQueuedBytes, right.maxQueuedBytes);
     }
 
+    private static int bestObservedCompare(CapacityCandidate left, CapacityCandidate right) {
+        int evidence = Boolean.compare(!hasSufficientProbeEvidence(left), !hasSufficientProbeEvidence(right));
+        return evidence != 0 ? evidence : capacityCompare(left, right);
+    }
+
+    private static boolean hasSufficientProbeEvidence(CapacityCandidate candidate) {
+        return candidate.probeRttP99Millis != null
+                && candidate.probeAckSpillover == 0L
+                && candidate.minimumProbeResponses >= MIN_PROBE_RESPONSES_PER_ITERATION
+                && candidate.minimumProbeResponseRate != null
+                && candidate.minimumProbeResponseRate >= MIN_PROBE_RESPONSE_RATE;
+    }
+
+    private static int compareNullableLatency(Double left, Double right) {
+        if (left == null) {
+            return right == null ? 0 : 1;
+        }
+        if (right == null) {
+            return -1;
+        }
+        return Double.compare(left, right);
+    }
+
     private static StabilityRow stabilityRow(String name, List<BenchmarkIterationResult> iterations) {
         List<Double> throughput = new ArrayList<>();
         List<Double> p99 = new ArrayList<>();
+        boolean probeP99AvailableForEveryIteration = true;
+        int minimumProbeResponses = Integer.MAX_VALUE;
+        Double minimumProbeResponseRate = null;
+        boolean probeResponseRateAvailableForEveryIteration = true;
+        long probeAckSpillover = 0L;
         for (BenchmarkIterationResult iteration : iterations) {
             throughput.add(iteration.deliveredGbps);
-            p99.add(iteration.probeRtt.percentileMillis(99.0D));
+            if (iteration.probeRtt.count() > 0) {
+                p99.add(iteration.probeRtt.percentileMillis(99.0D));
+            } else {
+                probeP99AvailableForEveryIteration = false;
+            }
+            minimumProbeResponses = Math.min(minimumProbeResponses, iteration.probeRtt.count());
+            probeAckSpillover += iteration.probeAckSpillover;
+            Double iterationResponseRate = boundedProbeResponseRate(iteration.probesSent, iteration.probesAcked);
+            if (iterationResponseRate != null) {
+                minimumProbeResponseRate = minimumProbeResponseRate == null
+                        ? iterationResponseRate : Math.min(minimumProbeResponseRate, iterationResponseRate);
+            } else {
+                probeResponseRateAvailableForEveryIteration = false;
+            }
         }
 
         double throughputSpreadPct = relativeSpread(throughput) * 100.0D;
-        double p99SpreadPct = relativeSpread(p99) * 100.0D;
+        Double p99SpreadPct = probeP99AvailableForEveryIteration
+                ? relativeSpread(p99) * 100.0D : null;
         List<String> unstableReasons = new ArrayList<>();
         if (iterations.size() < 3) {
             unstableReasons.add("insufficient-iterations");
@@ -404,13 +529,32 @@ public final class BenchmarkResultWriter {
         if (throughputSpreadPct > 10.0D) {
             unstableReasons.add("throughput-spread");
         }
-        if (p99SpreadPct > 10.0D) {
+        if (p99SpreadPct != null && p99SpreadPct > 10.0D) {
             unstableReasons.add("p99-spread");
         }
         if (!throughput.isEmpty() && Collections.max(throughput) <= 0.0D) {
             unstableReasons.add("zero-delivery");
         }
-        return new StabilityRow(name, iterations.size(), throughputSpreadPct, p99SpreadPct, !unstableReasons.isEmpty(), unstableReasons);
+        if (!probeP99AvailableForEveryIteration) {
+            unstableReasons.add("missing-probe-p99");
+        }
+        if (probeAckSpillover > 0L) {
+            unstableReasons.add("probe-ack-spillover");
+        }
+        if (minimumProbeResponses < MIN_PROBE_RESPONSES_PER_ITERATION) {
+            unstableReasons.add("insufficient-probe-responses");
+        }
+        if (!probeResponseRateAvailableForEveryIteration
+                || minimumProbeResponseRate == null || minimumProbeResponseRate < MIN_PROBE_RESPONSE_RATE) {
+            unstableReasons.add("insufficient-probe-return-rate");
+        }
+        if (!probeResponseRateAvailableForEveryIteration) {
+            minimumProbeResponseRate = null;
+        }
+        return new StabilityRow(name, iterations.size(),
+                minimumProbeResponses == Integer.MAX_VALUE ? 0 : minimumProbeResponses,
+                minimumProbeResponseRate,
+                throughputSpreadPct, p99SpreadPct, !unstableReasons.isEmpty(), unstableReasons);
     }
 
     private static double relativeSpread(List<Double> values) {
@@ -443,6 +587,25 @@ public final class BenchmarkResultWriter {
         return value > 0 ? Integer.toString(value) : "library default";
     }
 
+    private static Double boundedProbeResponseRate(long probesSent, long probesAcked) {
+        if (probesSent <= 0L) {
+            return null;
+        }
+        return Math.min(probesSent, probesAcked) / (double) probesSent;
+    }
+
+    private static Double probePercentile(BenchmarkIterationResult iteration, double percentile) {
+        return iteration.probeRtt.count() == 0 ? null : iteration.probeRtt.percentileMillis(percentile);
+    }
+
+    private static Double probeMaximum(BenchmarkIterationResult iteration) {
+        return iteration.probeRtt.count() == 0 ? null : iteration.probeRtt.maxMillis();
+    }
+
+    private static String valueOrUnavailable(Double value) {
+        return value == null ? "unavailable" : format(value);
+    }
+
     private static String valueOrUnavailable(Long value) {
         return value == null ? "unavailable" : value.toString();
     }
@@ -467,8 +630,10 @@ public final class BenchmarkResultWriter {
     private record StabilityRow(
             String name,
             int iterations,
+            int minimumProbeResponses,
+            Double minimumProbeResponseRate,
             double deliveredGbpsRelativeSpreadPct,
-            double probeP99RelativeSpreadPct,
+            Double probeP99RelativeSpreadPct,
             boolean unstable,
             List<String> unstableReasons
     ) {
@@ -515,13 +680,19 @@ public final class BenchmarkResultWriter {
             String benchmarkName,
             double targetMbps,
             double deliveredGbps,
-            double probeRttP99Millis,
+            Double probeRttP99Millis,
             double deliveredGbpsSpreadPct,
-            double probeP99SpreadPct,
+            Double probeP99SpreadPct,
             long maxQueuedBytes,
             double sentToDeliveredBytesRatio,
             double nackOutPerSecond,
             long disconnects,
+            long probesSent,
+            long probesAcked,
+            long probeAckSpillover,
+            Double probeResponseRate,
+            int minimumProbeResponses,
+            Double minimumProbeResponseRate,
             int iterations,
             boolean unstable,
             List<String> rejectionReasons
@@ -537,6 +708,9 @@ public final class BenchmarkResultWriter {
             int clients,
             int payloadSize,
             String reliability,
+            String probeReliability,
+            String probePriority,
+            String probeSemantics,
             String impairmentProfile,
             long impairmentLatencyMillis,
             long impairmentJitterMillis,
@@ -545,6 +719,8 @@ public final class BenchmarkResultWriter {
             Integer globalPacketLimit,
             Integer configuredMaxQueuedBytes,
             int minIterations,
+            int minimumProbeResponsesPerIteration,
+            double minimumProbeResponseRate,
             int candidateCount,
             int eligibleCandidateCount,
             boolean selected,
@@ -570,6 +746,9 @@ public final class BenchmarkResultWriter {
                     key.clients,
                     key.payloadSize,
                     key.reliability,
+                    BenchmarkMessages.PROBE_RELIABILITY.name(),
+                    BenchmarkMessages.PROBE_PRIORITY.name(),
+                    BenchmarkMessages.probeSemantics(),
                     key.impairmentProfile,
                     key.impairmentLatencyMillis,
                     key.impairmentJitterMillis,
@@ -578,6 +757,8 @@ public final class BenchmarkResultWriter {
                     key.globalPacketLimit,
                     key.configuredMaxQueuedBytes,
                     3,
+                    MIN_PROBE_RESPONSES_PER_ITERATION,
+                    MIN_PROBE_RESPONSE_RATE,
                     candidates.size(),
                     eligible,
                     selected != null,
@@ -594,6 +775,11 @@ public final class BenchmarkResultWriter {
             "clients",
             "payload_size",
             "reliability",
+            "probe_reliability",
+            "probe_priority",
+            "probe_semantics",
+            "minimum_probe_responses_per_iteration",
+            "minimum_probe_response_rate",
             "impairment_profile",
             "packet_limit",
             "global_packet_limit",
@@ -609,10 +795,22 @@ public final class BenchmarkResultWriter {
             "selected_max_queue_bytes",
             "selected_send_deliver_ratio",
             "selected_nack_out_s",
+            "selected_probes_sent",
+            "selected_probes_acked",
+            "selected_probe_ack_spillover",
+            "selected_probe_response_rate",
+            "selected_minimum_probe_responses",
+            "selected_minimum_probe_response_rate",
             "best_observed_benchmark",
             "best_observed_target_mbps",
             "best_observed_delivered_gbps",
             "best_observed_p99_ms",
+            "best_observed_probes_sent",
+            "best_observed_probes_acked",
+            "best_observed_probe_ack_spillover",
+            "best_observed_probe_response_rate",
+            "best_observed_minimum_probe_responses",
+            "best_observed_minimum_probe_response_rate",
             "best_observed_reasons"
     })
     private record CapacityCsv(
@@ -621,6 +819,11 @@ public final class BenchmarkResultWriter {
             int clients,
             @JsonProperty("payload_size") int payloadSize,
             String reliability,
+            @JsonProperty("probe_reliability") String probeReliability,
+            @JsonProperty("probe_priority") String probePriority,
+            @JsonProperty("probe_semantics") String probeSemantics,
+            @JsonProperty("minimum_probe_responses_per_iteration") int minimumProbeResponsesPerIteration,
+            @JsonProperty("minimum_probe_response_rate") double minimumProbeResponseRate,
             @JsonProperty("impairment_profile") String impairmentProfile,
             @JsonProperty("packet_limit") Integer packetLimit,
             @JsonProperty("global_packet_limit") Integer globalPacketLimit,
@@ -636,10 +839,22 @@ public final class BenchmarkResultWriter {
             @JsonProperty("selected_max_queue_bytes") Long selectedMaxQueueBytes,
             @JsonProperty("selected_send_deliver_ratio") Double selectedSendDeliverRatio,
             @JsonProperty("selected_nack_out_s") Double selectedNackOutPerSecond,
+            @JsonProperty("selected_probes_sent") Long selectedProbesSent,
+            @JsonProperty("selected_probes_acked") Long selectedProbesAcked,
+            @JsonProperty("selected_probe_ack_spillover") Long selectedProbeAckSpillover,
+            @JsonProperty("selected_probe_response_rate") Double selectedProbeResponseRate,
+            @JsonProperty("selected_minimum_probe_responses") Integer selectedMinimumProbeResponses,
+            @JsonProperty("selected_minimum_probe_response_rate") Double selectedMinimumProbeResponseRate,
             @JsonProperty("best_observed_benchmark") String bestObservedBenchmark,
             @JsonProperty("best_observed_target_mbps") Double bestObservedTargetMbps,
             @JsonProperty("best_observed_delivered_gbps") Double bestObservedDeliveredGbps,
             @JsonProperty("best_observed_p99_ms") Double bestObservedP99Millis,
+            @JsonProperty("best_observed_probes_sent") Long bestObservedProbesSent,
+            @JsonProperty("best_observed_probes_acked") Long bestObservedProbesAcked,
+            @JsonProperty("best_observed_probe_ack_spillover") Long bestObservedProbeAckSpillover,
+            @JsonProperty("best_observed_probe_response_rate") Double bestObservedProbeResponseRate,
+            @JsonProperty("best_observed_minimum_probe_responses") Integer bestObservedMinimumProbeResponses,
+            @JsonProperty("best_observed_minimum_probe_response_rate") Double bestObservedMinimumProbeResponseRate,
             @JsonProperty("best_observed_reasons") String bestObservedReasons
     ) {
         static CapacityCsv from(CapacityRow row) {
@@ -651,6 +866,11 @@ public final class BenchmarkResultWriter {
                     row.clients,
                     row.payloadSize,
                     row.reliability,
+                    row.probeReliability,
+                    row.probePriority,
+                    row.probeSemantics,
+                    row.minimumProbeResponsesPerIteration,
+                    row.minimumProbeResponseRate,
                     row.impairmentProfile,
                     row.packetLimit,
                     row.globalPacketLimit,
@@ -666,10 +886,22 @@ public final class BenchmarkResultWriter {
                     selected == null ? null : selected.maxQueuedBytes,
                     selected == null ? null : selected.sentToDeliveredBytesRatio,
                     selected == null ? null : selected.nackOutPerSecond,
+                    selected == null ? null : selected.probesSent,
+                    selected == null ? null : selected.probesAcked,
+                    selected == null ? null : selected.probeAckSpillover,
+                    selected == null ? null : selected.probeResponseRate,
+                    selected == null ? null : selected.minimumProbeResponses,
+                    selected == null ? null : selected.minimumProbeResponseRate,
                     best == null ? null : best.benchmarkName,
                     best == null ? null : best.targetMbps,
                     best == null ? null : best.deliveredGbps,
                     best == null ? null : best.probeRttP99Millis,
+                    best == null ? null : best.probesSent,
+                    best == null ? null : best.probesAcked,
+                    best == null ? null : best.probeAckSpillover,
+                    best == null ? null : best.probeResponseRate,
+                    best == null ? null : best.minimumProbeResponses,
+                    best == null ? null : best.minimumProbeResponseRate,
                     best == null ? "" : String.join(";", best.rejectionReasons)
             );
         }
@@ -688,6 +920,9 @@ public final class BenchmarkResultWriter {
             "state_unconnected_peers",
             "payload_size",
             "reliability",
+            "probe_reliability",
+            "probe_priority",
+            "probe_semantics",
             "batched",
             "batch_interval_ms",
             "logical_packets_per_batch",
@@ -737,6 +972,11 @@ public final class BenchmarkResultWriter {
             "delivered_logical_packets_s",
             "logical_packets_sent",
             "logical_packets_received",
+            "probes_sent",
+            "probes_acked",
+            "probe_ack_spillover",
+            "probe_response_rate",
+            "probe_rtt_count",
             "p50_ms",
             "p95_ms",
             "p99_ms",
@@ -769,6 +1009,9 @@ public final class BenchmarkResultWriter {
             @JsonProperty("state_unconnected_peers") int unconnectedStatePeers,
             @JsonProperty("payload_size") int payloadSize,
             String reliability,
+            @JsonProperty("probe_reliability") String probeReliability,
+            @JsonProperty("probe_priority") String probePriority,
+            @JsonProperty("probe_semantics") String probeSemantics,
             boolean batched,
             @JsonProperty("batch_interval_ms") long batchIntervalMillis,
             @JsonProperty("logical_packets_per_batch") int logicalPacketsPerBatch,
@@ -818,10 +1061,15 @@ public final class BenchmarkResultWriter {
             @JsonProperty("delivered_logical_packets_s") double deliveredLogicalPacketsPerSecond,
             @JsonProperty("logical_packets_sent") long logicalPacketsSent,
             @JsonProperty("logical_packets_received") long logicalPacketsReceived,
-            @JsonProperty("p50_ms") double p50Millis,
-            @JsonProperty("p95_ms") double p95Millis,
-            @JsonProperty("p99_ms") double p99Millis,
-            @JsonProperty("max_ms") double maxMillis,
+            @JsonProperty("probes_sent") long probesSent,
+            @JsonProperty("probes_acked") long probesAcked,
+            @JsonProperty("probe_ack_spillover") long probeAckSpillover,
+            @JsonProperty("probe_response_rate") Double probeResponseRate,
+            @JsonProperty("probe_rtt_count") int probeRttCount,
+            @JsonProperty("p50_ms") Double p50Millis,
+            @JsonProperty("p95_ms") Double p95Millis,
+            @JsonProperty("p99_ms") Double p99Millis,
+            @JsonProperty("max_ms") Double maxMillis,
             double fairness,
             @JsonProperty("healthy_fairness") double healthyFairness,
             @JsonProperty("affected_fairness") double affectedFairness,
@@ -851,6 +1099,9 @@ public final class BenchmarkResultWriter {
                     iteration.unconnectedStatePeers,
                     iteration.payloadSize,
                     iteration.reliability.name(),
+                    BenchmarkMessages.PROBE_RELIABILITY.name(),
+                    BenchmarkMessages.PROBE_PRIORITY.name(),
+                    BenchmarkMessages.probeSemantics(),
                     iteration.batched,
                     iteration.batchIntervalMillis,
                     iteration.logicalPacketsPerBatch,
@@ -900,10 +1151,15 @@ public final class BenchmarkResultWriter {
                     iteration.deliveredLogicalPacketsPerSecond,
                     iteration.logicalPacketsSent,
                     iteration.logicalPacketsReceived,
-                    iteration.probeRtt.percentileMillis(50.0D),
-                    iteration.probeRtt.percentileMillis(95.0D),
-                    iteration.probeRtt.percentileMillis(99.0D),
-                    iteration.probeRtt.maxMillis(),
+                    iteration.probesSent,
+                    iteration.probesAcked,
+                    iteration.probeAckSpillover,
+                    BenchmarkResultWriter.boundedProbeResponseRate(iteration.probesSent, iteration.probesAcked),
+                    iteration.probeRtt.count(),
+                    probePercentile(iteration, 50.0D),
+                    probePercentile(iteration, 95.0D),
+                    probePercentile(iteration, 99.0D),
+                    probeMaximum(iteration),
                     iteration.fairnessIndex,
                     iteration.healthyFairnessIndex,
                     iteration.affectedFairnessIndex,
@@ -927,6 +1183,11 @@ public final class BenchmarkResultWriter {
             String scenario,
             String role,
             String recoveryMode,
+            String probeReliability,
+            String probePriority,
+            String probeSemantics,
+            int minimumProbeResponsesPerIteration,
+            double minimumProbeResponseRate,
             int clients,
             int impairedClients,
             int disappearingClients,
@@ -977,6 +1238,11 @@ public final class BenchmarkResultWriter {
                     config.scenario().cliName(),
                     config.role().name().toLowerCase(Locale.ROOT),
                     config.recoveryModeName(),
+                    BenchmarkMessages.PROBE_RELIABILITY.name(),
+                    BenchmarkMessages.PROBE_PRIORITY.name(),
+                    BenchmarkMessages.probeSemantics(),
+                    MIN_PROBE_RESPONSES_PER_ITERATION,
+                    MIN_PROBE_RESPONSE_RATE,
                     config.clients(),
                     config.impairedClients(),
                     config.disappearingClients(),
@@ -1018,8 +1284,10 @@ public final class BenchmarkResultWriter {
     private record StabilityJson(
             String name,
             int iterations,
+            int minimumProbeResponses,
+            Double minimumProbeResponseRate,
             double deliveredGbpsRelativeSpreadPct,
-            double probeP99RelativeSpreadPct,
+            Double probeP99RelativeSpreadPct,
             boolean unstable,
             List<String> unstableReasons
     ) {
@@ -1027,6 +1295,8 @@ public final class BenchmarkResultWriter {
             return new StabilityJson(
                     row.name,
                     row.iterations,
+                    row.minimumProbeResponses,
+                    row.minimumProbeResponseRate,
                     row.deliveredGbpsRelativeSpreadPct,
                     row.probeP99RelativeSpreadPct,
                     row.unstable,
@@ -1123,11 +1393,13 @@ public final class BenchmarkResultWriter {
             long blackholedDatagramsOut,
             long probesSent,
             long probesAcked,
+            long probeAckSpillover,
+            Double probeResponseRate,
             int probeRttCount,
-            double probeRttP50Millis,
-            double probeRttP95Millis,
-            double probeRttP99Millis,
-            double probeRttMaxMillis,
+            Double probeRttP50Millis,
+            Double probeRttP95Millis,
+            Double probeRttP99Millis,
+            Double probeRttMaxMillis,
             long staleDatagrams,
             double staleDatagramsPerSecond,
             long nackIn,
@@ -1204,11 +1476,13 @@ public final class BenchmarkResultWriter {
                     iteration.blackholedDatagramsOut,
                     iteration.probesSent,
                     iteration.probesAcked,
+                    iteration.probeAckSpillover,
+                    BenchmarkResultWriter.boundedProbeResponseRate(iteration.probesSent, iteration.probesAcked),
                     iteration.probeRtt.count(),
-                    iteration.probeRtt.percentileMillis(50.0D),
-                    iteration.probeRtt.percentileMillis(95.0D),
-                    iteration.probeRtt.percentileMillis(99.0D),
-                    iteration.probeRtt.maxMillis(),
+                    probePercentile(iteration, 50.0D),
+                    probePercentile(iteration, 95.0D),
+                    probePercentile(iteration, 99.0D),
+                    probeMaximum(iteration),
                     iteration.staleDatagrams,
                     iteration.staleDatagramsPerSecond,
                     iteration.nackIn,
@@ -1246,6 +1520,7 @@ public final class BenchmarkResultWriter {
             long logicalPacketsReceived,
             long probesSent,
             long probesAcked,
+            long probeAckSpillover,
             long disconnects,
             long blackholedDatagramsIn,
             long blackholedDatagramsOut,
@@ -1278,6 +1553,7 @@ public final class BenchmarkResultWriter {
                     peer.logicalPacketsReceived,
                     peer.probesSent,
                     peer.probesAcked,
+                    peer.probeAckSpillover,
                     peer.disconnects,
                     peer.blackholedDatagramsIn,
                     peer.blackholedDatagramsOut,

@@ -49,6 +49,7 @@ public final class PeerStats {
     private final LongAdder logicalPacketsReceived = new LongAdder();
     private final LongAdder probesSent = new LongAdder();
     private final LongAdder probesAcked = new LongAdder();
+    private final LongAdder probeAckSpillover = new LongAdder();
     private final LongAdder disconnects = new LongAdder();
     private final LongAdder blackholedDatagramsIn = new LongAdder();
     private final LongAdder blackholedDatagramsOut = new LongAdder();
@@ -122,6 +123,7 @@ public final class PeerStats {
         this.logicalPacketsReceived.reset();
         this.probesSent.reset();
         this.probesAcked.reset();
+        this.probeAckSpillover.reset();
         this.disconnects.reset();
         this.blackholedDatagramsIn.reset();
         this.blackholedDatagramsOut.reset();
@@ -225,6 +227,10 @@ public final class PeerStats {
 
     public void addProbeAcked() {
         this.probesAcked.increment();
+    }
+
+    public void addProbeAckSpillover() {
+        this.probeAckSpillover.increment();
     }
 
     public void addDisconnect() {
@@ -423,6 +429,7 @@ public final class PeerStats {
                 this.logicalPacketsReceived.sum(),
                 this.probesSent.sum(),
                 this.probesAcked.sum(),
+                this.probeAckSpillover.sum(),
                 this.disconnects.sum(),
                 this.blackholedDatagramsIn.sum(),
                 this.blackholedDatagramsOut.sum(),
@@ -456,6 +463,7 @@ public final class PeerStats {
         public final long logicalPacketsReceived;
         public final long probesSent;
         public final long probesAcked;
+        public final long probeAckSpillover;
         public final long disconnects;
         public final long blackholedDatagramsIn;
         public final long blackholedDatagramsOut;
@@ -468,7 +476,8 @@ public final class PeerStats {
                          long staleDatagrams, long ackIn, long ackOut, long nackIn, long nackOut,
                          long bulkSentMessages, long bulkSentBytes, long logicalPacketsSent,
                          long bulkReceivedMessages, long bulkReceivedBytes, long logicalPacketsReceived,
-                         long probesSent, long probesAcked, long disconnects, long blackholedDatagramsIn,
+                         long probesSent, long probesAcked, long probeAckSpillover, long disconnects,
+                         long blackholedDatagramsIn,
                          long blackholedDatagramsOut, long maxQueuedBytes, RakState lastState) {
             this.id = id;
             this.impaired = impaired;
@@ -494,6 +503,7 @@ public final class PeerStats {
             this.logicalPacketsReceived = logicalPacketsReceived;
             this.probesSent = probesSent;
             this.probesAcked = probesAcked;
+            this.probeAckSpillover = probeAckSpillover;
             this.disconnects = disconnects;
             this.blackholedDatagramsIn = blackholedDatagramsIn;
             this.blackholedDatagramsOut = blackholedDatagramsOut;
