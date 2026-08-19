@@ -135,6 +135,18 @@ public class RakSlidingWindow {
         return this.estimatedRTT;
     }
 
+    public double getRttDeviation() {
+        return this.deviationRTT;
+    }
+
+    public double getCongestionWindow() {
+        return this.cwnd;
+    }
+
+    public double getSlowStartThreshold() {
+        return this.ssThresh;
+    }
+
     public boolean shouldSendAcks(long curTime) {
         long rto = this.getSenderRtoForAck();
 

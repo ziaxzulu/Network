@@ -11,11 +11,13 @@ per_client_mbps="5"
 warmup="5s"
 duration="10s"
 iterations="3"
+probe_interval="100ms"
 start_delay="20s"
 start_offset="45s"
 netem_before_start="5s"
 netem_limit="10000"
 blackhole_after="5s"
+blackhole_duration=""
 direction="server-to-client"
 packet_limit=""
 global_packet_limit=""
@@ -47,11 +49,13 @@ Options:
   --warmup DURATION                 Warmup per worker. Default: 5s.
   --duration DURATION               Measurement duration per iteration. Default: 10s.
   --iterations N                    Measured iterations. Default: 3.
+  --probe-interval DURATION         Probe cadence and warmup-drain input. Default: 100ms.
   --start-delay DURATION            Server connection wait. Default: 20s.
   --start-offset DURATION           Coordinated start offset per case. Default: 45s.
   --netem-before-start DURATION     Apply initial netem before start. Default: 5s.
   --netem-limit N                   Netem queue limit in packets. Default: 10000.
   --blackhole-after DURATION        Apply external blackhole during measurement. Default: 5s.
+  --blackhole-duration DURATION     Restore the path after this interval. Default: permanent.
   --direction server-to-client|client-to-server|both
                                     Shaped direction. Default: server-to-client.
   --packet-limit N                  Optional RakNet packet limit override.
@@ -119,6 +123,10 @@ while [[ $# -gt 0 ]]; do
       iterations="$2"
       shift 2
       ;;
+    --probe-interval)
+      probe_interval="$2"
+      shift 2
+      ;;
     --start-delay)
       start_delay="$2"
       shift 2
@@ -137,6 +145,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --blackhole-after)
       blackhole_after="$2"
+      shift 2
+      ;;
+    --blackhole-duration)
+      blackhole_duration="$2"
       shift 2
       ;;
     --direction)
@@ -275,6 +287,13 @@ for requested_profile in "${requested_profiles[@]}"; do
     <<<"$profile_json")"
 done
 
+if [[ -n "$blackhole_duration" ]]; then
+  if [[ "${#normalized_profiles[@]}" -ne 1 || "${normalized_profiles[0]}" != "blackhole" ]]; then
+    echo "--blackhole-duration requires --profiles blackhole" >&2
+    exit 2
+  fi
+fi
+
 mkdir -p "$output_root/cases"
 
 campaign_plan="$output_root/campaign-plan.json"
@@ -297,11 +316,13 @@ jq -n \
   --arg warmup "$warmup" \
   --arg duration "$duration" \
   --arg iterations "$iterations" \
+  --arg probeInterval "$probe_interval" \
   --arg startDelay "$start_delay" \
   --arg startOffset "$start_offset" \
   --arg netemBeforeStart "$netem_before_start" \
   --argjson netemLimit "$netem_limit" \
   --arg blackholeAfter "$blackhole_after" \
+  --arg blackholeDuration "$blackhole_duration" \
   --arg direction "$direction" \
   --arg reliability "$reliability" \
   '{
@@ -318,11 +339,13 @@ jq -n \
       warmup: $warmup,
       duration: $duration,
       iterations: $iterations,
+      probeInterval: $probeInterval,
       startDelay: $startDelay,
       startOffset: $startOffset,
       netemBeforeStart: $netemBeforeStart,
       netemLimitPackets: $netemLimit,
       blackholeAfter: $blackholeAfter,
+      blackholeDuration: (if $blackholeDuration == "" then null else $blackholeDuration end),
       direction: $direction,
       reliability: $reliability
     }
@@ -340,6 +363,9 @@ if [[ -n "$max_queued_bytes" ]]; then
 fi
 if [[ -n "$workers" ]]; then
   optional_args+=(--workers "$workers")
+fi
+if [[ -n "$blackhole_duration" ]]; then
+  optional_args+=(--blackhole-duration "$blackhole_duration")
 fi
 
 echo "Netns pilot campaign: $output_root"
@@ -369,6 +395,7 @@ for profile in "${normalized_profiles[@]}"; do
     --warmup "$warmup"
     --duration "$duration"
     --iterations "$iterations"
+    --probe-interval "$probe_interval"
     --start-delay "$start_delay"
     --start-offset "$start_offset"
     --netem-before-start "$netem_before_start"

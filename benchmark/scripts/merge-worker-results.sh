@@ -11,6 +11,7 @@ external_impairment_jitter_ms=""
 external_impairment_loss_percent=""
 external_netem_limit_packets=""
 external_blackhole_at_epoch_ms=""
+external_recovery_at_epoch_ms=""
 netem_evidence_dir=""
 
 usage() {
@@ -34,6 +35,8 @@ Options:
                       Record the external netem queue limit in packets.
   --external-blackhole-at-epoch-ms N
                       Record a timed external 100% loss event.
+  --external-recovery-at-epoch-ms N
+                      Record when the externally blackholed path was restored.
   --netem-evidence DIR
                       Directory containing qdisc apply/status evidence.
   --help              Show this help.
@@ -88,6 +91,10 @@ while [[ $# -gt 0 ]]; do
       external_blackhole_at_epoch_ms="$2"
       shift 2
       ;;
+    --external-recovery-at-epoch-ms)
+      external_recovery_at_epoch_ms="$2"
+      shift 2
+      ;;
     --netem-evidence)
       netem_evidence_dir="$2"
       shift 2
@@ -127,8 +134,16 @@ if [[ -n "$external_blackhole_at_epoch_ms" ]] && ! [[ "$external_blackhole_at_ep
   echo "External blackhole epoch must be a positive integer" >&2
   exit 2
 fi
-if [[ "$external_impairment_count" -eq 3 && -n "$external_blackhole_at_epoch_ms" ]]; then
-  echo "Static external impairment and a timed external blackhole cannot be supplied together" >&2
+if [[ -n "$external_recovery_at_epoch_ms" ]] && ! [[ "$external_recovery_at_epoch_ms" =~ ^[0-9]+$ && "$external_recovery_at_epoch_ms" -gt 0 ]]; then
+  echo "External recovery epoch must be a positive integer" >&2
+  exit 2
+fi
+if [[ -n "$external_recovery_at_epoch_ms" && -z "$external_blackhole_at_epoch_ms" ]]; then
+  echo "External recovery requires a timed external blackhole" >&2
+  exit 2
+fi
+if [[ -n "$external_recovery_at_epoch_ms" && "$external_recovery_at_epoch_ms" -le "$external_blackhole_at_epoch_ms" ]]; then
+  echo "External recovery epoch must follow the external blackhole epoch" >&2
   exit 2
 fi
 if [[ -n "$external_netem_limit_packets" ]] && ! [[ "$external_netem_limit_packets" =~ ^[0-9]+$ && "$external_netem_limit_packets" -gt 0 ]]; then
@@ -182,6 +197,7 @@ external_impairment_jitter_json="${external_impairment_jitter_ms:-null}"
 external_impairment_loss_json="${external_impairment_loss_percent:-null}"
 external_netem_limit_json="${external_netem_limit_packets:-null}"
 external_blackhole_at_epoch_json="${external_blackhole_at_epoch_ms:-null}"
+external_recovery_at_epoch_json="${external_recovery_at_epoch_ms:-null}"
 
 jq -s \
   --arg generatedAt "$generated_at" \
@@ -194,6 +210,7 @@ jq -s \
   --argjson externalImpairmentLossPercent "$external_impairment_loss_json" \
   --argjson externalNetemLimitPackets "$external_netem_limit_json" \
   --argjson externalBlackholeAtEpochMillis "$external_blackhole_at_epoch_json" \
+  --argjson externalRecoveryAtEpochMillis "$external_recovery_at_epoch_json" \
   --arg netemEvidenceDir "$netem_evidence_dir" \
   --arg outputRoot "$output_root" '
   def median:
@@ -371,13 +388,20 @@ jq -s \
 	      targetClientMbps: ($server_iterations[0].targetClientMbps // 0),
 	      disappearanceMode: ($server_iterations[0].disappearanceMode // $server.disappearanceMode // null),
 	      startAtEpochMillis: ($server.startAtEpochMillis // 0),
-      impairmentProfile: (if $externalBlackholeAtEpochMillis == null then (($impairment_latency_ms | tostring) + "ms/" + ($impairment_jitter_ms | tostring) + "ms/" + ($impairment_loss_percent | tostring) + "%") else "external-blackhole" end),
+      impairmentProfile: (
+        if $externalRecoveryAtEpochMillis != null then "external-blackhole-transition"
+        elif $externalBlackholeAtEpochMillis != null then "external-blackhole"
+        else (($impairment_latency_ms | tostring) + "ms/" + ($impairment_jitter_ms | tostring) + "ms/" + ($impairment_loss_percent | tostring) + "%")
+        end
+      ),
       impairmentLatencyMillis: $impairment_latency_ms,
       impairmentJitterMillis: $impairment_jitter_ms,
       impairmentLossPercent: $impairment_loss_percent,
       externalImpairment: ($externalImpairmentLatencyMillis != null or $externalBlackholeAtEpochMillis != null),
       externalBlackhole: ($externalBlackholeAtEpochMillis != null),
       externalBlackholeAtEpochMillis: $externalBlackholeAtEpochMillis,
+      externalRecovery: ($externalRecoveryAtEpochMillis != null),
+      externalRecoveryAtEpochMillis: $externalRecoveryAtEpochMillis,
       externalNetemLimitPackets: $externalNetemLimitPackets,
       netemEvidenceDir: (if $netemEvidenceDir == "" then null else $netemEvidenceDir end),
       elapsedMillis: $receiver_elapsed_ms,
@@ -442,18 +466,23 @@ jq -s \
     serverSummary: $serverPath,
     receiverSummaries: $receiverPaths,
     externalImpairment:
-      if $externalImpairmentLatencyMillis != null then {
+      if $externalBlackholeAtEpochMillis != null then {
+        kind: (if $externalRecoveryAtEpochMillis == null then "blackhole" else "blackhole-transition" end),
+        latencyMillisBeforeBlackhole: $externalImpairmentLatencyMillis,
+        jitterMillisBeforeBlackhole: $externalImpairmentJitterMillis,
+        lossPercentBeforeBlackhole: $externalImpairmentLossPercent,
+        lossPercent: 100,
+        blackholeLossPercent: 100,
+        blackholeAtEpochMillis: $externalBlackholeAtEpochMillis,
+        recoveryAtEpochMillis: $externalRecoveryAtEpochMillis,
+        limitPackets: $externalNetemLimitPackets,
+        netemEvidenceDir: (if $netemEvidenceDir == "" then null else $netemEvidenceDir end)
+      }
+      elif $externalImpairmentLatencyMillis != null then {
         kind: "netem",
         latencyMillis: $externalImpairmentLatencyMillis,
         jitterMillis: $externalImpairmentJitterMillis,
         lossPercent: $externalImpairmentLossPercent,
-        limitPackets: $externalNetemLimitPackets,
-        netemEvidenceDir: (if $netemEvidenceDir == "" then null else $netemEvidenceDir end)
-      }
-      elif $externalBlackholeAtEpochMillis != null then {
-        kind: "blackhole",
-        lossPercent: 100,
-        blackholeAtEpochMillis: $externalBlackholeAtEpochMillis,
         limitPackets: $externalNetemLimitPackets,
         netemEvidenceDir: (if $netemEvidenceDir == "" then null else $netemEvidenceDir end)
       }
@@ -500,7 +529,7 @@ jq -s \
 jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
 
 {
-  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,impairment_profile,external_impairment,netem_limit_packets,netem_evidence_dir,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,undelivered_server_gbps,healthy_undelivered_server_gbps,affected_undelivered_server_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,healthy_server_datagrams_out_s,affected_server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
+  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,impairment_profile,external_impairment,external_blackhole_at_epoch_ms,external_recovery_at_epoch_ms,netem_limit_packets,netem_evidence_dir,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,undelivered_server_gbps,healthy_undelivered_server_gbps,affected_undelivered_server_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,healthy_server_datagrams_out_s,affected_server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
   jq -r '
     .aggregate as $a |
     [
@@ -522,6 +551,8 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.startAtEpochMillis,
       $a.impairmentProfile,
       $a.externalImpairment,
+      $a.externalBlackholeAtEpochMillis,
+      $a.externalRecoveryAtEpochMillis,
       $a.externalNetemLimitPackets,
       $a.netemEvidenceDir,
       $a.deliveredGbps,
@@ -561,6 +592,8 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
     "- Receiver runs: `" + (.receivers | map(.runId // "unknown") | join(", ")) + "`\n" +
     "- Start at epoch ms: `" + (($a.startAtEpochMillis // 0) | tostring) + "`\n" +
     "- Impairment: `" + ($a.impairmentProfile // "unknown") + "` (external qdisc: `" + (($a.externalImpairment // false) | tostring) + "`)\n" +
+    (if $a.externalBlackholeAtEpochMillis == null then "" else "- External blackhole at epoch ms: `" + ($a.externalBlackholeAtEpochMillis | tostring) + "`\n" end) +
+    (if $a.externalRecoveryAtEpochMillis == null then "" else "- External recovery at epoch ms: `" + ($a.externalRecoveryAtEpochMillis | tostring) + "`\n" end) +
     (if $a.externalNetemLimitPackets == null then "" else "- Netem queue limit: `" + ($a.externalNetemLimitPackets | tostring) + " packets`\n" end) +
     (if $a.netemEvidenceDir == null then "" else "- Netem evidence: `" + $a.netemEvidenceDir + "`\n" end) +
     "- Warnings: `" + ((.warnings // []) | if length == 0 then "none" else join(",") end) + "`\n"

@@ -297,6 +297,26 @@ sudo benchmark/scripts/run-netns-worker-smoke.sh \
 
 This is stronger than loopback because server-to-client, client-to-server, or symmetric impairment can be applied as real qdisc egress on veth devices. It is still a single-host smoke path: it does not prove NIC line-rate, interrupt behavior, switch path behavior, or separate-host clock/topology evidence. Use it to catch regression shape, retry pressure, and external blackhole behavior before spending lab time; use promoted separate-host lab baselines for performance-engineering comparisons.
 
+Each worker streams `timeline.jsonl` before traffic starts and flushes every
+record. The default 200 ms cadence is configurable from 100 to 250 ms with
+`--timeline-sample-interval`. Samples split all/healthy/affected cohorts and
+include lifecycle counts, useful work, original/NACK/timeout sends, queue and
+in-flight totals/high-water marks, cwnd, RTT/RTO recovery state, heap, direct
+buffers, RSS, and process CPU. Unsupported worker-side fields are `null` and
+listed in `metricAvailability`; external-qdisc drops are never presented as
+benchmark-managed blackhole counters. The netns helper also records
+millisecond bounds around each qdisc apply and one-second `tc -s` snapshots in
+`netem/qdisc-timeseries.jsonl`. These files survive a later worker failure and
+are the primary evidence for event-to-quench and resource-reclamation timing.
+`--blackhole-after` is measured from the actual nominal measurement boundary:
+the coordinated start, configured warmup, and the benchmark's bounded warmup
+drain (`min(1000ms, max(100ms, 2 * --probe-interval))`) are all included in the
+external schedule. The manifest records both probe cadence and computed drain.
+
+Netns measured iterations are longitudinal windows over the same established
+cohort, not independent repetitions. Run separate campaigns when estimating
+repeatability or confidence bounds.
+
 ## Remote Worker Runs
 
 For lab validation, run the server and receiver workers on separate machines. Start the server first:

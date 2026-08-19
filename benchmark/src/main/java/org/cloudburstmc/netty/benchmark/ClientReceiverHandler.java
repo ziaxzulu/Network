@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.benchmark;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import org.cloudburstmc.netty.channel.raknet.RakState;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
 import org.cloudburstmc.netty.channel.raknet.RakReliability;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
@@ -38,8 +39,15 @@ final class ClientReceiverHandler extends SimpleChannelInboundHandler<RakMessage
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        this.peer.state(RakState.CONNECTED);
         this.connectedLatch.countDown();
         super.channelActive(ctx);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        this.peer.state(RakState.DISCONNECTED);
+        super.channelInactive(ctx);
     }
 
     @Override

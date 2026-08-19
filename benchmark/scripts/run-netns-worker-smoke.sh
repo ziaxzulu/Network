@@ -15,10 +15,12 @@ rate_mbps="100"
 warmup="5s"
 duration="10s"
 iterations="3"
+probe_interval="100ms"
 start_delay="20s"
 start_offset="45s"
 netem_before_start="5s"
 blackhole_after="5s"
+blackhole_duration=""
 port="19132"
 latency="0ms"
 jitter="0ms"
@@ -66,10 +68,12 @@ Options:
   --warmup DURATION                 Warmup per worker. Default: 5s.
   --duration DURATION               Measurement duration. Default: 10s.
   --iterations N                    Measured iterations. Default: 3.
+  --probe-interval DURATION         Probe cadence and warmup-drain input. Default: 100ms.
   --start-delay DURATION            Server wait for clients. Default: 20s.
   --start-offset DURATION           Coordinated start offset from now. Default: 45s.
   --netem-before-start DURATION     Apply initial netem this far before coordinated start. Default: 5s.
   --blackhole-after DURATION        For --case blackhole, apply 100% loss this far into measurement. Default: 5s.
+  --blackhole-duration DURATION     Restore the prior path after this duration. Default: permanent.
   --port PORT                       UDP port. Default: 19132.
   --latency DURATION                Netem latency for affected path. Default: 0ms.
   --jitter DURATION                 Netem jitter for affected path. Default: 0ms.
@@ -89,7 +93,8 @@ Outputs:
   manifest.json                     Run plan and namespace topology.
   README.md                         Operator notes and command summary.
   server.log / receiver-*.log       Worker output when --execute is used.
-  netem/*.txt                       qdisc apply/status evidence.
+  netem/*.txt                       qdisc apply/status evidence with millisecond apply bounds.
+  netem/qdisc-timeseries.jsonl      One-second external qdisc counter samples.
   merged/                           merge-worker-results output when --execute is used.
 USAGE
 }
@@ -149,6 +154,10 @@ while [[ $# -gt 0 ]]; do
       iterations="$2"
       shift 2
       ;;
+    --probe-interval)
+      probe_interval="$2"
+      shift 2
+      ;;
     --start-delay)
       start_delay="$2"
       shift 2
@@ -163,6 +172,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --blackhole-after)
       blackhole_after="$2"
+      shift 2
+      ;;
+    --blackhole-duration)
+      blackhole_duration="$2"
       shift 2
       ;;
     --port)
@@ -375,9 +388,32 @@ if [[ "$case_type" == "fairness" || "$case_type" == "blackhole" ]]; then
   fi
 fi
 
-for duration_value in "$warmup" "$duration" "$start_delay" "$start_offset" "$netem_before_start" "$blackhole_after"; do
+for duration_value in "$warmup" "$duration" "$probe_interval" "$start_delay" "$start_offset" "$netem_before_start" "$blackhole_after"; do
   duration_millis "$duration_value" >/dev/null
 done
+probe_interval_ms="$(duration_millis "$probe_interval")"
+if [[ "$probe_interval_ms" -le 0 ]]; then
+  echo "--probe-interval must be positive" >&2
+  exit 2
+fi
+warmup_drain_ms=$((probe_interval_ms * 2))
+if [[ "$warmup_drain_ms" -lt 100 ]]; then
+  warmup_drain_ms=100
+elif [[ "$warmup_drain_ms" -gt 1000 ]]; then
+  warmup_drain_ms=1000
+fi
+if [[ -n "$blackhole_duration" ]]; then
+  duration_millis "$blackhole_duration" >/dev/null
+  if [[ "$case_type" != "blackhole" ]]; then
+    echo "--blackhole-duration requires --case blackhole" >&2
+    exit 2
+  fi
+  if [[ $(( $(duration_millis "$blackhole_after") + $(duration_millis "$blackhole_duration") )) \
+      -ge "$(duration_millis "$duration")" ]]; then
+    echo "--blackhole-after plus --blackhole-duration must leave a measured recovery window" >&2
+    exit 2
+  fi
+fi
 if [[ "$(duration_millis "$netem_before_start")" -ge "$(duration_millis "$start_offset")" ]]; then
   echo "--netem-before-start must be shorter than --start-offset" >&2
   exit 2
@@ -500,15 +536,29 @@ warmup_ms="$(duration_millis "$warmup")"
 netem_before_start_ms="$(duration_millis "$netem_before_start")"
 netem_at_ms=$((start_at_ms - netem_before_start_ms))
 blackhole_after_ms="$(duration_millis "$blackhole_after")"
-blackhole_at_ms=$((start_at_ms + warmup_ms + blackhole_after_ms))
+blackhole_at_ms=$((start_at_ms + warmup_ms + warmup_drain_ms + blackhole_after_ms))
+recovery_at_ms=0
+if [[ -n "$blackhole_duration" ]]; then
+  recovery_at_ms=$((blackhole_at_ms + $(duration_millis "$blackhole_duration")))
+fi
 
 common_worker_args=(
   --warmup "$warmup"
   --duration "$duration"
   --iterations "$iterations"
+  --probe-interval "$probe_interval"
   --payload-size "$payload_size"
   --reliability "$reliability"
 )
+if has_netem; then
+  common_worker_args+=(--external-impairment-at-epoch-ms "$netem_at_ms")
+fi
+if [[ "$case_type" == "blackhole" ]]; then
+  common_worker_args+=(--external-blackhole-at-epoch-ms "$blackhole_at_ms")
+fi
+if [[ "$recovery_at_ms" -gt 0 ]]; then
+  common_worker_args+=(--external-recovery-at-epoch-ms "$recovery_at_ms")
+fi
 if [[ -n "$packet_limit" ]]; then
   common_worker_args+=(--packet-limit "$packet_limit")
 fi
@@ -592,8 +642,11 @@ cat >"$manifest" <<EOF
   "direction": "$(json_escape "$direction")",
   "benchmarkDistribution": "$(json_escape "$benchmark_distribution_dir")",
   "startAtEpochMillis": $start_at_ms,
+  "probeIntervalMillis": $probe_interval_ms,
+  "warmupDrainMillis": $warmup_drain_ms,
   "netemAtEpochMillis": $(if has_netem; then echo "$netem_at_ms"; else echo "null"; fi),
   "blackholeAtEpochMillis": $(if [[ "$case_type" == "blackhole" ]]; then echo "$blackhole_at_ms"; else echo "null"; fi),
+  "recoveryAtEpochMillis": $(if [[ "$recovery_at_ms" -gt 0 ]]; then echo "$recovery_at_ms"; else echo "null"; fi),
   "namespaces": {
     "server": "$(json_escape "$server_ns")",
     "healthy": "$(json_escape "$healthy_ns")",
@@ -617,7 +670,11 @@ cat >"$report" <<EOF
 - Healthy clients: \`$healthy_clients\`
 - Affected clients: \`$affected_clients\`
 - Start at epoch ms: \`$start_at_ms\`
+- Probe interval: \`$probe_interval_ms ms\`
+- Warmup drain: \`$warmup_drain_ms ms\`
 - Initial netem at epoch ms: \`$(if has_netem; then echo "$netem_at_ms"; else echo "not scheduled"; fi)\`
+- External blackhole at epoch ms: \`$(if [[ "$case_type" == "blackhole" ]]; then echo "$blackhole_at_ms"; else echo "not scheduled"; fi)\`
+- External recovery at epoch ms: \`$(if [[ "$recovery_at_ms" -gt 0 ]]; then echo "$recovery_at_ms"; else echo "not scheduled"; fi)\`
 - Direction: \`$direction\`
 - Netem queue limit: \`$netem_limit packets\`
 - Benchmark distribution: \`$benchmark_distribution_dir\`
@@ -653,11 +710,14 @@ run_command() {
 
 worker_pids=()
 helper_pids=()
+sampler_pids=()
+qdisc_sampler_required=false
+qdisc_sampler_targets=()
 namespaces_created=()
 
 cleanup() {
   local pid
-  for pid in "${worker_pids[@]:-}" "${helper_pids[@]:-}"; do
+  for pid in "${worker_pids[@]:-}" "${helper_pids[@]:-}" "${sampler_pids[@]:-}"; do
     [[ -z "$pid" ]] && continue
     if kill -0 "$pid" >/dev/null 2>&1; then
       kill "$pid" >/dev/null 2>&1 || true
@@ -754,15 +814,99 @@ apply_netem_path() {
         echo "loss=$target_loss"
         echo "limit=$netem_limit"
         echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        ip netns exec "$ns" "$script_dir/raknet-netem.sh" --interface "$iface" --action apply --latency "$target_latency" --jitter "$target_jitter" --loss "$target_loss" --limit "$netem_limit"
+        echo "applyStartedAtEpochMillis=$(date +%s%3N)"
+        if [[ "$action" == "restore" ]] && ! has_netem; then
+          ip netns exec "$ns" "$script_dir/raknet-netem.sh" --interface "$iface" --action clear
+        else
+          ip netns exec "$ns" "$script_dir/raknet-netem.sh" --interface "$iface" --action apply --latency "$target_latency" --jitter "$target_jitter" --loss "$target_loss" --limit "$netem_limit"
+        fi
+        echo "applyCompletedAtEpochMillis=$(date +%s%3N)"
         ip netns exec "$ns" "$script_dir/raknet-netem.sh" --interface "$iface" --action status
       } >"$evidence" 2>&1
       cat "$evidence"
     else
-      echo "+ ip netns exec $ns $script_dir/raknet-netem.sh --interface $iface --action apply --latency $target_latency --jitter $target_jitter --loss $target_loss --limit $netem_limit"
+      if [[ "$action" == "restore" ]] && ! has_netem; then
+        echo "+ ip netns exec $ns $script_dir/raknet-netem.sh --interface $iface --action clear"
+      else
+        echo "+ ip netns exec $ns $script_dir/raknet-netem.sh --interface $iface --action apply --latency $target_latency --jitter $target_jitter --loss $target_loss --limit $netem_limit"
+      fi
       echo "  evidence: $evidence"
     fi
   done
+}
+
+start_qdisc_sampler() {
+  if ! "$execute" || { ! has_netem && [[ "$case_type" != "blackhole" ]]; }; then
+    return
+  fi
+  local output="$output_root/netem/qdisc-timeseries.jsonl"
+  qdisc_sampler_required=true
+  qdisc_sampler_targets=()
+  if [[ "$direction" == "server-to-client" || "$direction" == "both" ]]; then
+    qdisc_sampler_targets+=("$server_ns:$server_affected_iface")
+  fi
+  if [[ "$direction" == "client-to-server" || "$direction" == "both" ]]; then
+    qdisc_sampler_targets+=("$affected_ns:$receiver_affected_iface")
+  fi
+  (
+    while true; do
+      local target ns iface qdisc_json error
+      for target in "${qdisc_sampler_targets[@]}"; do
+        ns="${target%%:*}"
+        iface="${target##*:}"
+        error=""
+        if ! qdisc_json="$(ip netns exec "$ns" tc -s -j qdisc show dev "$iface" 2>&1)"; then
+          error="$qdisc_json"
+          qdisc_json='[]'
+        elif [[ -z "$qdisc_json" ]]; then
+          qdisc_json='[]'
+        fi
+        jq -cn \
+          --argjson epochMillis "$(date +%s%3N)" \
+          --arg namespace "$ns" \
+          --arg interface "$iface" \
+          --arg error "$error" \
+          --argjson qdisc "$qdisc_json" \
+          '{epochMillis: $epochMillis, namespace: $namespace, interface: $interface,
+            qdisc: $qdisc} + (if $error == "" then {} else {error: $error} end)'
+      done
+      sleep 1
+    done
+  ) >>"$output" &
+  sampler_pids+=("$!")
+}
+
+stop_qdisc_samplers() {
+  local pid status was_running
+  local failed=0
+  for pid in "${sampler_pids[@]:-}"; do
+    [[ -z "$pid" ]] && continue
+    was_running=false
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      was_running=true
+      kill "$pid" >/dev/null 2>&1 || true
+    fi
+    if wait "$pid" >/dev/null 2>&1; then
+      status=0
+    else
+      status=$?
+    fi
+    if ! "$was_running"; then
+      echo "Qdisc sampler exited unexpectedly before benchmark completion (status $status)" >&2
+      failed=1
+    elif [[ "$status" -ne 0 && "$status" -ne 143 ]]; then
+      echo "Qdisc sampler could not be stopped cleanly (status $status)" >&2
+      failed=1
+    fi
+  done
+  sampler_pids=()
+  if "$qdisc_sampler_required"; then
+    local output="$output_root/netem/qdisc-timeseries.jsonl"
+    if ! "$script_dir/validate-qdisc-timeseries.sh" "$output" "${qdisc_sampler_targets[@]}"; then
+      failed=1
+    fi
+  fi
+  return "$failed"
 }
 
 sleep_until_epoch_ms() {
@@ -866,6 +1010,8 @@ if [[ "$affected_clients" -eq 0 ]] && has_netem; then
   receiver_affected_iface="$receiver_healthy_iface"
 fi
 
+start_qdisc_sampler
+
 if has_netem; then
   echo "Initial netem scheduled at epoch ms $netem_at_ms, after connection establishment and before coordinated start"
   if "$execute"; then
@@ -893,6 +1039,20 @@ if [[ "$case_type" == "blackhole" ]]; then
   fi
 fi
 
+if [[ "$recovery_at_ms" -gt 0 ]]; then
+  echo "External path recovery scheduled at epoch ms $recovery_at_ms"
+  if "$execute"; then
+    (
+      sleep_until_epoch_ms "$recovery_at_ms"
+      apply_netem_path "external-recovery" "restore"
+    ) &
+    helper_pids+=("$!")
+  else
+    echo "+ sleep until $recovery_at_ms; restore prior path conditions on $direction affected path"
+    apply_netem_path "external-recovery" "restore"
+  fi
+fi
+
 run_worker_bg "$server_ns" "$server_log" "${server_args_array[@]}"
 if "$execute"; then
   sleep 2
@@ -914,13 +1074,16 @@ if "$execute"; then
       failed=1
     fi
   done
+  if ! stop_qdisc_samplers; then
+    failed=1
+  fi
   if [[ "$failed" -ne 0 ]]; then
     for pid in "${helper_pids[@]}"; do
       if kill -0 "$pid" >/dev/null 2>&1; then
         kill "$pid" >/dev/null 2>&1 || true
       fi
     done
-    echo "One or more netns worker processes failed. See logs under $output_root" >&2
+    echo "One or more netns workers or required qdisc evidence collectors failed. See $output_root" >&2
     exit 1
   fi
   for pid in "${helper_pids[@]}"; do
@@ -947,15 +1110,16 @@ if "$execute"; then
       --external-impairment-latency-ms "$(duration_millis "$latency")"
       --external-impairment-jitter-ms "$(duration_millis "$jitter")"
       --external-impairment-loss-percent "${loss%\%}"
-      --external-netem-limit-packets "$netem_limit"
-      --netem-evidence "$output_root/netem"
     )
-  elif [[ "$case_type" == "blackhole" ]]; then
-    merge_args+=(
-      --external-blackhole-at-epoch-ms "$blackhole_at_ms"
-      --external-netem-limit-packets "$netem_limit"
-      --netem-evidence "$output_root/netem"
-    )
+  fi
+  if [[ "$case_type" == "blackhole" ]]; then
+    merge_args+=(--external-blackhole-at-epoch-ms "$blackhole_at_ms")
+  fi
+  if [[ "$recovery_at_ms" -gt 0 ]]; then
+    merge_args+=(--external-recovery-at-epoch-ms "$recovery_at_ms")
+  fi
+  if has_netem || [[ "$case_type" == "blackhole" ]]; then
+    merge_args+=(--external-netem-limit-packets "$netem_limit" --netem-evidence "$output_root/netem")
   fi
   run_benchmark_command "${merge_args[@]}"
   echo "Merged artifact: $merged_out"
@@ -964,8 +1128,17 @@ else
   echo "Merge command after execution:"
   if [[ "$affected_clients" -gt 0 ]]; then
     merge_command="$script_dir/merge-worker-results.sh --server $server_out/$run_id --receiver $affected_out/$run_id-affected --receiver $healthy_out/$run_id-healthy --out $merged_out --case $case_name --benchmark-name $benchmark_name"
+    if has_netem; then
+      merge_command+=" --external-impairment-latency-ms $(duration_millis "$latency") --external-impairment-jitter-ms $(duration_millis "$jitter") --external-impairment-loss-percent ${loss%\%}"
+    fi
     if [[ "$case_type" == "blackhole" ]]; then
-      merge_command+=" --external-blackhole-at-epoch-ms $blackhole_at_ms --external-netem-limit-packets $netem_limit --netem-evidence $output_root/netem"
+      merge_command+=" --external-blackhole-at-epoch-ms $blackhole_at_ms"
+    fi
+    if [[ "$recovery_at_ms" -gt 0 ]]; then
+      merge_command+=" --external-recovery-at-epoch-ms $recovery_at_ms"
+    fi
+    if has_netem || [[ "$case_type" == "blackhole" ]]; then
+      merge_command+=" --external-netem-limit-packets $netem_limit --netem-evidence $output_root/netem"
     fi
     echo "$merge_command"
   else

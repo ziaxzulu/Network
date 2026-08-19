@@ -2457,8 +2457,11 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(root.resolve("benchmark/build/install/benchmark").toString(),
                 manifest.path("benchmarkDistribution").asText());
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--clients 10"));
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--external-impairment-at-epoch-ms "));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
+        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--external-impairment-at-epoch-ms "));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--clients 2"));
+        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--external-impairment-at-epoch-ms "));
 
         String readme = Files.readString(output.resolve("README.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(readme.contains("single-host smoke harness"));
@@ -2485,14 +2488,17 @@ public class BenchmarkKitTests {
                 "--warmup", "1s",
                 "--duration", "2s",
                 "--iterations", "1",
+                "--probe-interval", "250ms",
                 "--start-offset", "30s",
-                "--blackhole-after", "1s"
+                "--blackhole-after", "1s",
+                "--blackhole-duration", "500ms"
         );
 
         Assertions.assertEquals(0, result.exitCode, result.output);
         Assertions.assertTrue(result.output.contains("External blackhole scheduled"));
         Assertions.assertTrue(result.output.contains("apply 100% loss to server-to-client affected path"));
         Assertions.assertTrue(result.output.contains("--external-blackhole-at-epoch-ms"));
+        Assertions.assertTrue(result.output.contains("--external-recovery-at-epoch-ms"));
         Assertions.assertFalse(result.output.contains("initial-netem"));
 
         JsonNode manifest = JSON.readTree(Files.readString(output.resolve("manifest.json"), StandardCharsets.UTF_8));
@@ -2505,10 +2511,27 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(10_000, manifest.path("netemLimitPackets").asInt());
         Assertions.assertTrue(manifest.path("blackholeAtEpochMillis").asLong()
                 > manifest.path("startAtEpochMillis").asLong());
+        Assertions.assertEquals(250L, manifest.path("probeIntervalMillis").asLong());
+        Assertions.assertEquals(500L, manifest.path("warmupDrainMillis").asLong());
+        Assertions.assertEquals(2_500L,
+                manifest.path("blackholeAtEpochMillis").asLong()
+                        - manifest.path("startAtEpochMillis").asLong());
+        Assertions.assertEquals(500L,
+                manifest.path("recoveryAtEpochMillis").asLong()
+                        - manifest.path("blackholeAtEpochMillis").asLong());
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--impaired-clients 2"));
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--external-blackhole-at-epoch-ms "));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--impaired-clients 2"));
+        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--external-blackhole-at-epoch-ms "));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--clients 2"));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
+        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--external-blackhole-at-epoch-ms "));
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--external-recovery-at-epoch-ms "));
+        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--external-recovery-at-epoch-ms "));
+        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--external-recovery-at-epoch-ms "));
+
+        String readme = Files.readString(output.resolve("README.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(readme.contains("External recovery at epoch ms: `"));
     }
 
     @Test
@@ -2517,13 +2540,15 @@ public class BenchmarkKitTests {
         String launcher = Files.readString(root.resolve("benchmark/scripts/raknet-netns-goal-root"),
                 StandardCharsets.UTF_8);
         Assertions.assertTrue(launcher.contains("This privileged goal launcher does not accept arguments"));
-        Assertions.assertTrue(launcher.contains("pilot|long-hold|cap-sweep|cohort-sweep|all"));
+        Assertions.assertTrue(launcher.contains("pilot|transition|long-hold|cap-sweep|cohort-sweep|all"));
         Assertions.assertTrue(launcher.contains("require_trusted_path \"$launcher_path\""));
         Assertions.assertTrue(launcher.contains("flock -n 9"));
         Assertions.assertTrue(launcher.contains("timeout --signal=TERM --kill-after=30s"));
         Assertions.assertTrue(launcher.contains("benchmark_user=\"rakbench\""));
         Assertions.assertTrue(launcher.contains("BENCHMARK_RUN_USER=\"$benchmark_user\""));
         Assertions.assertTrue(launcher.contains("--direction both"));
+        Assertions.assertTrue(launcher.contains(
+                "require_trusted_path \"$install_root/benchmark/scripts/validate-qdisc-timeseries.sh\""));
         Assertions.assertTrue(launcher.contains("cp -P --no-preserve=mode,ownership,timestamps"));
         Assertions.assertTrue(launcher.contains("must contain only top-level regular jar files"));
         Assertions.assertTrue(launcher.contains("-printf '%f\\0'"));
@@ -2535,13 +2560,50 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(worker.contains(
                 "mkdir -p \"$server_out\" \"$healthy_out\" \"$affected_out\" \"$merged_out\""));
         Assertions.assertTrue(worker.contains("merge_args=(\"$script_dir/merge-worker-results.sh\""));
+        Assertions.assertTrue(worker.contains("validate-qdisc-timeseries.sh"));
+        Assertions.assertTrue(worker.contains("if ! stop_qdisc_samplers; then"));
 
         String installer = Files.readString(root.resolve("benchmark/scripts/install-raknet-netns-goal"),
                 StandardCharsets.UTF_8);
         Assertions.assertTrue(installer.contains("This installer does not accept arguments"));
         Assertions.assertTrue(installer.contains("--shell /usr/sbin/nologin"));
         Assertions.assertTrue(installer.contains("launcher_target=\"/usr/local/sbin/raknet-netns-pilot\""));
+        Assertions.assertTrue(installer.contains("  validate-qdisc-timeseries.sh\n)"));
+        Assertions.assertTrue(installer.contains(
+                "\"$source_root/validate-qdisc-timeseries.sh\""));
         Assertions.assertFalse(installer.contains("/etc/sudoers"));
+    }
+
+    @Test
+    public void testQdiscTimeseriesValidatorRejectsCollectorErrorsAndMissingTargets() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-qdisc-validator-test");
+        Path validator = root.resolve("benchmark/scripts/validate-qdisc-timeseries.sh");
+        Path valid = output.resolve("valid.jsonl");
+        Files.writeString(valid,
+                "{\"epochMillis\":1000,\"namespace\":\"server\",\"interface\":\"eth0\",\"qdisc\":[]}\n"
+                        + "{\"epochMillis\":1001,\"namespace\":\"client\",\"interface\":\"eth1\",\"qdisc\":[]}\n",
+                StandardCharsets.UTF_8);
+
+        ProcessResult validResult = runProcess(root, Duration.ofSeconds(10),
+                "bash", validator.toString(), valid.toString(), "server:eth0", "client:eth1");
+        Assertions.assertEquals(0, validResult.exitCode, validResult.output);
+
+        Path failed = output.resolve("failed.jsonl");
+        Files.writeString(failed,
+                "{\"epochMillis\":1000,\"namespace\":\"server\",\"interface\":\"eth0\","
+                        + "\"qdisc\":[],\"error\":\"tc failed\"}\n",
+                StandardCharsets.UTF_8);
+        ProcessResult failedResult = runProcess(root, Duration.ofSeconds(10),
+                "bash", validator.toString(), failed.toString(), "server:eth0");
+        Assertions.assertEquals(1, failedResult.exitCode, failedResult.output);
+        Assertions.assertTrue(failedResult.output.contains("malformed or failed samples"));
+
+        ProcessResult missingTarget = runProcess(root, Duration.ofSeconds(10),
+                "bash", validator.toString(), valid.toString(), "missing:eth9");
+        Assertions.assertEquals(1, missingTarget.exitCode, missingTarget.output);
+        Assertions.assertTrue(missingTarget.output.contains("no successful sample"));
     }
 
     @Test
@@ -2620,8 +2682,9 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(report.contains("Netem evidence: `" + evidence + "`"));
         String csv = Files.readString(merged.resolve("lab-summary.csv"), StandardCharsets.UTF_8);
         Assertions.assertTrue(csv.lines().findFirst().orElseThrow().contains(
-                "impairment_profile,external_impairment,netem_limit_packets,netem_evidence_dir"));
-        Assertions.assertTrue(csv.contains("\"100ms/10ms/5%\",true,10000,\"" + evidence + "\""));
+                "impairment_profile,external_impairment,external_blackhole_at_epoch_ms,"
+                        + "external_recovery_at_epoch_ms,netem_limit_packets,netem_evidence_dir"));
+        Assertions.assertTrue(csv.contains("\"100ms/10ms/5%\",true,,,10000,\"" + evidence + "\""));
 
         Path blackholeMerged = output.resolve("blackhole-merged");
         ProcessResult blackholeResult = runProcess(root, Duration.ofSeconds(10),
@@ -2633,21 +2696,26 @@ public class BenchmarkKitTests {
                 "--case", "external-blackhole",
                 "--benchmark-name", "disappearing-clients",
                 "--external-blackhole-at-epoch-ms", "1234567890",
+                "--external-recovery-at-epoch-ms", "1234570890",
                 "--external-netem-limit-packets", "10000",
                 "--netem-evidence", evidence.toString()
         );
         Assertions.assertEquals(0, blackholeResult.exitCode, blackholeResult.output);
         JsonNode blackholeSummary = JSON.readTree(Files.readString(
                 blackholeMerged.resolve("lab-summary.json"), StandardCharsets.UTF_8));
-        Assertions.assertEquals("blackhole", blackholeSummary.path("externalImpairment").path("kind").asText());
+        Assertions.assertEquals("blackhole-transition",
+                blackholeSummary.path("externalImpairment").path("kind").asText());
         Assertions.assertEquals(100.0D,
-                blackholeSummary.path("externalImpairment").path("lossPercent").asDouble(), 0.001D);
+                blackholeSummary.path("externalImpairment").path("blackholeLossPercent").asDouble(), 0.001D);
         Assertions.assertEquals(1_234_567_890L,
                 blackholeSummary.path("aggregate").path("externalBlackholeAtEpochMillis").asLong());
-        Assertions.assertEquals("external-blackhole",
+        Assertions.assertEquals(1_234_570_890L,
+                blackholeSummary.path("aggregate").path("externalRecoveryAtEpochMillis").asLong());
+        Assertions.assertEquals("external-blackhole-transition",
                 blackholeSummary.path("aggregate").path("impairmentProfile").asText());
         Assertions.assertTrue(blackholeSummary.path("aggregate").path("externalImpairment").asBoolean());
         Assertions.assertTrue(blackholeSummary.path("aggregate").path("externalBlackhole").asBoolean());
+        Assertions.assertTrue(blackholeSummary.path("aggregate").path("externalRecovery").asBoolean());
         Assertions.assertEquals(10_000,
                 blackholeSummary.path("externalImpairment").path("limitPackets").asInt());
     }
@@ -2695,6 +2763,45 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(6, summary.path("statuses").size());
         String report = Files.readString(output.resolve("campaign-summary.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(report.contains("Stability gate: `not-run`"));
+    }
+
+    @Test
+    public void testNetnsPilotCampaignDryRunPlansTransition() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-netns-transition-test").resolve("transition");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/run-netns-pilot-campaign.sh").toString(),
+                "--out", output.toString(),
+                "--profiles", "blackhole",
+                "--clients", "10",
+                "--affected-clients", "2",
+                "--warmup", "1s",
+                "--duration", "1s",
+                "--iterations", "1",
+                "--start-offset", "10s",
+                "--blackhole-after", "100ms",
+                "--blackhole-duration", "200ms",
+                "--direction", "both"
+        );
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        JsonNode plan = JSON.readTree(Files.readString(output.resolve("campaign-plan.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertEquals(1, plan.path("profiles").size());
+        Assertions.assertEquals("blackhole", plan.path("profiles").get(0).path("profile").asText());
+        Assertions.assertEquals("200ms", plan.path("parameters").path("blackholeDuration").asText());
+        Assertions.assertEquals("both", plan.path("parameters").path("direction").asText());
+
+        JsonNode manifest = JSON.readTree(Files.readString(
+                output.resolve("cases/01-blackhole/manifest.json"), StandardCharsets.UTF_8));
+        Assertions.assertEquals(200L,
+                manifest.path("recoveryAtEpochMillis").asLong()
+                        - manifest.path("blackholeAtEpochMillis").asLong());
+        Assertions.assertTrue(manifest.path("serverArgs").asText()
+                .contains("--external-recovery-at-epoch-ms "));
     }
 
     @Test
@@ -3845,6 +3952,7 @@ public class BenchmarkKitTests {
 
         Path directory = new BenchmarkResultWriter().write(run).toPath();
         Assertions.assertTrue(Files.exists(directory.resolve("summary.json")));
+        Assertions.assertTrue(Files.exists(directory.resolve("timeline.jsonl")));
         Assertions.assertTrue(Files.exists(directory.resolve("timeseries.csv")));
         Assertions.assertTrue(Files.exists(directory.resolve("latency.hdr")));
         Assertions.assertTrue(Files.exists(directory.resolve("report.md")));
@@ -3863,6 +3971,9 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summary.has("globalPacketLimit"));
         Assertions.assertEquals(1_048_576, summary.path("configuredMaxQueuedBytes").asInt());
         Assertions.assertTrue(summary.has("startAtEpochMillis"));
+        Assertions.assertEquals("timeline.jsonl", summary.path("timelineArtifact").asText());
+        Assertions.assertEquals("independent-session-iterations", summary.path("measurementWindowSemantics").asText());
+        Assertions.assertEquals(0, summary.path("timelineSummary").path("sampleCount").asInt());
         Assertions.assertTrue(summary.has("impairmentLatencyMillis"));
         Assertions.assertTrue(summary.has("impairmentJitterMillis"));
         Assertions.assertTrue(summary.has("impairmentLossPercent"));

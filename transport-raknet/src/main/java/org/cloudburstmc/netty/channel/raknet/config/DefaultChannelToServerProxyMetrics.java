@@ -120,4 +120,44 @@ public class DefaultChannelToServerProxyMetrics implements RakChannelMetrics {
             metrics.queuedPacketBytes(channel, count);
         }
     }
+
+    @Override
+    public void rakDatagramSent(RakDatagramSendType sendType, int bytes, int retransmissionAttempt,
+                                int bytesInFlight) {
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakDatagramSent(channel, sendType, bytes, retransmissionAttempt, bytesInFlight);
+        }
+    }
+
+    @Override
+    public void rakAcknowledgementProgress(int bytes, int retransmissionAttempt, long observedAtMillis,
+                                           long previousAckProgressAtMillis, long recoveryStartedAtMillis) {
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakAcknowledgementProgress(channel, bytes, retransmissionAttempt, observedAtMillis,
+                    previousAckProgressAtMillis, recoveryStartedAtMillis);
+        }
+    }
+
+    @Override
+    public void rakRecoveryState(long observedAtMillis, int bytesInFlight, double congestionWindow,
+                                 double slowStartThreshold, double smoothedRtt, double rttVariance,
+                                 long retransmissionTimeout, int retransmittedDatagramsInFlight,
+                                 long lastAckProgressAtMillis, long recoveryStartedAtMillis) {
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakRecoveryState(channel, observedAtMillis, bytesInFlight, congestionWindow,
+                    slowStartThreshold, smoothedRtt, rttVariance, retransmissionTimeout,
+                    retransmittedDatagramsInFlight, lastAckProgressAtMillis, recoveryStartedAtMillis);
+        }
+    }
+
+    @Override
+    public void rakRecoveryStateClosed(long observedAtMillis) {
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakRecoveryStateClosed(channel, observedAtMillis);
+        }
+    }
 }

@@ -18,6 +18,7 @@ package org.cloudburstmc.netty.benchmark;
 
 import org.cloudburstmc.netty.channel.raknet.RakChildChannel;
 import org.cloudburstmc.netty.channel.raknet.RakState;
+import org.cloudburstmc.netty.channel.raknet.config.RakDatagramSendType;
 import org.cloudburstmc.netty.channel.raknet.config.RakServerMetrics;
 
 import java.net.InetSocketAddress;
@@ -41,6 +42,11 @@ public final class BenchmarkServerMetrics implements RakServerMetrics {
         this.byChannel.put(channel, peer);
         this.byAddress.put(channel.remoteAddress(), peer);
         peer.address(channel.remoteAddress());
+        if (channel.isOpen()) {
+            peer.state(RakState.CONNECTED);
+        } else {
+            peer.state(RakState.DISCONNECTED);
+        }
     }
 
     public void resetMeasurement() {
@@ -56,6 +62,16 @@ public final class BenchmarkServerMetrics implements RakServerMetrics {
             peers.add(entry.getValue().snapshot(channel.isOpen(), channel.isActive()));
         }
         Collections.sort(peers, (a, b) -> Integer.compare(a.id, b.id));
+        return peers;
+    }
+
+    public List<PeerStats.TimelineSnapshot> timelineSnapshots() {
+        List<PeerStats.TimelineSnapshot> peers = new ArrayList<>();
+        for (Map.Entry<RakChildChannel, PeerStats> entry : this.byChannel.entrySet()) {
+            RakChildChannel channel = entry.getKey();
+            peers.add(entry.getValue().timelineSnapshot(channel.isOpen(), channel.isActive()));
+        }
+        Collections.sort(peers, (a, b) -> Integer.compare(a.id(), b.id()));
         return peers;
     }
 
@@ -200,6 +216,47 @@ public final class BenchmarkServerMetrics implements RakServerMetrics {
         PeerStats peer = this.byChannel.get(channel);
         if (peer != null) {
             peer.queuedBytes(count);
+        }
+    }
+
+    @Override
+    public void rakDatagramSent(RakChildChannel channel, RakDatagramSendType sendType, int bytes,
+                                int retransmissionAttempt, int bytesInFlight) {
+        PeerStats peer = this.byChannel.get(channel);
+        if (peer != null) {
+            peer.datagramSent(sendType, bytes, retransmissionAttempt, bytesInFlight);
+        }
+    }
+
+    @Override
+    public void rakAcknowledgementProgress(RakChildChannel channel, int bytes, int retransmissionAttempt,
+                                           long observedAtMillis, long previousAckProgressAtMillis,
+                                           long recoveryStartedAtMillis) {
+        PeerStats peer = this.byChannel.get(channel);
+        if (peer != null) {
+            peer.acknowledgementProgress(bytes, retransmissionAttempt, observedAtMillis,
+                    previousAckProgressAtMillis, recoveryStartedAtMillis);
+        }
+    }
+
+    @Override
+    public void rakRecoveryState(RakChildChannel channel, long observedAtMillis, int bytesInFlight,
+                                 double congestionWindow, double slowStartThreshold, double smoothedRtt,
+                                 double rttVariance, long retransmissionTimeout, int retransmittedDatagramsInFlight,
+                                 long lastAckProgressAtMillis, long recoveryStartedAtMillis) {
+        PeerStats peer = this.byChannel.get(channel);
+        if (peer != null) {
+            peer.recoveryState(observedAtMillis, bytesInFlight, congestionWindow, slowStartThreshold,
+                    smoothedRtt, rttVariance, retransmissionTimeout, retransmittedDatagramsInFlight,
+                    lastAckProgressAtMillis, recoveryStartedAtMillis);
+        }
+    }
+
+    @Override
+    public void rakRecoveryStateClosed(RakChildChannel channel, long observedAtMillis) {
+        PeerStats peer = this.byChannel.get(channel);
+        if (peer != null) {
+            peer.recoveryStateClosed(observedAtMillis);
         }
     }
 }

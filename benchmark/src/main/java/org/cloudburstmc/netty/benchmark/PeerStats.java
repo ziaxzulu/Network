@@ -17,8 +17,11 @@
 package org.cloudburstmc.netty.benchmark;
 
 import org.cloudburstmc.netty.channel.raknet.RakState;
+import org.cloudburstmc.netty.channel.raknet.config.RakDatagramSendType;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -50,6 +53,48 @@ public final class PeerStats {
     private final LongAdder blackholedDatagramsIn = new LongAdder();
     private final LongAdder blackholedDatagramsOut = new LongAdder();
     private final AtomicLong maxQueuedBytes = new AtomicLong();
+
+    /*
+     * Measurement-window counters above intentionally reset between iterations. These run-lifetime
+     * counters back the event timeline, where a reset must never erase a disconnect or recovery event.
+     */
+    private final LongAdder lifetimeServerBytesOut = new LongAdder();
+    private final LongAdder lifetimeServerDatagramsOut = new LongAdder();
+    private final LongAdder lifetimeStaleDatagrams = new LongAdder();
+    private final LongAdder lifetimeNackIn = new LongAdder();
+    private final LongAdder lifetimeNackOut = new LongAdder();
+    private final LongAdder lifetimeBulkSentMessages = new LongAdder();
+    private final LongAdder lifetimeBulkSentBytes = new LongAdder();
+    private final LongAdder lifetimeLogicalPacketsSent = new LongAdder();
+    private final LongAdder lifetimeBulkReceivedMessages = new LongAdder();
+    private final LongAdder lifetimeBulkReceivedBytes = new LongAdder();
+    private final LongAdder lifetimeLogicalPacketsReceived = new LongAdder();
+    private final LongAdder lifetimeDisconnects = new LongAdder();
+    private final LongAdder lifetimeBlackholedDatagramsIn = new LongAdder();
+    private final LongAdder lifetimeBlackholedDatagramsOut = new LongAdder();
+    private final LongAdder lifetimeOriginalDatagrams = new LongAdder();
+    private final LongAdder lifetimeOriginalDatagramBytes = new LongAdder();
+    private final LongAdder lifetimeNackRetransmittedDatagrams = new LongAdder();
+    private final LongAdder lifetimeNackRetransmittedBytes = new LongAdder();
+    private final LongAdder lifetimeTimeoutRetransmittedDatagrams = new LongAdder();
+    private final LongAdder lifetimeTimeoutRetransmittedBytes = new LongAdder();
+    private final LongAdder lifetimeAcknowledgementProgressEvents = new LongAdder();
+    private final LongAdder lifetimeAcknowledgementProgressBytes = new LongAdder();
+    private final AtomicBoolean disconnected = new AtomicBoolean();
+    private final AtomicLong currentQueuedBytes = new AtomicLong();
+    private final AtomicLong lifetimeMaxQueuedBytes = new AtomicLong();
+    private final AtomicLong currentBytesInFlight = new AtomicLong();
+    private final AtomicLong lifetimeMaxBytesInFlight = new AtomicLong();
+    private final AtomicInteger maxRetransmissionAttempt = new AtomicInteger();
+    private volatile long recoveryObservedAtMillis = -1L;
+    private volatile double congestionWindow = -1.0D;
+    private volatile double slowStartThreshold = -1.0D;
+    private volatile double smoothedRtt = -1.0D;
+    private volatile double rttVariance = -1.0D;
+    private volatile long retransmissionTimeout = -1L;
+    private volatile int retransmittedDatagramsInFlight;
+    private volatile long lastAckProgressAtMillis = -1L;
+    private volatile long recoveryStartedAtMillis = -1L;
     private volatile RakState lastState = RakState.UNCONNECTED;
 
     public PeerStats(int id, boolean impaired) {
@@ -105,6 +150,7 @@ public final class PeerStats {
 
     public void addServerBytesOut(int count) {
         this.serverBytesOut.add(count);
+        this.lifetimeServerBytesOut.add(count);
     }
 
     public void addServerDatagramsIn(int count) {
@@ -113,6 +159,7 @@ public final class PeerStats {
 
     public void addServerDatagramsOut(int count) {
         this.serverDatagramsOut.add(count);
+        this.lifetimeServerDatagramsOut.add(count);
     }
 
     public void addEncapsulatedIn(int count) {
@@ -125,6 +172,7 @@ public final class PeerStats {
 
     public void addStaleDatagrams(int count) {
         this.staleDatagrams.add(count);
+        this.lifetimeStaleDatagrams.add(count);
     }
 
     public void addAckIn(int count) {
@@ -137,10 +185,12 @@ public final class PeerStats {
 
     public void addNackIn(int count) {
         this.nackIn.add(count);
+        this.lifetimeNackIn.add(count);
     }
 
     public void addNackOut(int count) {
         this.nackOut.add(count);
+        this.lifetimeNackOut.add(count);
     }
 
     public void addBulkSent(int bytes) {
@@ -151,6 +201,9 @@ public final class PeerStats {
         this.bulkSentMessages.increment();
         this.bulkSentBytes.add(bytes);
         this.logicalPacketsSent.add(Math.max(1, logicalPackets));
+        this.lifetimeBulkSentMessages.increment();
+        this.lifetimeBulkSentBytes.add(bytes);
+        this.lifetimeLogicalPacketsSent.add(Math.max(1, logicalPackets));
     }
 
     public void addBulkReceived(int bytes) {
@@ -161,6 +214,9 @@ public final class PeerStats {
         this.bulkReceivedMessages.increment();
         this.bulkReceivedBytes.add(bytes);
         this.logicalPacketsReceived.add(Math.max(1, logicalPackets));
+        this.lifetimeBulkReceivedMessages.increment();
+        this.lifetimeBulkReceivedBytes.add(bytes);
+        this.lifetimeLogicalPacketsReceived.add(Math.max(1, logicalPackets));
     }
 
     public void addProbeSent() {
@@ -172,15 +228,23 @@ public final class PeerStats {
     }
 
     public void addDisconnect() {
-        this.disconnects.increment();
+        if (this.disconnected.compareAndSet(false, true)) {
+            this.disconnects.increment();
+            this.lifetimeDisconnects.increment();
+        }
+        this.currentQueuedBytes.set(0L);
+        this.clearRecoveryState();
+        this.lastState = RakState.DISCONNECTED;
     }
 
     public void addBlackholedDatagramIn() {
         this.blackholedDatagramsIn.increment();
+        this.lifetimeBlackholedDatagramsIn.increment();
     }
 
     public void addBlackholedDatagramOut() {
         this.blackholedDatagramsOut.increment();
+        this.lifetimeBlackholedDatagramsOut.increment();
     }
 
     public void state(RakState state) {
@@ -188,13 +252,141 @@ public final class PeerStats {
     }
 
     public void queuedBytes(int count) {
+        long value = Math.max(0, count);
+        this.currentQueuedBytes.set(value);
+        updateMaximum(this.maxQueuedBytes, value);
+        updateMaximum(this.lifetimeMaxQueuedBytes, value);
+    }
+
+    public void datagramSent(RakDatagramSendType sendType, int bytes, int retransmissionAttempt, int bytesInFlight) {
+        int safeBytes = Math.max(0, bytes);
+        if (sendType == RakDatagramSendType.ORIGINAL) {
+            this.lifetimeOriginalDatagrams.increment();
+            this.lifetimeOriginalDatagramBytes.add(safeBytes);
+        } else if (sendType == RakDatagramSendType.NACK_RETRANSMISSION) {
+            this.lifetimeNackRetransmittedDatagrams.increment();
+            this.lifetimeNackRetransmittedBytes.add(safeBytes);
+        } else if (sendType == RakDatagramSendType.TIMEOUT_RETRANSMISSION) {
+            this.lifetimeTimeoutRetransmittedDatagrams.increment();
+            this.lifetimeTimeoutRetransmittedBytes.add(safeBytes);
+        }
+        updateMaximum(this.maxRetransmissionAttempt, Math.max(0, retransmissionAttempt));
+        updateBytesInFlight(bytesInFlight);
+    }
+
+    public void acknowledgementProgress(int bytes, int retransmissionAttempt, long observedAtMillis,
+                                        long previousAckProgressAtMillis, long recoveryStartedAtMillis) {
+        this.lifetimeAcknowledgementProgressEvents.increment();
+        this.lifetimeAcknowledgementProgressBytes.add(Math.max(0, bytes));
+        updateMaximum(this.maxRetransmissionAttempt, Math.max(0, retransmissionAttempt));
+        this.recoveryObservedAtMillis = observedAtMillis;
+        this.lastAckProgressAtMillis = observedAtMillis;
+        this.recoveryStartedAtMillis = recoveryStartedAtMillis;
+    }
+
+    public void recoveryState(long observedAtMillis, int bytesInFlight, double congestionWindow,
+                              double slowStartThreshold, double smoothedRtt, double rttVariance,
+                              long retransmissionTimeout, int retransmittedDatagramsInFlight,
+                              long lastAckProgressAtMillis, long recoveryStartedAtMillis) {
+        this.recoveryObservedAtMillis = observedAtMillis;
+        updateBytesInFlight(bytesInFlight);
+        this.congestionWindow = congestionWindow;
+        this.slowStartThreshold = slowStartThreshold;
+        this.smoothedRtt = smoothedRtt;
+        this.rttVariance = rttVariance;
+        this.retransmissionTimeout = retransmissionTimeout;
+        this.retransmittedDatagramsInFlight = Math.max(0, retransmittedDatagramsInFlight);
+        this.lastAckProgressAtMillis = lastAckProgressAtMillis;
+        this.recoveryStartedAtMillis = recoveryStartedAtMillis;
+    }
+
+    public void recoveryStateClosed(long observedAtMillis) {
+        this.clearRecoveryState();
+    }
+
+    private void clearRecoveryState() {
+        this.recoveryObservedAtMillis = -1L;
+        this.currentBytesInFlight.set(0L);
+        this.congestionWindow = -1.0D;
+        this.slowStartThreshold = -1.0D;
+        this.smoothedRtt = -1.0D;
+        this.rttVariance = -1.0D;
+        this.retransmissionTimeout = -1L;
+        this.retransmittedDatagramsInFlight = 0;
+        this.lastAckProgressAtMillis = -1L;
+        this.recoveryStartedAtMillis = -1L;
+    }
+
+    private void updateBytesInFlight(int bytesInFlight) {
+        long value = Math.max(0, bytesInFlight);
+        this.currentBytesInFlight.set(value);
+        updateMaximum(this.lifetimeMaxBytesInFlight, value);
+    }
+
+    private static void updateMaximum(AtomicLong maximum, long value) {
         long current;
         do {
-            current = this.maxQueuedBytes.get();
-            if (count <= current) {
+            current = maximum.get();
+            if (value <= current) {
                 return;
             }
-        } while (!this.maxQueuedBytes.compareAndSet(current, count));
+        } while (!maximum.compareAndSet(current, value));
+    }
+
+    private static void updateMaximum(AtomicInteger maximum, int value) {
+        int current;
+        do {
+            current = maximum.get();
+            if (value <= current) {
+                return;
+            }
+        } while (!maximum.compareAndSet(current, value));
+    }
+
+    public TimelineSnapshot timelineSnapshot(boolean channelOpen, boolean channelActive) {
+        return new TimelineSnapshot(
+                this.id,
+                this.impaired,
+                channelOpen,
+                channelActive,
+                this.disconnected.get(),
+                this.lifetimeDisconnects.sum(),
+                this.lifetimeBulkSentMessages.sum(),
+                this.lifetimeBulkSentBytes.sum(),
+                this.lifetimeLogicalPacketsSent.sum(),
+                this.lifetimeBulkReceivedMessages.sum(),
+                this.lifetimeBulkReceivedBytes.sum(),
+                this.lifetimeLogicalPacketsReceived.sum(),
+                this.lifetimeServerBytesOut.sum(),
+                this.lifetimeServerDatagramsOut.sum(),
+                this.lifetimeStaleDatagrams.sum(),
+                this.lifetimeNackIn.sum(),
+                this.lifetimeNackOut.sum(),
+                this.lifetimeBlackholedDatagramsIn.sum(),
+                this.lifetimeBlackholedDatagramsOut.sum(),
+                this.lifetimeOriginalDatagrams.sum(),
+                this.lifetimeOriginalDatagramBytes.sum(),
+                this.lifetimeNackRetransmittedDatagrams.sum(),
+                this.lifetimeNackRetransmittedBytes.sum(),
+                this.lifetimeTimeoutRetransmittedDatagrams.sum(),
+                this.lifetimeTimeoutRetransmittedBytes.sum(),
+                this.lifetimeAcknowledgementProgressEvents.sum(),
+                this.lifetimeAcknowledgementProgressBytes.sum(),
+                this.currentQueuedBytes.get(),
+                this.lifetimeMaxQueuedBytes.get(),
+                this.currentBytesInFlight.get(),
+                this.lifetimeMaxBytesInFlight.get(),
+                this.maxRetransmissionAttempt.get(),
+                this.recoveryObservedAtMillis,
+                this.congestionWindow,
+                this.slowStartThreshold,
+                this.smoothedRtt,
+                this.rttVariance,
+                this.retransmissionTimeout,
+                this.retransmittedDatagramsInFlight,
+                this.lastAckProgressAtMillis,
+                this.recoveryStartedAtMillis
+        );
     }
 
     public Snapshot snapshot() {
@@ -304,5 +496,50 @@ public final class PeerStats {
             this.maxQueuedBytes = maxQueuedBytes;
             this.lastState = lastState;
         }
+    }
+
+    public record TimelineSnapshot(
+            int id,
+            boolean impaired,
+            boolean channelOpen,
+            boolean channelActive,
+            boolean disconnected,
+            long disconnectEvents,
+            long usefulSentMessages,
+            long usefulSentBytes,
+            long logicalPacketsSent,
+            long usefulReceivedMessages,
+            long usefulReceivedBytes,
+            long logicalPacketsReceived,
+            long serverBytesOut,
+            long serverDatagramsOut,
+            long staleDatagrams,
+            long nackIn,
+            long nackOut,
+            long blackholedDatagramsIn,
+            long blackholedDatagramsOut,
+            long originalDatagrams,
+            long originalDatagramBytes,
+            long nackRetransmittedDatagrams,
+            long nackRetransmittedBytes,
+            long timeoutRetransmittedDatagrams,
+            long timeoutRetransmittedBytes,
+            long acknowledgementProgressEvents,
+            long acknowledgementProgressBytes,
+            long currentQueuedBytes,
+            long maxQueuedBytes,
+            long bytesInFlight,
+            long maxBytesInFlight,
+            int maxRetransmissionAttempt,
+            long recoveryObservedAtMillis,
+            double congestionWindow,
+            double slowStartThreshold,
+            double smoothedRtt,
+            double rttVariance,
+            long retransmissionTimeout,
+            int retransmittedDatagramsInFlight,
+            long lastAckProgressAtMillis,
+            long recoveryStartedAtMillis
+    ) {
     }
 }

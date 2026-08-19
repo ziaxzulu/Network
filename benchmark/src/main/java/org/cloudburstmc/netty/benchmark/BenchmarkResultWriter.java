@@ -50,6 +50,7 @@ public final class BenchmarkResultWriter {
             throw new IOException("Unable to create benchmark output directory: " + directory);
         }
         writeSummaryJson(result, new File(directory, "summary.json"));
+        writeTimeline(result, new File(directory, "timeline.jsonl"));
         writeTimeseriesCsv(result, new File(directory, "timeseries.csv"));
         writeLatencyData(result, new File(directory, "latency.hdr"));
         writeReport(result, new File(directory, "report.md"));
@@ -59,6 +60,18 @@ public final class BenchmarkResultWriter {
 
     private static void writeSummaryJson(BenchmarkRunResult result, File file) throws IOException {
         JSON.writeValue(file, SummaryJson.from(result));
+    }
+
+    private static void writeTimeline(BenchmarkRunResult result, File file) throws IOException {
+        if (result.timelineWasStreamed()) {
+            return;
+        }
+        try (BufferedWriter writer = writer(file)) {
+            for (BenchmarkTimeline.Record record : result.timelineRecords()) {
+                writer.write(JSON_LINE.writeValueAsString(record));
+                writer.write('\n');
+            }
+        }
     }
 
     private static void writeTimeseriesCsv(BenchmarkRunResult result, File file) throws IOException {
@@ -93,8 +106,19 @@ public final class BenchmarkResultWriter {
             writer.write("- Max queued bytes cap: `" + optionalLimit(result.config().maxQueuedBytes()) + "`\n");
             writer.write("- Impairment: `" + impairmentSummary(result.config()) + "`\n");
             writer.write("- Start at epoch ms: `" + startAt(result.config()) + "`\n");
+            writer.write("- Measurement window semantics: `" + result.config().measurementWindowSemantics() + "`\n");
+            writer.write("- Event timeline: `timeline.jsonl` at `" + result.config().timelineSampleIntervalMillis() + "ms` cadence\n");
             writer.write("- Git revision: `" + result.environment().gitRevision + "`\n");
             writer.write("- JDK: `" + result.environment().javaVersion + "` / `" + result.environment().javaVm + "`\n\n");
+            BenchmarkTimelineSummary.Snapshot timeline = result.timelineSummary();
+            if (timeline.sampleCount() > 0) {
+                writer.write("- Timeline max sampled cohort queued bytes: `" + timeline.maxSampledAllCurrentQueuedBytes()
+                        + "` (healthy `" + timeline.maxSampledHealthyCurrentQueuedBytes()
+                        + "`, affected `" + timeline.maxSampledAffectedCurrentQueuedBytes() + "`)\n");
+                writer.write("- Timeline max heap/direct-buffer/RSS bytes: `" + timeline.maxHeapUsedBytes()
+                        + "` / `" + valueOrUnavailable(timeline.maxDirectBufferPoolMemoryUsedBytes())
+                        + "` / `" + valueOrUnavailable(timeline.maxResidentSetSizeBytes()) + "`\n\n");
+            }
             writer.write("| Name | Iteration | Clients | Active | Open | Disconnected State | Payload | Batch ms | Logical/batch | Groups | Target Mbps | Target/client Mbps | Disappear Mode | Delivered Gbps | Logical pkt/s | Healthy Gbps | Affected Gbps | Undelivered Gbps | Affected Undelivered Gbps | Client Mbps p50 | Client Mbps p99 | Healthy Mbps p50 | Affected Mbps p50 | Send/Deliver | Affected Send/Deliver | Datagram Out/s | Affected Datagram Out/s | Stale/s | NACK Out/s | p95 RTT ms | p99 RTT ms | Fairness | Healthy Fairness | Affected Fairness | Disconnects | Blackhole In | Blackhole Out | Max Queue |\n");
             writer.write("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
             for (BenchmarkIterationResult iteration : result.iterations()) {
@@ -140,6 +164,9 @@ public final class BenchmarkResultWriter {
             }
             writer.write('\n');
             writer.write("## Stability\n\n");
+            if ("longitudinal-shared-session-windows".equals(result.config().measurementWindowSemantics())) {
+                writer.write("These rows are longitudinal windows from one shared connection cohort; they are not independent run repetitions.\n\n");
+            }
             writer.write(stabilitySummary(result.iterations()));
             List<CapacityRow> capacityRows = capacityRows(result);
             if (!capacityRows.isEmpty()) {
@@ -406,6 +433,10 @@ public final class BenchmarkResultWriter {
 
     private static String optionalLimit(int value) {
         return value > 0 ? Integer.toString(value) : "library default";
+    }
+
+    private static String valueOrUnavailable(Long value) {
+        return value == null ? "unavailable" : value.toString();
     }
 
     private static String startAt(BenchmarkConfig config) {
@@ -896,6 +927,13 @@ public final class BenchmarkResultWriter {
             long warmupMillis,
             long durationMillis,
             long startAtEpochMillis,
+            Long externalImpairmentAtEpochMillis,
+            Long externalBlackholeAtEpochMillis,
+            Long externalRecoveryAtEpochMillis,
+            long timelineSampleIntervalMillis,
+            String measurementWindowSemantics,
+            String timelineArtifact,
+            BenchmarkTimelineSummary.Snapshot timelineSummary,
             int iterationsRequested,
             EnvironmentJson environment,
             List<StabilityJson> stability,
@@ -934,6 +972,13 @@ public final class BenchmarkResultWriter {
                     config.warmupMillis(),
                     config.durationMillis(),
                     config.startAtEpochMillis(),
+                    config.externalImpairmentAtEpochMillis() > 0L ? config.externalImpairmentAtEpochMillis() : null,
+                    config.externalBlackholeAtEpochMillis() > 0L ? config.externalBlackholeAtEpochMillis() : null,
+                    config.externalRecoveryAtEpochMillis() > 0L ? config.externalRecoveryAtEpochMillis() : null,
+                    config.timelineSampleIntervalMillis(),
+                    config.measurementWindowSemantics(),
+                    "timeline.jsonl",
+                    result.timelineSummary(),
                     config.iterations(),
                     EnvironmentJson.from(result.environment()),
                     stability,

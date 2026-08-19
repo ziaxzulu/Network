@@ -6,11 +6,12 @@ veth pairs, and qdiscs. Candidate Java runs as the locked `rakbench` service
 account from a root-owned, read-only staged distribution.
 
 The passwordless launcher accepts no arguments. A small `zulu`-owned mode file
-selects one of five root-owned scenario definitions:
+selects one of six root-owned scenario definitions:
 
 | Mode | Purpose |
 | --- | --- |
 | `pilot` | Corrected six-profile downlink campaign plus a separate bidirectional disappearance case |
+| `transition` | Ten independent bidirectional 3-second blackhole-and-recovery repetitions with fresh sessions and namespaces |
 | `long-hold` | Five-minute severe downlink and permanent bidirectional disappearance cases |
 | `cap-sweep` | Poor, severe, and disappearance runs at 1, 4, and 8 MiB application queue caps |
 | `cohort-sweep` | Poor, severe, and disappearance runs with 25% and 50% affected cohorts |
@@ -64,6 +65,15 @@ sudo -n /usr/local/sbin/raknet-netns-pilot
 Results are readable by `zulu` below
 `/var/lib/raknet-netns-benchmark/runs/netns-goal-<mode>-*`. Each run records the
 candidate Git revision, the exact staged-jar hashes, and the selected mode.
+Worker `timeline.jsonl` files are flushed continuously at 100-250 ms cadence;
+qdisc evidence includes millisecond apply bounds and one-second `tc -s`
+snapshots. Transition runs also record the independently scheduled blackhole and
+path-restoration epochs. This preserves pre-failure retry, queue, direct-memory,
+CPU, recovery, and peer-lifecycle evidence even when a worker does not reach its
+final summary.
+External transition timing includes the same probe-derived warmup drain used by
+the workers, so `--blackhole-after` is relative to measurement rather than the
+end of warmup.
 
 The launcher rejects concurrent runs, untrusted installed scripts, symlinked or
 oversized mode controls, and missing candidate distributions. Each subcampaign

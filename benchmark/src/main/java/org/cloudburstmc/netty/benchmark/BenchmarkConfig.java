@@ -42,6 +42,10 @@ public final class BenchmarkConfig {
     private DisappearanceMode disappearanceMode = DisappearanceMode.CLOSE;
     private long startDelayMillis = 3000;
     private long startAtEpochMillis;
+    private long externalImpairmentAtEpochMillis;
+    private long externalBlackholeAtEpochMillis;
+    private long externalRecoveryAtEpochMillis;
+    private long timelineSampleIntervalMillis = 200L;
     private int iterations = 3;
     private int workers = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
     private int packetLimit;
@@ -142,6 +146,15 @@ public final class BenchmarkConfig {
             this.startDelayMillis = parseDurationMillis(value);
         } else if ("start-at-epoch-ms".equals(key) || "start-at-epoch-millis".equals(key)) {
             this.startAtEpochMillis = parseNonNegativeLong(key, value);
+        } else if ("external-impairment-at-epoch-ms".equals(key)
+                || "external-netem-at-epoch-ms".equals(key)) {
+            this.externalImpairmentAtEpochMillis = parseNonNegativeLong(key, value);
+        } else if ("external-blackhole-at-epoch-ms".equals(key)) {
+            this.externalBlackholeAtEpochMillis = parseNonNegativeLong(key, value);
+        } else if ("external-recovery-at-epoch-ms".equals(key)) {
+            this.externalRecoveryAtEpochMillis = parseNonNegativeLong(key, value);
+        } else if ("timeline-sample-interval".equals(key)) {
+            this.timelineSampleIntervalMillis = parseDurationMillis(value);
         } else if ("iterations".equals(key)) {
             this.iterations = parsePositiveInt(key, value);
         } else if ("workers".equals(key)) {
@@ -217,6 +230,9 @@ public final class BenchmarkConfig {
         }
         if (this.batchIntervalMillis <= 0) {
             throw new IllegalArgumentException("--batch-interval must be positive");
+        }
+        if (this.timelineSampleIntervalMillis < 100L || this.timelineSampleIntervalMillis > 250L) {
+            throw new IllegalArgumentException("--timeline-sample-interval must be between 100ms and 250ms");
         }
         if (this.disappearingClients > 0 && this.disappearAfterMillis() >= this.durationMillis) {
             throw new IllegalArgumentException("--disappear-after must be less than --duration");
@@ -326,6 +342,31 @@ public final class BenchmarkConfig {
 
     public long startAtEpochMillis() {
         return this.startAtEpochMillis;
+    }
+
+    public long externalImpairmentAtEpochMillis() {
+        return this.externalImpairmentAtEpochMillis;
+    }
+
+    public long externalBlackholeAtEpochMillis() {
+        return this.externalBlackholeAtEpochMillis;
+    }
+
+    public long externalRecoveryAtEpochMillis() {
+        return this.externalRecoveryAtEpochMillis;
+    }
+
+    public long timelineSampleIntervalMillis() {
+        return this.timelineSampleIntervalMillis;
+    }
+
+    public String measurementWindowSemantics() {
+        if (this.role == BenchmarkRole.SERVER || this.role == BenchmarkRole.CLIENT
+                || this.scenario == BenchmarkScenario.SERVER_WORKER
+                || this.scenario == BenchmarkScenario.RECEIVER_WORKER) {
+            return "longitudinal-shared-session-windows";
+        }
+        return "independent-session-iterations";
     }
 
     public int iterations() {

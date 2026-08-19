@@ -57,6 +57,9 @@ public final class BenchmarkMain {
         System.out.println("  --rate-mbps 1000 --per-client-mbps 5 --target-gbps 1 --rates-mbps 100,500,1000,unlimited");
         System.out.println("  --warmup 5s --duration 10s --iterations 3 --probe-interval 100ms --start-delay 3s");
         System.out.println("  --start-at-epoch-ms <epoch-ms> --disappear-after 5s");
+        System.out.println("  --external-impairment-at-epoch-ms <epoch-ms> --external-blackhole-at-epoch-ms <epoch-ms>");
+        System.out.println("  --external-recovery-at-epoch-ms <epoch-ms>");
+        System.out.println("  --timeline-sample-interval 200ms (allowed range 100ms..250ms)");
         System.out.println("  --disappear-mode close|stop-reading|blackhole");
         System.out.println("  --out build/benchmark-results --run-id my-run");
     }

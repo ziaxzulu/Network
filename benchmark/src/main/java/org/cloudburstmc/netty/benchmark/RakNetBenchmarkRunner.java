@@ -48,14 +48,19 @@ import java.util.concurrent.locks.LockSupport;
 public final class RakNetBenchmarkRunner {
     public BenchmarkRunResult run(BenchmarkConfig config) throws Exception {
         BenchmarkRunResult result = new BenchmarkRunResult(config, EnvironmentInfo.capture());
-        if (config.role() == BenchmarkRole.CLIENT || config.scenario() == BenchmarkScenario.RECEIVER_WORKER) {
-            runClientWorker(config, result);
-        } else if (config.role() == BenchmarkRole.SERVER || config.scenario() == BenchmarkScenario.SERVER_WORKER) {
-            runServerWorker(config, result);
-        } else {
-            for (BenchmarkCase benchmarkCase : cases(config)) {
-                runLocal(config, benchmarkCase, result);
+        result.openTimelineStream();
+        try {
+            if (config.role() == BenchmarkRole.CLIENT || config.scenario() == BenchmarkScenario.RECEIVER_WORKER) {
+                runClientWorker(config, result);
+            } else if (config.role() == BenchmarkRole.SERVER || config.scenario() == BenchmarkScenario.SERVER_WORKER) {
+                runServerWorker(config, result);
+            } else {
+                for (BenchmarkCase benchmarkCase : cases(config)) {
+                    runLocal(config, benchmarkCase, result);
+                }
             }
+        } finally {
+            result.closeTimelineStream();
         }
         return result;
     }
@@ -109,8 +114,12 @@ public final class RakNetBenchmarkRunner {
 
     private void runLocal(BenchmarkConfig config, BenchmarkCase benchmarkCase, BenchmarkRunResult result) throws Exception {
         for (int iteration = 1; iteration <= config.iterations(); iteration++) {
-            try (LocalSession session = openLocalSession(config, benchmarkCase)) {
-                runLocalIteration(config, benchmarkCase, result, session, iteration);
+            try (LocalSession session = openLocalSession(config, benchmarkCase);
+                 BenchmarkTimelineRecorder timeline = new BenchmarkTimelineRecorder(
+                         result, benchmarkCase.name(), benchmarkCase.clients(), benchmarkCase.impairedClients(),
+                         session.metrics::timelineSnapshots, BenchmarkTimelineRecorder.Capabilities.LOCAL)) {
+                timeline.start();
+                runLocalIteration(config, benchmarkCase, result, session, iteration, timeline);
             }
         }
     }
@@ -157,14 +166,17 @@ public final class RakNetBenchmarkRunner {
     }
 
     private void runLocalIteration(BenchmarkConfig config, BenchmarkCase benchmarkCase, BenchmarkRunResult result,
-                                   LocalSession session, int iteration) {
+                                   LocalSession session, int iteration, BenchmarkTimelineRecorder timeline) {
+        timeline.markPhase("warmup", iteration);
         runTraffic(config, benchmarkCase, session.serverPeers, session.probeRtt, session.metrics, config.warmupMillis());
+        timeline.markPhase("warmup-drain", iteration);
         drainWarmup(config);
         session.metrics.resetMeasurement();
         session.probeRtt.clear();
+        timeline.markPhase("measurement", iteration);
         long started = System.nanoTime();
         runTraffic(config, benchmarkCase, session.serverPeers, session.probeRtt, session.metrics,
-                config.durationMillis(), session.clientChannels, session.blackholes, true);
+                config.durationMillis(), session.clientChannels, session.blackholes, true, timeline);
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
         result.add(new BenchmarkIterationResult(
                 benchmarkCase.name(),
@@ -183,30 +195,41 @@ public final class RakNetBenchmarkRunner {
                 session.probeRtt.snapshot(),
                 session.metrics.peerSnapshots()
         ));
+        timeline.markPhase("measurement-complete", iteration);
     }
 
     private void runServerWorker(BenchmarkConfig config, BenchmarkRunResult result) throws Exception {
         BenchmarkCase benchmarkCase = singleCase(config, config.scenario().cliName(), config.payloadSize(), config.reliability(), config.rateMbps());
         EventLoopGroup serverGroup = new NioEventLoopGroup(config.workers());
         Channel serverChannel = null;
+        BenchmarkTimelineRecorder timeline = null;
         try {
             LatencyHistogram probeRtt = new LatencyHistogram();
             BenchmarkServerMetrics metrics = new BenchmarkServerMetrics();
             List<ServerPeer> serverPeers = Collections.synchronizedList(new ArrayList<>());
             AtomicInteger accepted = new AtomicInteger();
             serverChannel = startServer(config, benchmarkCase, serverGroup, metrics, new ConcurrentLinkedQueue<>(), serverPeers, accepted, probeRtt);
+            timeline = new BenchmarkTimelineRecorder(
+                    result, benchmarkCase.name(), benchmarkCase.clients(), benchmarkCase.impairedClients(),
+                    metrics::timelineSnapshots, BenchmarkTimelineRecorder.Capabilities.SERVER);
+            timeline.start();
+            timeline.markPhase("awaiting-peers", null);
             System.out.println("Server worker listening on " + serverChannel.localAddress());
             long waitDeadline = System.currentTimeMillis() + config.startDelayMillis();
             while (serverPeers.size() < config.clients() && System.currentTimeMillis() < waitDeadline) {
                 Thread.sleep(50L);
             }
             waitForServerPeers(serverPeers, Math.min(config.clients(), Math.max(1, serverPeers.size())));
+            timeline.markPhase("awaiting-coordinated-start", null);
             waitUntilStartAt(config, "server worker");
             for (int iteration = 1; iteration <= config.iterations(); iteration++) {
+                timeline.markPhase("warmup", iteration);
                 runTraffic(config, benchmarkCase, serverPeers, probeRtt, metrics, config.warmupMillis());
+                timeline.markPhase("warmup-drain", iteration);
                 drainWarmup(config);
                 metrics.resetMeasurement();
                 probeRtt.clear();
+                timeline.markPhase("measurement", iteration);
                 long started = System.nanoTime();
                 runTraffic(config, benchmarkCase, serverPeers, probeRtt, metrics, config.durationMillis());
                 long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
@@ -227,8 +250,13 @@ public final class RakNetBenchmarkRunner {
                         probeRtt.snapshot(),
                         metrics.peerSnapshots()
                 ));
+                timeline.markPhase("measurement-complete", iteration);
             }
+            timeline.markPhase("run-complete", null);
         } finally {
+            if (timeline != null) {
+                timeline.close();
+            }
             if (serverChannel != null) {
                 serverChannel.close().awaitUninterruptibly();
             }
@@ -252,6 +280,7 @@ public final class RakNetBenchmarkRunner {
         List<DatagramBlackholeHandler> blackholes = new ArrayList<>();
         List<DatagramImpairmentHandler> impairments = new ArrayList<>();
         List<PeerStats> peers = new ArrayList<>();
+        BenchmarkTimelineRecorder timeline = null;
         try {
             CountDownLatch connected = new CountDownLatch(config.clients());
             InetSocketAddress address = new InetSocketAddress(config.host(), config.port());
@@ -263,19 +292,28 @@ public final class RakNetBenchmarkRunner {
                 blackholes.add(connection.blackhole());
                 impairments.add(connection.impairment());
             }
+            timeline = new BenchmarkTimelineRecorder(
+                    result, benchmarkCase.name(), benchmarkCase.clients(), benchmarkCase.impairedClients(),
+                    () -> clientTimelineSnapshots(peers, channels), BenchmarkTimelineRecorder.Capabilities.RECEIVER);
+            timeline.start();
+            timeline.markPhase("awaiting-peers", null);
             if (!connected.await(Math.max(30_000L, config.clients() * 100L), TimeUnit.MILLISECONDS)) {
                 throw new IllegalStateException("Timed out waiting for client worker connections");
             }
             enableImpairments(impairments);
+            timeline.markPhase("awaiting-coordinated-start", null);
             waitUntilStartAt(config, "receiver worker");
             for (int iteration = 1; iteration <= config.iterations(); iteration++) {
+                timeline.markPhase("warmup", iteration);
                 Thread.sleep(config.warmupMillis());
+                timeline.markPhase("warmup-drain", iteration);
                 drainWarmup(config);
                 for (PeerStats peer : peers) {
                     peer.resetMeasurement();
                 }
+                timeline.markPhase("measurement", iteration);
                 long started = System.nanoTime();
-                runClientWorkerMeasurement(config, benchmarkCase, channels, blackholes);
+                runClientWorkerMeasurement(config, benchmarkCase, channels, blackholes, timeline);
                 long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
                 List<PeerStats.Snapshot> snapshots = new ArrayList<>();
                 for (int i = 0; i < peers.size(); i++) {
@@ -299,8 +337,13 @@ public final class RakNetBenchmarkRunner {
                         new LatencyHistogram().snapshot(),
                         snapshots
                 ));
+                timeline.markPhase("measurement-complete", iteration);
             }
+            timeline.markPhase("run-complete", null);
         } finally {
+            if (timeline != null) {
+                timeline.close();
+            }
             for (Channel channel : channels) {
                 channel.close().awaitUninterruptibly();
             }
@@ -328,7 +371,8 @@ public final class RakNetBenchmarkRunner {
 
     private static void runClientWorkerMeasurement(BenchmarkConfig config, BenchmarkCase benchmarkCase,
                                                    List<Channel> channels,
-                                                   List<DatagramBlackholeHandler> blackholes) {
+                                                   List<DatagramBlackholeHandler> blackholes,
+                                                   BenchmarkTimelineRecorder timeline) {
         long endNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.durationMillis());
         long disappearAtNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(benchmarkCase.disappearAfterMillis());
         boolean disappeared = benchmarkCase.disappearingClients() == 0;
@@ -336,6 +380,7 @@ public final class RakNetBenchmarkRunner {
             long now = System.nanoTime();
             if (!disappeared && now >= disappearAtNanos) {
                 applyClientDisappearance(channels, blackholes, benchmarkCase);
+                timeline.recordEvent("client-disappearance-applied", "benchmark-workload");
                 disappeared = true;
             }
             long sleepNanos = Math.min(endNanos - now, TimeUnit.MILLISECONDS.toNanos(50L));
@@ -432,6 +477,7 @@ public final class RakNetBenchmarkRunner {
                     }
                 });
         Channel channel = bootstrap.connect(serverAddress).awaitUninterruptibly().channel();
+        channel.closeFuture().addListener(ignored -> peer.addDisconnect());
         return new ClientConnection(channel, blackhole, impairment);
     }
 
@@ -462,25 +508,38 @@ public final class RakNetBenchmarkRunner {
         }
     }
 
+    private static List<PeerStats.TimelineSnapshot> clientTimelineSnapshots(List<PeerStats> peers,
+                                                                            List<Channel> channels) {
+        List<PeerStats.TimelineSnapshot> snapshots = new ArrayList<>(peers.size());
+        int count = Math.min(peers.size(), channels.size());
+        for (int i = 0; i < count; i++) {
+            Channel channel = channels.get(i);
+            snapshots.add(peers.get(i).timelineSnapshot(channel.isOpen(), channel.isActive()));
+        }
+        return snapshots;
+    }
+
     private void runTraffic(BenchmarkConfig config, BenchmarkCase benchmarkCase, List<ServerPeer> peers,
                             LatencyHistogram probeRtt, BenchmarkServerMetrics metrics, long durationMillis) {
         runTraffic(config, benchmarkCase, peers, probeRtt, metrics, durationMillis, Collections.emptyList(),
-                Collections.emptyList(), false);
+                Collections.emptyList(), false, null);
     }
 
     private void runTraffic(BenchmarkConfig config, BenchmarkCase benchmarkCase, List<ServerPeer> peers,
                             LatencyHistogram probeRtt, BenchmarkServerMetrics metrics, long durationMillis,
                             List<Channel> clientChannels, List<DatagramBlackholeHandler> blackholes,
-                            boolean allowDisappearance) {
+                            boolean allowDisappearance, BenchmarkTimelineRecorder timeline) {
         if (durationMillis <= 0L || peers.isEmpty()) {
             return;
         }
         if (benchmarkCase.batched()) {
-            runBatchedTraffic(config, benchmarkCase, peers, durationMillis, clientChannels, blackholes, allowDisappearance);
+            runBatchedTraffic(config, benchmarkCase, peers, durationMillis, clientChannels, blackholes,
+                    allowDisappearance, timeline);
             return;
         }
         if (benchmarkCase.pacedTransfer()) {
-            runPacedBulkTraffic(config, benchmarkCase, peers, durationMillis, clientChannels, blackholes, allowDisappearance);
+            runPacedBulkTraffic(config, benchmarkCase, peers, durationMillis, clientChannels, blackholes,
+                    allowDisappearance, timeline);
             return;
         }
         final long endNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durationMillis);
@@ -499,6 +558,9 @@ public final class RakNetBenchmarkRunner {
             long now = System.nanoTime();
             if (!disappeared && now >= disappearAtNanos) {
                 applyDisappearance(clientChannels, blackholes, peers, benchmarkCase);
+                if (timeline != null) {
+                    timeline.recordEvent("client-disappearance-applied", "benchmark-workload");
+                }
                 disappeared = true;
             }
 
@@ -531,7 +593,8 @@ public final class RakNetBenchmarkRunner {
 
     private void runBatchedTraffic(BenchmarkConfig config, BenchmarkCase benchmarkCase, List<ServerPeer> peers,
                                    long durationMillis, List<Channel> clientChannels,
-                                   List<DatagramBlackholeHandler> blackholes, boolean allowDisappearance) {
+                                   List<DatagramBlackholeHandler> blackholes, boolean allowDisappearance,
+                                   BenchmarkTimelineRecorder timeline) {
         final long endNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durationMillis);
         final long probeIntervalNanos = TimeUnit.MILLISECONDS.toNanos(config.probeIntervalMillis());
         final long batchIntervalNanos = TimeUnit.MILLISECONDS.toNanos(benchmarkCase.batchIntervalMillis());
@@ -547,6 +610,9 @@ public final class RakNetBenchmarkRunner {
             long now = System.nanoTime();
             if (!disappeared && now >= disappearAtNanos) {
                 applyDisappearance(clientChannels, blackholes, peers, benchmarkCase);
+                if (timeline != null) {
+                    timeline.recordEvent("client-disappearance-applied", "benchmark-workload");
+                }
                 disappeared = true;
             }
 
@@ -570,7 +636,8 @@ public final class RakNetBenchmarkRunner {
 
     private void runPacedBulkTraffic(BenchmarkConfig config, BenchmarkCase benchmarkCase, List<ServerPeer> peers,
                                      long durationMillis, List<Channel> clientChannels,
-                                     List<DatagramBlackholeHandler> blackholes, boolean allowDisappearance) {
+                                     List<DatagramBlackholeHandler> blackholes, boolean allowDisappearance,
+                                     BenchmarkTimelineRecorder timeline) {
         final long endNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durationMillis);
         final long probeIntervalNanos = TimeUnit.MILLISECONDS.toNanos(config.probeIntervalMillis());
         final long transferIntervalNanos = TimeUnit.MILLISECONDS.toNanos(benchmarkCase.batchIntervalMillis());
@@ -585,6 +652,9 @@ public final class RakNetBenchmarkRunner {
             long now = System.nanoTime();
             if (!disappeared && now >= disappearAtNanos) {
                 applyDisappearance(clientChannels, blackholes, peers, benchmarkCase);
+                if (timeline != null) {
+                    timeline.recordEvent("client-disappearance-applied", "benchmark-workload");
+                }
                 disappeared = true;
             }
 

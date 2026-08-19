@@ -34,6 +34,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
     private long sendTime;
     private long nextSend;
     private int sequenceIndex = -1;
+    private int retransmissionCount;
 
     public static RakDatagramPacket newInstance() {
         return RECYCLER.get();
@@ -90,6 +91,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         this.sendTime = 0;
         this.nextSend = 0;
         this.sequenceIndex = -1;
+        this.retransmissionCount = 0;
         setRefCnt(1);
         this.handle.recycle(this);
     }
@@ -138,6 +140,17 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         this.sequenceIndex = sequenceIndex;
     }
 
+    public int getRetransmissionCount() {
+        return this.retransmissionCount;
+    }
+
+    /**
+     * Marks this datagram as retransmitted and returns the one-based attempt number.
+     */
+    public int markRetransmitted() {
+        return ++this.retransmissionCount;
+    }
+
     @Override
     public String toString() {
         return "RakDatagramPacket{" +
@@ -147,6 +160,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
                 ", sendTime=" + sendTime +
                 ", nextSend=" + nextSend +
                 ", sequenceIndex=" + sequenceIndex +
+                ", retransmissionCount=" + retransmissionCount +
                 '}';
     }
 }

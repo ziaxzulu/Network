@@ -68,6 +68,7 @@ require_trusted_path "$campaign"
 require_trusted_path "$install_root/benchmark/scripts/run-netns-worker-smoke.sh"
 require_trusted_path "$install_root/benchmark/scripts/merge-worker-results.sh"
 require_trusted_path "$install_root/benchmark/scripts/raknet-netem.sh"
+require_trusted_path "$install_root/benchmark/scripts/validate-qdisc-timeseries.sh"
 require_trusted_path "$state_root"
 if [[ ! -f "$mode_file" || -L "$mode_file" ]]; then
   echo "Goal mode file must be a regular non-symlink file: $mode_file" >&2
@@ -89,7 +90,7 @@ fi
 
 mode="$(<"$mode_file")"
 case "$mode" in
-  pilot|long-hold|cap-sweep|cohort-sweep|all)
+  pilot|transition|long-hold|cap-sweep|cohort-sweep|all)
     ;;
   *)
     echo "Unsupported goal mode in $mode_file" >&2
@@ -249,6 +250,22 @@ run_pilot() {
     --direction both
 }
 
+run_transition() {
+  local repetition label
+  for ((repetition = 1; repetition <= 10; repetition++)); do
+    printf -v label '%02d' "$repetition"
+    run_campaign "transition-$label" \
+      --profiles blackhole \
+      --affected-clients 10 \
+      --warmup 5s \
+      --duration 20s \
+      --iterations 1 \
+      --blackhole-after 5s \
+      --blackhole-duration 3s \
+      --direction both
+  done
+}
+
 run_long_hold() {
   run_campaign long-hold-severe \
     --profiles severe \
@@ -309,6 +326,9 @@ case "$mode" in
   pilot)
     run_pilot
     ;;
+  transition)
+    run_transition
+    ;;
   long-hold)
     run_long_hold
     ;;
@@ -320,6 +340,7 @@ case "$mode" in
     ;;
   all)
     run_pilot
+    run_transition
     run_long_hold
     run_cap_sweep
     run_cohort_sweep
