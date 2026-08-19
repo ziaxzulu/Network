@@ -557,6 +557,26 @@ public class RakSlidingWindow {
         return this.modelController == null ? -1D : this.modelController.getRecentLossRate();
     }
 
+    public long getModelLossResponseCount() {
+        return this.modelController == null ? 0L : this.modelController.getLossResponseCount();
+    }
+
+    public long getModelHardLossResponseCount() {
+        return this.modelController == null ? 0L : this.modelController.getHardLossResponseCount();
+    }
+
+    public long getModelDelayLossResponseCount() {
+        return this.modelController == null ? 0L : this.modelController.getDelayLossResponseCount();
+    }
+
+    double getModelInflightLimit() {
+        return this.modelController == null ? Double.POSITIVE_INFINITY : this.modelController.getInflightLimit();
+    }
+
+    boolean isModelLossResponseHeld() {
+        return this.modelController != null && this.modelController.isLossResponseHeld();
+    }
+
     /** Clears session-owned accounting during terminal resource reclamation. */
     public void close() {
         this.unackedBytes = 0;

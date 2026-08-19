@@ -55,8 +55,11 @@ final class RakModelCongestionController {
     private static final long PATH_COOLDOWN_MAX_MILLIS = 1_000L;
     private static final int PATH_MAX_ATTEMPTS = 3;
     private static final int STARTUP_MINIMUM_ROUND_MTUS = 4;
-    private static final int LOSS_BOUND_RELEASE_ROUNDS = 3;
-    private static final double LOSS_BOUND_GROWTH = 1.05D;
+    private static final int LOSS_BUCKET_MINIMUM_PACKETS = 64;
+    private static final int DELAY_LOSS_MINIMUM_PACKETS = 128;
+    private static final int HARD_LOSS_MINIMUM_LOST_PACKETS = 8;
+    private static final int DELAY_LOSS_MINIMUM_LOST_PACKETS = 4;
+    private static final int LOSS_CLEAR_BUCKETS_TO_RELEASE = 2;
 
     private final int mtu;
     private final long sendQuantumMillis;
@@ -70,11 +73,29 @@ final class RakModelCongestionController {
     private double fullBandwidthBytesPerMillis;
     private int fullBandwidthRounds;
     private boolean startup = true;
-    private long startupCongestionEvidenceBytes;
-    private long startupLostEvidenceBytes;
     private boolean persistentCongestion;
     private double inflightLimit = Double.POSITIVE_INFINITY;
-    private int lossFreeRounds;
+    private LossState lossState = LossState.ARMED;
+    private LossHoldKind lossHoldKind = LossHoldKind.NONE;
+    private int lossClearBuckets;
+    private long lossResponseCount;
+    private long hardLossResponseCount;
+    private long delayLossResponseCount;
+    private long lossBucketDeliveredPackets;
+    private long lossBucketLostPackets;
+    private long lossBucketDeliveredBytes;
+    private long lossBucketLostBytes;
+    private int lossBucketPeakInFlight;
+    private double lossBucketMaximumCwnd;
+    private long delayLossBucketDeliveredPackets;
+    private long delayLossBucketLostPackets;
+    private long delayLossBucketDeliveredBytes;
+    private long delayLossBucketLostBytes;
+    private int delayLossBucketPeakInFlight;
+    private double delayLossBucketMaximumCwnd;
+    private double delayLossBucketMaximumRttRatio = -1D;
+    private boolean delayLossBucketEvidenceActionable = true;
+    private double lossRecoveryCwnd;
 
     private long deliveredBytes;
     private long deliveredTimeMillis;
@@ -82,11 +103,19 @@ final class RakModelCongestionController {
     private long nextRoundDelivered;
     private long roundCount;
     private int bandwidthFilterIndex;
+    private long roundDeliveredPackets;
+    private long roundLostPackets;
     private long roundDeliveredBytes;
     private long roundLostBytes;
     private int roundMaxInFlight;
+    private long delayRoundDeliveredPackets;
+    private long delayRoundLostPackets;
+    private long delayRoundDeliveredBytes;
+    private long delayRoundLostBytes;
+    private int delayRoundMaxInFlight;
+    private double delayRoundMaximumRttRatio = -1D;
+    private boolean delayRoundEvidenceActionable = true;
     private double recentLossRate = -1D;
-    private double latestSmoothedRtt = -1D;
 
     private long minimumRttMillis = Long.MAX_VALUE;
     private long minimumRttTimestampMillis = -1L;
@@ -212,10 +241,6 @@ final class RakModelCongestionController {
             this.updateMinimumRtt(nowMillis, Math.max(1L, rttSampleMillis), txInFlight,
                     currentBytesInFlight, priorDelivered, modelSendTime);
         }
-        if (smoothedRttMillis >= 0D) {
-            this.latestSmoothedRtt = smoothedRttMillis;
-        }
-
         long ackElapsed = nowMillis - deliveredTimeAtSend;
         long sendElapsed = modelSendTime - packetFirstSendTime;
         this.deliveredBytes += acknowledgedBytes;
@@ -232,8 +257,13 @@ final class RakModelCongestionController {
             this.nextRoundDelivered = this.deliveredBytes;
         }
 
-        this.roundDeliveredBytes += acknowledgedBytes;
+        this.roundDeliveredPackets = saturatingAdd(this.roundDeliveredPackets, 1L);
+        this.roundDeliveredBytes = saturatingAdd(this.roundDeliveredBytes, acknowledgedBytes);
         this.roundMaxInFlight = Math.max(this.roundMaxInFlight, txInFlight);
+        this.delayRoundDeliveredPackets = saturatingAdd(this.delayRoundDeliveredPackets, 1L);
+        this.delayRoundDeliveredBytes = saturatingAdd(this.delayRoundDeliveredBytes, acknowledgedBytes);
+        this.delayRoundMaxInFlight = Math.max(this.delayRoundMaxInFlight, txInFlight);
+        this.delayRoundEvidenceActionable &= !this.startup && this.isPathDelayEvidenceActionable();
 
         long interval = Math.max(ackElapsed, sendElapsed);
         if (!ambiguousRetransmission && interval > 0L && this.minimumRttMillis != Long.MAX_VALUE
@@ -263,11 +293,24 @@ final class RakModelCongestionController {
     }
 
     private void onLost(int size, int txInFlight, double smoothedRttMillis) {
-        this.roundLostBytes += size;
-        this.roundMaxInFlight = Math.max(this.roundMaxInFlight, txInFlight);
-        if (smoothedRttMillis >= 0D) {
-            this.latestSmoothedRtt = smoothedRttMillis;
+        if (this.roundLostPackets == 0L && this.lossBucketLostPackets == 0L) {
+            // Preserve the last window before ACK/loss processing can lower the estimator during this episode.
+            this.lossBucketMaximumCwnd = Math.max(this.lossBucketMaximumCwnd, this.cwnd);
         }
+        if (this.delayRoundLostPackets == 0L && this.delayLossBucketLostPackets == 0L) {
+            this.delayLossBucketMaximumCwnd = Math.max(this.delayLossBucketMaximumCwnd, this.cwnd);
+        }
+        this.roundLostPackets = saturatingAdd(this.roundLostPackets, 1L);
+        this.roundLostBytes = saturatingAdd(this.roundLostBytes, size);
+        this.roundMaxInFlight = Math.max(this.roundMaxInFlight, txInFlight);
+        this.delayRoundLostPackets = saturatingAdd(this.delayRoundLostPackets, 1L);
+        this.delayRoundLostBytes = saturatingAdd(this.delayRoundLostBytes, size);
+        this.delayRoundMaxInFlight = Math.max(this.delayRoundMaxInFlight, txInFlight);
+        if (smoothedRttMillis >= 0D && this.minimumRttMillis != Long.MAX_VALUE) {
+            this.delayRoundMaximumRttRatio = Math.max(
+                    this.delayRoundMaximumRttRatio, smoothedRttMillis / this.minimumRttMillis);
+        }
+        this.delayRoundEvidenceActionable &= !this.startup && this.isPathDelayEvidenceActionable();
     }
 
     void onPersistentCongestion() {
@@ -275,66 +318,214 @@ final class RakModelCongestionController {
         this.startup = true;
         this.fullBandwidthBytesPerMillis = 0D;
         this.fullBandwidthRounds = 0;
-        this.startupCongestionEvidenceBytes = 0L;
-        this.startupLostEvidenceBytes = 0L;
         this.maxBandwidthBytesPerMillis = 0D;
         for (int i = 0; i < this.bandwidthFilter.length; i++) {
             this.bandwidthFilter[i] = 0D;
         }
         this.bandwidthFilterIndex = 0;
         this.inflightLimit = this.minimumCwnd;
-        this.lossFreeRounds = 0;
+        this.lossState = LossState.ARMED;
+        this.lossHoldKind = LossHoldKind.NONE;
+        this.lossClearBuckets = 0;
+        this.lossRecoveryCwnd = 0D;
+        this.resetLossBuckets();
+        this.resetRoundLossEvidence();
+        this.recentLossRate = -1D;
         this.pacingTokens = 0D;
         this.resetPathTransition();
         this.persistentCongestion = true;
     }
 
     private void finishRound() {
-        long total = this.roundDeliveredBytes + this.roundLostBytes;
-        if (total > 0L) {
-            double roundLossRate = (double) this.roundLostBytes / total;
-            this.recentLossRate = roundLossRate;
-            double controlLossRate = roundLossRate;
-            if (this.startup) {
-                this.startupCongestionEvidenceBytes = saturatingAdd(
-                        this.startupCongestionEvidenceBytes, total);
-                this.startupLostEvidenceBytes = saturatingAdd(
-                        this.startupLostEvidenceBytes, this.roundLostBytes);
-                controlLossRate = (double) this.startupLostEvidenceBytes
-                        / this.startupCongestionEvidenceBytes;
-            }
-            boolean inflatedDelay = !this.startup && this.minimumRttMillis != Long.MAX_VALUE
-                    && this.latestSmoothedRtt >= 0D
-                    && !this.isPathDelayResponseSuppressed()
-                    && this.latestSmoothedRtt >= this.minimumRttMillis * DELAY_INFLATION_THRESHOLD;
-            boolean bootstrapEvidence = !this.startup
-                    || this.startupCongestionEvidenceBytes >= STARTUP_MINIMUM_ROUND_MTUS * (long) this.mtu;
-            boolean congestionSignal = bootstrapEvidence && (controlLossRate >= HARD_LOSS_THRESHOLD
-                    || (controlLossRate > LOSS_THRESHOLD && inflatedDelay));
-            if (congestionSignal) {
-                double lossBound = this.roundMaxInFlight > 0
-                        ? Math.min(this.cwnd * LOSS_BETA, this.roundMaxInFlight * LOSS_BETA)
-                        : this.cwnd * LOSS_BETA;
-                this.cwnd = Math.max(this.minimumCwnd, lossBound);
+        long roundTotalBytes = saturatingAdd(this.roundDeliveredBytes, this.roundLostBytes);
+        if (roundTotalBytes > 0L) {
+            this.recentLossRate = (double) this.roundLostBytes / roundTotalBytes;
+            this.lossBucketDeliveredPackets = saturatingAdd(
+                    this.lossBucketDeliveredPackets, this.roundDeliveredPackets);
+            this.lossBucketLostPackets = saturatingAdd(
+                    this.lossBucketLostPackets, this.roundLostPackets);
+            this.lossBucketDeliveredBytes = saturatingAdd(
+                    this.lossBucketDeliveredBytes, this.roundDeliveredBytes);
+            this.lossBucketLostBytes = saturatingAdd(
+                    this.lossBucketLostBytes, this.roundLostBytes);
+            this.lossBucketPeakInFlight = Math.max(this.lossBucketPeakInFlight, this.roundMaxInFlight);
+            this.lossBucketMaximumCwnd = Math.max(this.lossBucketMaximumCwnd, this.cwnd);
+            this.delayLossBucketDeliveredPackets = saturatingAdd(
+                    this.delayLossBucketDeliveredPackets, this.delayRoundDeliveredPackets);
+            this.delayLossBucketLostPackets = saturatingAdd(
+                    this.delayLossBucketLostPackets, this.delayRoundLostPackets);
+            this.delayLossBucketDeliveredBytes = saturatingAdd(
+                    this.delayLossBucketDeliveredBytes, this.delayRoundDeliveredBytes);
+            this.delayLossBucketLostBytes = saturatingAdd(
+                    this.delayLossBucketLostBytes, this.delayRoundLostBytes);
+            this.delayLossBucketPeakInFlight = Math.max(
+                    this.delayLossBucketPeakInFlight, this.delayRoundMaxInFlight);
+            this.delayLossBucketMaximumCwnd = Math.max(this.delayLossBucketMaximumCwnd, this.cwnd);
+            this.delayLossBucketMaximumRttRatio = Math.max(
+                    this.delayLossBucketMaximumRttRatio, this.delayRoundMaximumRttRatio);
+            this.delayLossBucketEvidenceActionable &= this.delayRoundEvidenceActionable;
+            this.evaluateLossBucket();
+        }
+        this.resetRoundLossEvidence();
+    }
+
+    private void evaluateLossBucket() {
+        long hardTotalPackets = saturatingAdd(this.lossBucketDeliveredPackets, this.lossBucketLostPackets);
+        long hardTotalBytes = saturatingAdd(this.lossBucketDeliveredBytes, this.lossBucketLostBytes);
+        long delayTotalPackets = saturatingAdd(
+                this.delayLossBucketDeliveredPackets, this.delayLossBucketLostPackets);
+        long delayTotalBytes = saturatingAdd(this.delayLossBucketDeliveredBytes, this.delayLossBucketLostBytes);
+        if ((hardTotalPackets == 0L || hardTotalBytes == 0L)
+                && (delayTotalPackets == 0L || delayTotalBytes == 0L)) {
+            return;
+        }
+
+        double hardPacketLossRate = hardTotalPackets == 0L
+                ? 0D : (double) this.lossBucketLostPackets / hardTotalPackets;
+        double hardByteLossRate = hardTotalBytes == 0L
+                ? 0D : (double) this.lossBucketLostBytes / hardTotalBytes;
+        double hardControlLossRate = Math.max(hardPacketLossRate, hardByteLossRate);
+        boolean hardSignal = this.lossBucketLostPackets >= HARD_LOSS_MINIMUM_LOST_PACKETS
+                && hardControlLossRate >= HARD_LOSS_THRESHOLD;
+
+        double delayPacketLossRate = delayTotalPackets == 0L
+                ? 0D : (double) this.delayLossBucketLostPackets / delayTotalPackets;
+        double delayByteLossRate = delayTotalBytes == 0L
+                ? 0D : (double) this.delayLossBucketLostBytes / delayTotalBytes;
+        double delayControlLossRate = Math.max(delayPacketLossRate, delayByteLossRate);
+        boolean stablePathForDelayEvidence = this.isPathDelayEvidenceActionable();
+        boolean actionableDelayEvidence = this.delayLossBucketEvidenceActionable
+                && !this.startup && stablePathForDelayEvidence;
+        boolean inflatedDelay = this.delayLossBucketMaximumRttRatio >= DELAY_INFLATION_THRESHOLD;
+        boolean delayPressure = delayTotalPackets >= DELAY_LOSS_MINIMUM_PACKETS
+                && this.delayLossBucketLostPackets >= DELAY_LOSS_MINIMUM_LOST_PACKETS
+                && delayControlLossRate > LOSS_THRESHOLD && inflatedDelay;
+        boolean delaySignal = delayPressure && actionableDelayEvidence;
+        boolean congestionSignal = hardSignal || delaySignal;
+
+        if (congestionSignal) {
+            if (this.lossState == LossState.ARMED) {
+                int signalPeakInFlight = hardSignal
+                        ? this.lossBucketPeakInFlight : this.delayLossBucketPeakInFlight;
+                double signalMaximumCwnd = hardSignal
+                        ? this.lossBucketMaximumCwnd : this.delayLossBucketMaximumCwnd;
+                double peakBound = signalPeakInFlight > 0
+                        ? Math.min(this.cwnd, signalPeakInFlight) : this.cwnd;
+                this.lossRecoveryCwnd = Math.max(peakBound, signalMaximumCwnd);
+                this.cwnd = Math.max(this.minimumCwnd, peakBound * LOSS_BETA);
                 this.inflightLimit = this.cwnd;
-                this.lossFreeRounds = 0;
-                this.startup = false;
-            } else if (Double.isFinite(this.inflightLimit)
-                    && ++this.lossFreeRounds >= LOSS_BOUND_RELEASE_ROUNDS) {
-                this.inflightLimit = Math.min(this.maximumCwnd,
-                        Math.max(this.inflightLimit + this.mtu, this.inflightLimit * LOSS_BOUND_GROWTH));
-                this.lossFreeRounds = 0;
+                if (hardSignal) {
+                    this.startup = false;
+                }
+                this.lossState = LossState.HOLD;
+                this.lossHoldKind = hardSignal ? LossHoldKind.HARD : LossHoldKind.DELAY;
+                this.lossResponseCount++;
+                if (hardSignal) {
+                    this.hardLossResponseCount++;
+                } else {
+                    this.delayLossResponseCount++;
+                }
             }
-            if (this.startup && bootstrapEvidence) {
-                // Startup can remain app-limited for an arbitrary number of small rounds. Evaluate disjoint,
-                // mature evidence buckets so old clean traffic cannot dilute a later sustained loss episode.
-                this.startupCongestionEvidenceBytes = 0L;
-                this.startupLostEvidenceBytes = 0L;
+            if (!hardSignal && delaySignal) {
+                // Once an epoch includes delay-qualified moderate loss, loss above the normal threshold must
+                // actually clear before fluctuating RTT can rearm another response.
+                this.lossHoldKind = LossHoldKind.DELAY;
+            }
+            this.lossClearBuckets = 0;
+            this.resetLossBuckets();
+            return;
+        }
+
+        boolean continuingDelayEpoch = this.lossState == LossState.HOLD
+                && this.lossHoldKind == LossHoldKind.DELAY
+                && delayTotalPackets >= DELAY_LOSS_MINIMUM_PACKETS
+                && delayControlLossRate > LOSS_THRESHOLD;
+        boolean completeClearBucket = delayTotalPackets >= DELAY_LOSS_MINIMUM_PACKETS
+                || (delayTotalPackets >= LOSS_BUCKET_MINIMUM_PACKETS
+                && this.delayLossBucketLostPackets == 0L);
+        if (completeClearBucket && !actionableDelayEvidence) {
+            // Suppressed/startup evidence cannot either cut or release a held loss epoch.
+            this.lossClearBuckets = 0;
+            this.resetDelayLossBucket();
+        } else if (delayPressure || continuingDelayEpoch) {
+            // Startup/path validation owns suppressed pressure; continuing loss also cannot clear a DELAY hold.
+            // Neither case is evidence that the active episode ended.
+            this.lossClearBuckets = 0;
+            this.resetDelayLossBucket();
+        } else {
+            if (completeClearBucket) {
+                if (this.lossState == LossState.HOLD
+                        && ++this.lossClearBuckets >= LOSS_CLEAR_BUCKETS_TO_RELEASE) {
+                    this.inflightLimit = Double.POSITIVE_INFINITY;
+                    this.lossState = LossState.ARMED;
+                    this.lossHoldKind = LossHoldKind.NONE;
+                    this.lossClearBuckets = 0;
+                    // The finite cap can leave the bandwidth filter self-consistently below the path's capacity.
+                    // Restore only the window observed immediately before the cut, then re-enter bounded startup so
+                    // clean delivery can promptly rediscover the useful pre-loss rate.
+                    this.cwnd = Math.max(this.cwnd, Math.min(this.maximumCwnd, this.lossRecoveryCwnd));
+                    this.lossRecoveryCwnd = 0D;
+                    this.startup = true;
+                    this.fullBandwidthBytesPerMillis = 0D;
+                    this.fullBandwidthRounds = 0;
+                }
+                this.resetDelayLossBucket();
             }
         }
+
+        boolean completeHardBucket = hardTotalPackets >= DELAY_LOSS_MINIMUM_PACKETS
+                || (hardTotalPackets >= LOSS_BUCKET_MINIMUM_PACKETS && this.lossBucketLostPackets == 0L);
+        if (completeHardBucket) {
+            this.resetHardLossBucket();
+        }
+    }
+
+    private void resetLossBuckets() {
+        this.resetHardLossBucket();
+        this.resetDelayLossBucket();
+    }
+
+    private void resetHardLossBucket() {
+        this.lossBucketDeliveredPackets = 0L;
+        this.lossBucketLostPackets = 0L;
+        this.lossBucketDeliveredBytes = 0L;
+        this.lossBucketLostBytes = 0L;
+        this.lossBucketPeakInFlight = 0;
+        this.lossBucketMaximumCwnd = 0D;
+    }
+
+    private void resetDelayLossBucket() {
+        this.delayLossBucketDeliveredPackets = 0L;
+        this.delayLossBucketLostPackets = 0L;
+        this.delayLossBucketDeliveredBytes = 0L;
+        this.delayLossBucketLostBytes = 0L;
+        this.delayLossBucketPeakInFlight = 0;
+        this.delayLossBucketMaximumCwnd = 0D;
+        this.delayLossBucketMaximumRttRatio = -1D;
+        this.delayLossBucketEvidenceActionable = true;
+    }
+
+    private void resetRoundLossEvidence() {
+        this.resetHardRoundLossEvidence();
+        this.resetDelayRoundLossEvidence();
+    }
+
+    private void resetHardRoundLossEvidence() {
+        this.roundDeliveredPackets = 0L;
+        this.roundLostPackets = 0L;
         this.roundDeliveredBytes = 0L;
         this.roundLostBytes = 0L;
         this.roundMaxInFlight = 0;
+    }
+
+    private void resetDelayRoundLossEvidence() {
+        this.delayRoundDeliveredPackets = 0L;
+        this.delayRoundLostPackets = 0L;
+        this.delayRoundDeliveredBytes = 0L;
+        this.delayRoundLostBytes = 0L;
+        this.delayRoundMaxInFlight = 0;
+        this.delayRoundMaximumRttRatio = -1D;
+        this.delayRoundEvidenceActionable = true;
     }
 
     private void updateMaximumBandwidth() {
@@ -408,6 +599,7 @@ final class RakModelCongestionController {
     }
 
     private void beginPathSuspicion(long nowMillis, long rttSampleMillis, long deliveredAtSend) {
+        this.invalidateLossEvidenceForPathTransition();
         this.pathState = PathState.SUSPECT;
         this.pathSuspicionMinimumRttMillis = rttSampleMillis;
         this.pathSuspicionMaximumRttMillis = rttSampleMillis;
@@ -439,6 +631,7 @@ final class RakModelCongestionController {
     }
 
     private void beginPathDrain(long nowMillis) {
+        this.invalidateLossEvidenceForPathTransition();
         this.pathState = PathState.DRAIN;
         this.pathAttempts++;
         this.pathPreProbeCwnd = this.cwnd;
@@ -458,6 +651,7 @@ final class RakModelCongestionController {
         if (txInFlight > this.minimumCwnd || currentBytesInFlight > this.minimumCwnd) {
             this.pathLowFlightSinceMillis = -1L;
             if (this.pathState == PathState.SAMPLE) {
+                this.invalidateLossEvidenceForPathTransition();
                 this.pathState = PathState.DRAIN;
                 this.resetPathStepCandidate();
             }
@@ -472,6 +666,7 @@ final class RakModelCongestionController {
             return;
         }
         if (this.pathState == PathState.DRAIN) {
+            this.invalidateLossEvidenceForPathTransition();
             this.pathState = PathState.SAMPLE;
             this.pathStepMinimumRttMillis = rttSampleMillis;
             this.pathStepMaximumRttMillis = rttSampleMillis;
@@ -509,8 +704,9 @@ final class RakModelCongestionController {
         this.startup = true;
         this.fullBandwidthBytesPerMillis = 0D;
         this.fullBandwidthRounds = 0;
-        this.startupCongestionEvidenceBytes = 0L;
-        this.startupLostEvidenceBytes = 0L;
+        // Delay-qualified evidence collected against the old RTT baseline cannot classify the accepted path.
+        // Preserve any installed HOLD cap and path-independent HARD evidence.
+        this.resetDelayLossBucket();
         this.resetPathTransition();
     }
 
@@ -518,6 +714,7 @@ final class RakModelCongestionController {
         if ((this.pathState == PathState.SUSPECT || this.pathState == PathState.DRAIN
                 || this.pathState == PathState.SAMPLE) && nowMillis >= this.pathProbeDeadlineMillis) {
             if (this.pathState == PathState.SUSPECT) {
+                this.invalidateLossEvidenceForPathTransition();
                 this.pathState = PathState.STEADY;
                 this.resetPathSuspicion();
                 this.pathProbeDeadlineMillis = -1L;
@@ -525,6 +722,9 @@ final class RakModelCongestionController {
                 this.failPathProbe(nowMillis);
             }
         } else if (this.pathState == PathState.COOLDOWN && nowMillis >= this.pathCooldownUntilMillis) {
+            if (!this.isPathDelayEvidenceActionable()) {
+                this.invalidateLossEvidenceForPathTransition();
+            }
             this.pathState = PathState.STEADY;
             this.pathCooldownUntilMillis = -1L;
         }
@@ -548,6 +748,7 @@ final class RakModelCongestionController {
     }
 
     private void enterPathCooldown(long nowMillis, long rttSampleMillis, boolean completedAttempt) {
+        this.invalidateLossEvidenceForPathTransition();
         this.pathState = PathState.COOLDOWN;
         this.pathCooldownUntilMillis = saturatingAdd(nowMillis, scaledAndClamped(rttSampleMillis,
                 PATH_COOLDOWN_RTT_MULTIPLIER, PATH_COOLDOWN_MIN_MILLIS, PATH_COOLDOWN_MAX_MILLIS));
@@ -577,6 +778,9 @@ final class RakModelCongestionController {
     }
 
     private void resetPathTransition() {
+        if (!this.isPathDelayEvidenceActionable()) {
+            this.invalidateLossEvidenceForPathTransition();
+        }
         this.pathState = PathState.STEADY;
         this.pathSuspectRttMillis = -1L;
         this.pathProbeDeadlineMillis = -1L;
@@ -590,10 +794,15 @@ final class RakModelCongestionController {
         this.resetPathStepCandidate();
     }
 
-    private boolean isPathDelayResponseSuppressed() {
-        return this.pathState == PathState.DRAIN || this.pathState == PathState.SAMPLE
-                || (this.pathState == PathState.COOLDOWN && this.pathAttempts > 0
-                && this.pathAttempts < PATH_MAX_ATTEMPTS);
+    private boolean isPathDelayEvidenceActionable() {
+        return this.pathState == PathState.STEADY
+                || (this.pathState == PathState.COOLDOWN && this.pathAttempts >= PATH_MAX_ATTEMPTS);
+    }
+
+    private void invalidateLossEvidenceForPathTransition() {
+        this.resetDelayLossBucket();
+        this.resetDelayRoundLossEvidence();
+        this.lossClearBuckets = 0;
     }
 
     private static long pathProbeTimeoutMillis(long rttMillis) {
@@ -751,6 +960,26 @@ final class RakModelCongestionController {
         return this.pathAttempts;
     }
 
+    long getLossResponseCount() {
+        return this.lossResponseCount;
+    }
+
+    double getInflightLimit() {
+        return this.inflightLimit;
+    }
+
+    boolean isLossResponseHeld() {
+        return this.lossState == LossState.HOLD;
+    }
+
+    long getHardLossResponseCount() {
+        return this.hardLossResponseCount;
+    }
+
+    long getDelayLossResponseCount() {
+        return this.delayLossResponseCount;
+    }
+
     double getRecentLossRate() {
         return this.recentLossRate;
     }
@@ -765,6 +994,17 @@ final class RakModelCongestionController {
         DRAIN,
         SAMPLE,
         COOLDOWN
+    }
+
+    private enum LossState {
+        ARMED,
+        HOLD
+    }
+
+    private enum LossHoldKind {
+        NONE,
+        HARD,
+        DELAY
     }
 
     static final class SendState {

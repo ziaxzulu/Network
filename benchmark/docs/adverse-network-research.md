@@ -322,17 +322,44 @@ but not its complete state machine:
   of `2*MTU/capturedSendQuantum`, while the burst ceiling remains eight MTUs.
   BBR draft-06 specifies a 0.90 `ProbeDown` pacing gain. This is a simplified
   capacity probe, not BBRv3 `Startup`, `Drain`, or full `ProbeBW`.
-- **Loss response.** After startup, per-round loss at least 20%, or above 2%
-  together with smoothed RTT at least 1.25 times minRTT, caps flight at 70% of
-  the smaller of the prior window and observed maximum flight. Three
-  non-congestive rounds release that cap gradually. Startup does not classify
-  one tiny first-flight loss as a mature round: it evaluates disjoint aggregate
-  lost/total byte buckets once each bucket reaches four MTUs. A mature startup
-  bucket retains the at-least-20% hard-loss response but does not use delay
-  inflation until startup is complete; a non-congestive bucket is then cleared
-  so neither an old clean history nor an old loss episode can dominate later
+- **Loss response.** Completed packet-timed rounds feed independent HARD and
+  DELAY evidence buckets. Both use the greater of packet-loss and byte-loss
+  rate, retain a peak-flight snapshot, and use saturating counters. HARD is
+  path independent: it needs at least eight lost packets and at least 20% loss,
+  and remains eligible during startup and path validation. Its bucket
+  accumulates until that signal is mature, or until 128 total packets (or 64
+  loss-free packets) establish a bounded non-signal bucket. DELAY needs at
+  least 128 total packets, at least four lost packets, loss strictly above 2%,
+  and a maximum captured loss-event smoothedRTT/minRTT ratio of at least 1.25.
+  Each loss declared while both RTT estimates exist contributes its ratio
+  against the minRTT then in force, and the bucket retains the maximum; a later
+  round-boundary ACK or minRTT update cannot retroactively qualify or erase
+  that evidence. A DELAY bucket is actionable only if every
+  contributing ACK/loss was observed after startup on a path state in which
+  delay evidence is enabled. Entering or leaving a suppressed path-validation
+  state discards DELAY evidence and clear progress, but preserves HARD
   evidence. These are experimental guardrails, not BBRv3's loss-bound or ECN
   algorithms.
+
+The first actionable signal in an ARMED epoch caps flight at 70% of the
+smaller of the current window and that bucket's peak flight, with the two-MTU
+minimum still enforced. The controller then enters HOLD: further signals in
+the same epoch cannot reduce the window again. A DELAY signal seen during a
+HARD hold upgrades the hold to DELAY clearing semantics only when the bucket
+does not also carry a HARD signal; simultaneous signals retain HARD precedence.
+Release needs two
+complete, disjoint, actionable clear buckets. A clear bucket is either 128
+packets or 64 loss-free packets. DELAY holds do not count a mature bucket that
+still has loss above 2%; HARD holds may count stable, non-inflated random loss
+as clear. Startup or path-suppressed evidence cannot release either hold.
+
+On release, the finite in-flight cap is removed and the window can be restored
+only as far as the bounded pre-response window remembered for that epoch. The
+raw minRTT, path provenance, and filtered bandwidth seed are retained; only
+startup/full-bandwidth discovery is restarted so a cap cannot permanently
+self-clock the rate estimate below useful capacity. The existing two-MTU
+progress floor, four-MTU startup-round maturity rule, 4 MiB window ceiling,
+and eight-MTU burst ceiling still bound that re-entry.
 
 RFC 9002 and the BBR draft both make pacing and in-flight volume separate
 controls: a BDP-sized window sent as one burst can still build a BDP-sized
@@ -372,13 +399,14 @@ prototype therefore applies narrower guardrails:
   low-flight states are reset between attempts, while pre-boundary ACKs remain
   ineligible across cooldown and retry; and
 - at most three drain attempts suppress moderate delay-qualified loss. The
-  suspicion stage itself does not suppress loss, the third failed attempt
-  restores normal delay response immediately, and the at-least-20% hard-loss
-  and persistent-congestion responses remain active throughout, subject to
-  startup's four-MTU maturity gate.
+  suspicion, drain, sample, and first two cooldown stages suppress DELAY
+  evidence; the third failed attempt makes DELAY evidence actionable
+  immediately. The at-least-20% HARD and persistent-congestion responses remain
+  active throughout. HARD evidence remains subject to its eight-lost-packet
+  maturity threshold.
 
 Acceptance restores the safe pre-probe window, preserves the filtered
-bandwidth seed and any finite hard-loss cap, and restarts startup plateau
+bandwidth seed and any finite HARD or DELAY loss cap, and restarts startup plateau
 discovery against the new BDP. A lower original RTT sample that is eligible
 under the active provenance boundary can still improve minRTT immediately; if
 it aborts an active drain, the useful window is restored before transition
@@ -397,10 +425,14 @@ whose duration exceeds a multiple of PTO; it explicitly does not define it as
 a count of PTO expiries. RakNet does not expose QUIC's packet-number spaces or
 ACK evidence. This experiment therefore uses a conservative local surrogate:
 after two PTO probes have backed off without any ACK progress, the next due
-probe resets bandwidth state, pacing credit, and flight allowance to the
-two-MTU minimum. The first subsequent ACK clears the persistent flag and
-restarts model startup. This is intentionally documented as a RakNet heuristic,
-not RFC 9002 persistent-congestion conformance.
+probe resets bandwidth state, pacing credit, flight allowance, both aggregate
+loss buckets, both open-round loss accumulators, and any HOLD/rearm state, then
+returns the window to the two-MTU minimum. Loss callbacks that follow the reset
+therefore start a fresh evidence epoch rather than completing one that began
+before persistent collapse. The reset begins fresh model startup, and the first
+subsequent ACK clears the persistent flag. Raw minRTT is not erased. This is
+intentionally documented as a RakNet heuristic, not RFC 9002
+persistent-congestion conformance.
 
 ### Observability and current status
 
@@ -412,9 +444,9 @@ NACK hints, late-ACK reordering resolutions, and validated loss. Exporters must
 aggregate per-channel state into fixed cohorts rather than peer labels.
 
 Deterministic transport tests exercise rate sampling, pacing bounds,
-long-running random loss, reordering transitions, capacity step-up, idle
-restart, path-step rejection/acceptance, persistent no-progress, callback
-failure rollback, and buffer ownership. They validate invariants only. No
+long-running phase-shifted periodic loss, reordering transitions, capacity
+step-up, idle restart, path-step rejection/acceptance, persistent no-progress,
+callback failure rollback, and buffer ownership. They validate invariants only. No
 external-qdisc A/B campaign has yet established `MODEL_BASED` throughput,
 fairness, amplification, queue bounds, CPU cost, handover recovery, or
 disappearance behavior. Benchmark-mode/provenance integration and repeated

@@ -38,7 +38,13 @@ as labels: they create unbounded time-series cardinality.
 `BOUNDED` is the opt-in bounded NACK/PTO policy. `MODEL_BASED` reuses that
 wire-compatible recovery policy and adds a sender-side delivery-rate/minRTT
 model, BDP-derived in-flight limit, bounded token pacer, NACK reordering window,
-path-step guardrails, and a persistent no-progress reset.
+path-step guardrails, and a persistent no-progress reset. Its experimental loss
+policy keeps path-independent hard-loss evidence separate from path-scoped
+delay/loss evidence, applies at most one reduction while an evidence epoch is
+held, and requires two disjoint actionable clear buckets before rearming.
+Rearming retains minRTT/path provenance and the filtered bandwidth seed while
+restarting bounded bandwidth discovery; persistent no-progress instead starts
+a fresh loss-evidence epoch.
 
 The mode borrows a limited set of ideas from
 [IETF BBR draft-06](https://datatracker.ietf.org/doc/html/draft-ietf-ccwg-bbr-06),
