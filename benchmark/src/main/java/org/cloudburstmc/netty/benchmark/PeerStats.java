@@ -301,6 +301,10 @@ public final class PeerStats {
     }
 
     public void recoveryStateClosed(long observedAtMillis) {
+        // This is the terminal per-session callback. A final queued-bytes tick can race the earlier
+        // parent-channel close notification, so make the terminal gauge authoritative while retaining
+        // the lifetime high-water mark for post-run analysis.
+        this.currentQueuedBytes.set(0L);
         this.clearRecoveryState();
     }
 

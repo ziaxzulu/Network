@@ -266,7 +266,7 @@ run_pilot() {
     --profiles blackhole \
     --affected-clients 10 \
     --warmup 5s \
-    --duration 30s \
+    --duration 40s \
     --iterations 1 \
     --direction both
 }

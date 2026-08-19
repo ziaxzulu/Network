@@ -25,7 +25,9 @@ explicit 10,000-packet netem limit, replacing the baseline's confounding
 implicit 1,000-packet limit. It is therefore a corrected successor reference,
 not a directly identical rerun. Its separate disappearance case uses a
 bidirectional blackhole; a one-way blackhole does not prove how the transport
-handles a vanished peer.
+handles a vanished peer. That case measures for 40 seconds with the blackhole
+applied 5 seconds into measurement, leaving enough evidence to prove a
+30-second reclamation bound plus the required continuous one-second hold.
 
 ## One-time installation
 

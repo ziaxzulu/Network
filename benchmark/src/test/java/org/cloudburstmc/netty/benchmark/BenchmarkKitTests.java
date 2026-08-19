@@ -2563,6 +2563,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(launcher.contains("BENCHMARK_RUN_USER=\"$benchmark_user\""));
         Assertions.assertFalse(launcher.contains("rakbench"));
         Assertions.assertTrue(launcher.contains("--direction both"));
+        Assertions.assertTrue(launcher.contains("run_campaign pilot-disappearance"));
+        Assertions.assertTrue(launcher.contains("--duration 40s"));
         Assertions.assertTrue(launcher.contains(
                 "require_trusted_path \"$install_root/benchmark/scripts/validate-qdisc-timeseries.sh\""));
         Assertions.assertTrue(launcher.contains("cp -P --no-preserve=mode,ownership,timestamps"));

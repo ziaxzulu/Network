@@ -49,6 +49,10 @@ public class BenchmarkTimelineTests {
         peer.recoveryState(1_000L, 300, 1200.0D, 2400.0D, 50.0D, 5.0D,
                 250L, 1, 1_000L, 800L);
         peer.addDisconnect();
+        // Parent close can be observed before the internal session tick is cancelled. Reproduce the
+        // late queue callback seen in a real netns disappearance run, then apply the terminal callback.
+        peer.queuedBytes(4096);
+        peer.recoveryStateClosed(1_100L);
 
         peer.resetMeasurement();
 
