@@ -1,0 +1,8 @@
+{"epochMillis":101000,"namespace":"server","interface":"srvi","qdisc":[{"kind":"noqueue","options":{}}]}
+{"epochMillis":101000,"namespace":"affected","interface":"rcvi","qdisc":[{"kind":"noqueue","options":{}}]}
+{"epochMillis":103000,"namespace":"server","interface":"srvi","qdisc":[{"kind":"netem","options":{"limit":10000,"loss-random":{"loss":1.0}}}]}
+{"epochMillis":103000,"namespace":"affected","interface":"rcvi","qdisc":[{"kind":"netem","options":{"limit":10000,"loss-random":{"loss":1.0}}}]}
+{"epochMillis":106000,"namespace":"server","interface":"srvi","qdisc":[{"kind":"noqueue","options":{}}]}
+{"epochMillis":106000,"namespace":"affected","interface":"rcvi","qdisc":[{"kind":"noqueue","options":{}}]}
+{"epochMillis":116100,"namespace":"server","interface":"srvi","qdisc":[{"kind":"noqueue","options":{}}]}
+{"epochMillis":116100,"namespace":"affected","interface":"rcvi","qdisc":[{"kind":"noqueue","options":{}}]}

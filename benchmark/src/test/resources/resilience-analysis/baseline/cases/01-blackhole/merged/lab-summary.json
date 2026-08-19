@@ -1,0 +1,20 @@
+{
+  "aggregate": {
+    "clients": 10,
+    "affectedClients": 2,
+    "measuredIterations": 1,
+    "elapsedMillis": 20000,
+    "payloadSize": 512,
+    "targetClientMbps": 5,
+    "reliability": "RELIABLE_ORDERED",
+    "configuredMaxQueuedBytes": null,
+    "healthyClientMbpsP50": 4.99,
+    "healthyFairnessIndex": 0.9999,
+    "healthySentToDeliveredBytesRatio": 1.02,
+    "affectedClientMbpsP50": 0.5,
+    "affectedSentToDeliveredBytesRatio": 4.0,
+    "affectedUndeliveredServerBytesOut": 500000,
+    "affectedUndeliveredServerGbps": 0.004,
+    "maxQueuedBytes": 5500
+  }
+}

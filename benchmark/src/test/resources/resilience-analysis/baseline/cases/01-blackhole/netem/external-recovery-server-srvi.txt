@@ -1,0 +1,13 @@
+# Netem Apply
+namespace=server
+interface=srvi
+action=restore
+latency=0ms
+jitter=0ms
+loss=0%
+limit=10000
+applyStartedAtEpochMillis=105000
++ tc qdisc del dev srvi root
+applyCompletedAtEpochMillis=105010
++ tc qdisc show dev srvi
+qdisc noqueue 0: root refcnt 2
