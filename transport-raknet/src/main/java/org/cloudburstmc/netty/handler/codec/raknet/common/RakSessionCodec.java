@@ -91,7 +91,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private Queue<IntRange> incomingNaks;
     private Queue<IntRange> outgoingAcks;
     private Queue<IntRange> outgoingNaks;
-    private long lastMinWeight;
 
     private int queuedBytes = 0;
     private boolean terminalDisconnectWrite;
@@ -326,8 +325,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             return;
         }
 
-        long weight = this.getNextWeight(message.priority());
-        this.queueOutgoingPackets(packets, weight);
+        this.queueOutgoingPackets(packets, message.priority());
         if (message.priority() == RakPriority.IMMEDIATE) {
             // Reliable immediate traffic in bounded mode keeps its priority and requests an immediate flush, but it
             // must still enter the normal congestion-window admission path.
@@ -335,15 +333,12 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
     }
 
-    private void queueOutgoingPackets(EncapsulatedPacket[] packets, long weight) {
-        if (packets.length == 1) {
-            this.outgoingPackets.insert(weight, packets[0]);
-            this.queuedBytes += packets[0].getBuffer().readableBytes();
-        } else {
-            this.outgoingPackets.insertSeries(weight, packets);
-            for (EncapsulatedPacket packet : packets) {
-                this.queuedBytes += packet.getBuffer().readableBytes();
-            }
+    private void queueOutgoingPackets(EncapsulatedPacket[] packets, RakPriority priority) {
+        int priorityLevel = priority.ordinal();
+        for (EncapsulatedPacket packet : packets) {
+            long weight = this.getNextWeight(priority);
+            this.outgoingPackets.insert(weight, priorityLevel, packet);
+            this.queuedBytes += packet.getBuffer().readableBytes();
         }
     }
 
@@ -1007,14 +1002,17 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         long next = this.outgoingPacketNextWeights[priorityLevel];
 
         if (!this.outgoingPackets.isEmpty()) {
-            if (next >= this.lastMinWeight) {
-                next = this.lastMinWeight + (1L << priorityLevel) * priorityLevel + priorityLevel;
-                this.outgoingPacketNextWeights[priorityLevel] = next + (1L << priorityLevel) * (priorityLevel + 1) + priorityLevel;
+            int headPriorityLevel = this.outgoingPackets.peekPriority();
+            long minimumWeight = this.outgoingPackets.peekWeight()
+                    - (1L << headPriorityLevel) * headPriorityLevel + headPriorityLevel;
+            if (next < minimumWeight) {
+                next = minimumWeight + (1L << priorityLevel) * priorityLevel + priorityLevel;
             }
+            this.outgoingPacketNextWeights[priorityLevel] = next
+                    + (1L << priorityLevel) * (priorityLevel + 1) + priorityLevel;
         } else {
             this.initHeapWeights();
         }
-        this.lastMinWeight = next - (1L << priorityLevel) * priorityLevel + priorityLevel;
         return next;
     }
 
