@@ -2544,8 +2544,10 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(launcher.contains("require_trusted_path \"$launcher_path\""));
         Assertions.assertTrue(launcher.contains("flock -n 9"));
         Assertions.assertTrue(launcher.contains("timeout --signal=TERM --kill-after=30s"));
-        Assertions.assertTrue(launcher.contains("benchmark_user=\"rakbench\""));
+        Assertions.assertTrue(launcher.contains("result_owner=\"zulu\""));
+        Assertions.assertTrue(launcher.contains("benchmark_user=\"$result_owner\""));
         Assertions.assertTrue(launcher.contains("BENCHMARK_RUN_USER=\"$benchmark_user\""));
+        Assertions.assertFalse(launcher.contains("rakbench"));
         Assertions.assertTrue(launcher.contains("--direction both"));
         Assertions.assertTrue(launcher.contains(
                 "require_trusted_path \"$install_root/benchmark/scripts/validate-qdisc-timeseries.sh\""));
@@ -2559,6 +2561,8 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8);
         Assertions.assertTrue(worker.contains(
                 "mkdir -p \"$server_out\" \"$healthy_out\" \"$affected_out\" \"$merged_out\""));
+        Assertions.assertTrue(worker.contains("chown \"$benchmark_run_user:$benchmark_run_group\""));
+        Assertions.assertTrue(worker.contains("runuser --user \"$benchmark_run_user\" -- env"));
         Assertions.assertTrue(worker.contains("merge_args=(\"$script_dir/merge-worker-results.sh\""));
         Assertions.assertTrue(worker.contains("validate-qdisc-timeseries.sh"));
         Assertions.assertTrue(worker.contains("if ! stop_qdisc_samplers; then"));
@@ -2566,12 +2570,22 @@ public class BenchmarkKitTests {
         String installer = Files.readString(root.resolve("benchmark/scripts/install-raknet-netns-goal"),
                 StandardCharsets.UTF_8);
         Assertions.assertTrue(installer.contains("This installer does not accept arguments"));
-        Assertions.assertTrue(installer.contains("--shell /usr/sbin/nologin"));
+        Assertions.assertTrue(installer.contains("result_owner=\"zulu\""));
         Assertions.assertTrue(installer.contains("launcher_target=\"/usr/local/sbin/raknet-netns-pilot\""));
         Assertions.assertTrue(installer.contains("  validate-qdisc-timeseries.sh\n)"));
         Assertions.assertTrue(installer.contains(
                 "\"$source_root/validate-qdisc-timeseries.sh\""));
+        Assertions.assertFalse(installer.contains("useradd"));
+        Assertions.assertFalse(installer.contains("benchmark_home"));
+        Assertions.assertFalse(installer.contains("rakbench"));
         Assertions.assertFalse(installer.contains("/etc/sudoers"));
+
+        String documentation = Files.readString(root.resolve("benchmark/docs/netns-autonomous-goal.md"),
+                StandardCharsets.UTF_8);
+        Assertions.assertTrue(documentation.contains("Candidate Java runs as the explicitly configured `zulu`"));
+        Assertions.assertTrue(documentation.contains("normal filesystem access of the `zulu` account"));
+        Assertions.assertTrue(documentation.contains(
+                "zulu ALL=(root) NOPASSWD: /usr/local/sbin/raknet-netns-pilot \"\""));
     }
 
     @Test

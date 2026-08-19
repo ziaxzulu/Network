@@ -2,8 +2,9 @@
 
 This launcher supports repeated candidate testing without granting general
 passwordless root access. Root-owned orchestration creates network namespaces,
-veth pairs, and qdiscs. Candidate Java runs as the locked `rakbench` service
-account from a root-owned, read-only staged distribution.
+veth pairs, and qdiscs. Candidate Java runs as the explicitly configured `zulu`
+user from a root-owned, read-only staged distribution; it never runs as root or
+as the obsolete `rakbench` service account.
 
 The passwordless launcher accepts no arguments. A small `zulu`-owned mode file
 selects one of six root-owned scenario definitions:
@@ -38,8 +39,9 @@ sudo visudo -cf /etc/sudoers
 
 The installer does not edit sudoers. It installs the reviewed scripts into
 `/usr/local/libexec/raknet-netns-benchmark`, replaces the existing
-`/usr/local/sbin/raknet-netns-pilot` launcher, creates the locked `rakbench`
-account, and creates `/var/lib/raknet-netns-benchmark/goal-mode`.
+`/usr/local/sbin/raknet-netns-pilot` launcher, validates the existing `zulu`
+user and group, and creates `/var/lib/raknet-netns-benchmark/goal-mode`. It does
+not create, modify, or remove the old `rakbench` account if one already exists.
 
 Keep the existing exact authorization:
 
@@ -81,7 +83,12 @@ has a 45-minute watchdog, and current-run namespaces are removed during cleanup.
 
 ## Trust boundary
 
-Candidate files are copied by `zulu`, made root-owned and read-only, fingerprinted,
-then executed as `rakbench`. Candidate dependencies therefore receive neither
-root privileges nor access to the user's home directory. Only the installed,
-root-owned scripts perform privileged namespace and qdisc operations.
+Candidate files are copied by `zulu`, made root-owned and read-only,
+fingerprinted, then executed as `zulu`. Candidate dependencies receive no root
+privileges, but they do have the normal filesystem access of the `zulu` account,
+including its home directory; review candidate dependencies accordingly. Only
+the installed, root-owned scripts perform privileged namespace and qdisc
+operations. Within each result tree, campaign parents, manifests, qdisc
+evidence, hashes, and logs stay root-owned; only the worker and merge output
+directories are owned by `zulu` so the JVMs and unprivileged merge can write
+their results.

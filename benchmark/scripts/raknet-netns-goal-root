@@ -21,9 +21,9 @@ state_root="/var/lib/raknet-netns-benchmark"
 runs_root="$state_root/runs"
 staging_root="$state_root/staging"
 mode_file="$state_root/goal-mode"
-benchmark_user="rakbench"
 result_owner="zulu"
 result_group="zulu"
+benchmark_user="$result_owner"
 campaign_timeout="45m"
 
 require_trusted_path() {
@@ -46,11 +46,7 @@ if [[ ! -x "$campaign" ]]; then
   exit 69
 fi
 if ! id "$benchmark_user" >/dev/null 2>&1; then
-  echo "Locked benchmark user does not exist: $benchmark_user" >&2
-  exit 69
-fi
-if ! id "$result_owner" >/dev/null 2>&1; then
-  echo "Result owner does not exist: $result_owner" >&2
+  echo "Benchmark execution and result user does not exist: $benchmark_user" >&2
   exit 69
 fi
 for tool in flock timeout runuser git find sort xargs sha256sum jq cp ip getent; do

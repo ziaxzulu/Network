@@ -19,13 +19,15 @@ installed_scripts="$install_root/benchmark/scripts"
 launcher_target="/usr/local/sbin/raknet-netns-pilot"
 state_root="/var/lib/raknet-netns-benchmark"
 mode_file="$state_root/goal-mode"
-benchmark_user="rakbench"
 result_owner="zulu"
 result_group="zulu"
-benchmark_home="$state_root/home"
 
 if ! id "$result_owner" >/dev/null 2>&1; then
   echo "Result owner does not exist: $result_owner" >&2
+  exit 69
+fi
+if ! getent group "$result_group" >/dev/null 2>&1; then
+  echo "Result group does not exist: $result_group" >&2
   exit 69
 fi
 
@@ -46,32 +48,12 @@ for source_name in "${sources[@]}"; do
   bash -n "$source_path"
 done
 
-if ! id "$benchmark_user" >/dev/null 2>&1; then
-  useradd \
-    --system \
-    --user-group \
-    --home-dir "$benchmark_home" \
-    --create-home \
-    --shell /usr/sbin/nologin \
-    "$benchmark_user"
-else
-  passwd_entry="$(getent passwd "$benchmark_user")"
-  existing_home="$(cut -d: -f6 <<<"$passwd_entry")"
-  existing_shell="$(cut -d: -f7 <<<"$passwd_entry")"
-  if [[ "$existing_home" != "$benchmark_home" || "$existing_shell" != "/usr/sbin/nologin" ]]; then
-    echo "Existing $benchmark_user account does not match the required locked service account" >&2
-    exit 77
-  fi
-fi
-benchmark_group="$(id -gn "$benchmark_user")"
-
 install -d -o root -g root -m 0755 "$install_root"
 install -d -o root -g root -m 0755 "$install_root/benchmark"
 install -d -o root -g root -m 0755 "$installed_scripts"
 install -d -o root -g root -m 0755 "$state_root"
 install -d -o root -g root -m 0755 "$state_root/runs"
 install -d -o root -g root -m 0755 "$state_root/staging"
-install -d -o "$benchmark_user" -g "$benchmark_group" -m 0700 "$benchmark_home"
 
 install -o root -g root -m 0755 \
   "$source_root/run-netns-pilot-campaign.sh" \
@@ -114,6 +96,6 @@ esac
 
 echo "Installed autonomous launcher: $launcher_target"
 echo "Installed root-owned orchestration: $installed_scripts"
-echo "Benchmark service account: $benchmark_user"
+echo "Benchmark JVM and result account: $result_owner"
 echo "Goal mode file: $mode_file"
 echo "Existing exact sudoers authorization for $launcher_target with no arguments can be retained."
