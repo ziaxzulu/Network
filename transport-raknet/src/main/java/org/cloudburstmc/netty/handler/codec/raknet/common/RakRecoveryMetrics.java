@@ -58,7 +58,7 @@ final class RakRecoveryMetrics {
             return;
         }
         metrics.rakDatagramSent(sendType, datagram.getSize(), retransmissionAttempt,
-                slidingWindow.getUnackedBytes());
+                slidingWindow.getBytesInFlight());
         if (sendType != RakDatagramSendType.ORIGINAL) {
             this.reportState(metrics, slidingWindow, observedAtMillis, recoveryStarted);
         }
@@ -114,7 +114,7 @@ final class RakRecoveryMetrics {
             }
         }
         this.lastStateReportAtMillis = observedAtMillis;
-        metrics.rakRecoveryState(observedAtMillis, slidingWindow.getUnackedBytes(),
+        metrics.rakRecoveryState(observedAtMillis, slidingWindow.getBytesInFlight(),
                 slidingWindow.getCongestionWindow(), slidingWindow.getSlowStartThreshold(), slidingWindow.getRTT(),
                 slidingWindow.getRttDeviation(), slidingWindow.getRtoForRetransmission(),
                 this.retransmittedDatagramsInFlight, this.lastAckProgressAtMillis,

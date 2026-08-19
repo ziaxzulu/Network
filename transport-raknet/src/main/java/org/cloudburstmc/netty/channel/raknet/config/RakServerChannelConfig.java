@@ -89,4 +89,15 @@ public interface RakServerChannelConfig extends ChannelConfig {
     RakServerThrottle getThrottle();
 
     RakServerChannelConfig setThrottle(RakServerThrottle throttle);
+
+    /** Returns the sender recovery policy inherited by newly-created child sessions. */
+    default RakRecoveryMode getRecoveryMode() {
+        return this.getOption(RakChannelOption.RAK_RECOVERY_MODE);
+    }
+
+    /** Selects the sender recovery policy inherited by newly-created child sessions. */
+    default RakServerChannelConfig setRecoveryMode(RakRecoveryMode recoveryMode) {
+        this.setOption(RakChannelOption.RAK_RECOVERY_MODE, recoveryMode);
+        return this;
+    }
 }

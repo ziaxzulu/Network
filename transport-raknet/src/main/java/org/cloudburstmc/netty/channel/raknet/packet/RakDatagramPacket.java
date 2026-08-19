@@ -35,6 +35,11 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
     private long nextSend;
     private int sequenceIndex = -1;
     private int retransmissionCount;
+    private long sendOrdinal = -1;
+    private boolean reliableOutstanding;
+    private boolean inFlight;
+    private boolean retransmissionPending;
+    private boolean recoveryProbe;
 
     public static RakDatagramPacket newInstance() {
         return RECYCLER.get();
@@ -92,6 +97,11 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         this.nextSend = 0;
         this.sequenceIndex = -1;
         this.retransmissionCount = 0;
+        this.sendOrdinal = -1;
+        this.reliableOutstanding = false;
+        this.inFlight = false;
+        this.retransmissionPending = false;
+        this.recoveryProbe = false;
         setRefCnt(1);
         this.handle.recycle(this);
     }
@@ -151,6 +161,46 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         return ++this.retransmissionCount;
     }
 
+    public long getSendOrdinal() {
+        return this.sendOrdinal;
+    }
+
+    public void setSendOrdinal(long sendOrdinal) {
+        this.sendOrdinal = sendOrdinal;
+    }
+
+    public boolean isReliableOutstanding() {
+        return this.reliableOutstanding;
+    }
+
+    public void setReliableOutstanding(boolean reliableOutstanding) {
+        this.reliableOutstanding = reliableOutstanding;
+    }
+
+    public boolean isInFlight() {
+        return this.inFlight;
+    }
+
+    public void setInFlight(boolean inFlight) {
+        this.inFlight = inFlight;
+    }
+
+    public boolean isRetransmissionPending() {
+        return this.retransmissionPending;
+    }
+
+    public void setRetransmissionPending(boolean retransmissionPending) {
+        this.retransmissionPending = retransmissionPending;
+    }
+
+    public boolean isRecoveryProbe() {
+        return this.recoveryProbe;
+    }
+
+    public void setRecoveryProbe(boolean recoveryProbe) {
+        this.recoveryProbe = recoveryProbe;
+    }
+
     @Override
     public String toString() {
         return "RakDatagramPacket{" +
@@ -161,6 +211,11 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
                 ", nextSend=" + nextSend +
                 ", sequenceIndex=" + sequenceIndex +
                 ", retransmissionCount=" + retransmissionCount +
+                ", sendOrdinal=" + sendOrdinal +
+                ", reliableOutstanding=" + reliableOutstanding +
+                ", inFlight=" + inFlight +
+                ", retransmissionPending=" + retransmissionPending +
+                ", recoveryProbe=" + recoveryProbe +
                 '}';
     }
 }

@@ -55,4 +55,21 @@ public interface RakChannelConfig extends ChannelConfig {
     void setMaxQueuedBytes(int maxQueuedBytes);
 
     int getMaxQueuedBytes();
+
+    /**
+     * Returns the sender-side recovery policy for this session.
+     */
+    default RakRecoveryMode getRecoveryMode() {
+        return this.getOption(RakChannelOption.RAK_RECOVERY_MODE);
+    }
+
+    /**
+     * Selects the sender-side recovery policy for this session.
+     *
+     * <p>The default is {@link RakRecoveryMode#LEGACY}. This option must be set before the session becomes active.</p>
+     */
+    default RakChannelConfig setRecoveryMode(RakRecoveryMode recoveryMode) {
+        this.setOption(RakChannelOption.RAK_RECOVERY_MODE, recoveryMode);
+        return this;
+    }
 }

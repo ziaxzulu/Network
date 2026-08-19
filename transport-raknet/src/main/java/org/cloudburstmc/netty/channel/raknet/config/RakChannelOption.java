@@ -190,6 +190,15 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_MAX_QUEUED_BYTES");
 
     /**
+     * Sender-side recovery policy for a RakNet session. Defaults to {@link RakRecoveryMode#LEGACY}. When set on a
+     * server channel (via {@code ServerBootstrap.option}, not {@code childOption}), the selected policy is inherited
+     * by new child sessions before their transport pipeline starts. Per-child overrides must use the child consumer
+     * supplied to {@code RakChannelFactory.server} so they run before the internal session pipeline becomes active.
+     */
+    public static final ChannelOption<RakRecoveryMode> RAK_RECOVERY_MODE =
+            valueOf(RakChannelOption.class, "RAK_RECOVERY_MODE");
+
+    /**
      * The cookie mode the RakNet server will use when handling client connections.
      */
     public static final ChannelOption<RakServerCookieMode> RAK_SERVER_COOKIE_MODE =

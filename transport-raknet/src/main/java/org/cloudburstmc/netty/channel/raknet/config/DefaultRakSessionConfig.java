@@ -39,6 +39,7 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
     private volatile boolean autoFlush = true;
     private volatile int flushInterval = 10;
     private volatile int maxQueuedBytes = 64 * 1024 * 1024; // 64 MB
+    private volatile RakRecoveryMode recoveryMode = RakRecoveryMode.LEGACY;
 
     public DefaultRakSessionConfig(Channel channel) {
         super(channel);
@@ -54,7 +55,8 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
         return this.getOptions(
                 super.getOptions(),
                 RakChannelOption.RAK_GUID, RakChannelOption.RAK_MAX_CHANNELS, RakChannelOption.RAK_MTU, RakChannelOption.RAK_PROTOCOL_VERSION, RakChannelOption.RAK_ORDERING_CHANNELS,
-                RakChannelOption.RAK_METRICS, RakChannelOption.RAK_SESSION_TIMEOUT, RakChannelOption.RAK_AUTO_FLUSH, RakChannelOption.RAK_FLUSH_INTERVAL);
+                RakChannelOption.RAK_METRICS, RakChannelOption.RAK_SESSION_TIMEOUT, RakChannelOption.RAK_AUTO_FLUSH,
+                RakChannelOption.RAK_FLUSH_INTERVAL, RakChannelOption.RAK_RECOVERY_MODE);
     }
 
     @SuppressWarnings("unchecked")
@@ -87,6 +89,9 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
         if (option == RakChannelOption.RAK_MAX_QUEUED_BYTES) {
             return (T) Integer.valueOf(this.getMaxQueuedBytes());
         }
+        if (option == RakChannelOption.RAK_RECOVERY_MODE) {
+            return (T) this.recoveryMode;
+        }
         return this.channel.parent().config().getOption(option);
     }
 
@@ -113,6 +118,8 @@ public class DefaultRakSessionConfig extends DefaultChannelConfig implements Rak
             this.setFlushInterval((Integer) value);
         } else if (option == RakChannelOption.RAK_MAX_QUEUED_BYTES) {
             this.setMaxQueuedBytes((Integer) value);
+        } else if (option == RakChannelOption.RAK_RECOVERY_MODE) {
+            this.recoveryMode = (RakRecoveryMode) value;
         } else {
             return this.channel.parent().config().setOption(option, value);
         }
