@@ -80,7 +80,9 @@ public class RakSlidingWindow {
         int chargedBytes = this.recoveryMode.usesBoundedRecovery()
                 ? this.congestionControlledBytesInFlight() : this.unackedBytes;
         if (this.modelController != null && curTime >= 0L) {
-            return this.modelController.transmissionAllowance(curTime, chargedBytes);
+            int allowance = this.modelController.transmissionAllowance(curTime, chargedBytes);
+            this.cwnd = this.modelController.getCongestionWindow();
+            return allowance;
         }
         if (chargedBytes <= this.cwnd) {
             return (int) (this.cwnd - chargedBytes);
@@ -284,9 +286,12 @@ public class RakSlidingWindow {
     /** Returns whether recovery fits both the congestion window and model pacer at {@code curTime}. */
     public boolean canSendBoundedRecovery(int size, long curTime) {
         int controlledBytesInFlight = this.congestionControlledBytesInFlight();
-        return controlledBytesInFlight + size <= this.cwnd
-                && (this.modelController == null
-                || this.modelController.canSend(curTime, controlledBytesInFlight, size));
+        if (this.modelController != null) {
+            boolean canSend = this.modelController.canSend(curTime, controlledBytesInFlight, size);
+            this.cwnd = this.modelController.getCongestionWindow();
+            return canSend;
+        }
+        return controlledBytesInFlight + size <= this.cwnd;
     }
 
     /**

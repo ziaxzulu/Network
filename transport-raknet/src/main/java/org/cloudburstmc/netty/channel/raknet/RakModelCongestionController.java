@@ -43,17 +43,25 @@ final class RakModelCongestionController {
     private static final double PATH_STEP_MULTIPLIER = 4.0D;
     private static final long PATH_STEP_ABSOLUTE_DELTA_MILLIS = 50L;
     private static final int PATH_SUSPICION_CONFIRMATION_SAMPLES = 2;
-    private static final long PATH_SUSPICION_MAX_ROUNDS = 2L;
-    private static final long PATH_SUSPICION_COOLDOWN_ROUNDS = 8L;
-    private static final long PATH_PROBE_MAX_ROUNDS = 4L;
     private static final int PATH_STEP_CONFIRMATION_SAMPLES = 2;
     private static final double PATH_STEP_STABILITY_MULTIPLIER = 1.25D;
+    private static final long PATH_TIMEOUT_RTT_MULTIPLIER = 10L;
+    private static final long PATH_TIMEOUT_MIN_MILLIS = 2_000L;
+    private static final long PATH_TIMEOUT_MAX_MILLIS = 3_000L;
+    private static final long PATH_DRAIN_HOLD_MIN_MILLIS = 50L;
+    private static final long PATH_DRAIN_HOLD_MAX_MILLIS = 500L;
+    private static final long PATH_COOLDOWN_RTT_MULTIPLIER = 2L;
+    private static final long PATH_COOLDOWN_MIN_MILLIS = 250L;
+    private static final long PATH_COOLDOWN_MAX_MILLIS = 1_000L;
+    private static final int PATH_MAX_ATTEMPTS = 3;
+    private static final int STARTUP_MINIMUM_ROUND_MTUS = 4;
     private static final int LOSS_BOUND_RELEASE_ROUNDS = 3;
     private static final double LOSS_BOUND_GROWTH = 1.05D;
 
     private final int mtu;
     private final long sendQuantumMillis;
     private final double minimumCwnd;
+    private final double initialCwnd;
     private final double maximumCwnd;
     private final double[] bandwidthFilter = new double[BANDWIDTH_FILTER_ROUNDS];
 
@@ -62,6 +70,8 @@ final class RakModelCongestionController {
     private double fullBandwidthBytesPerMillis;
     private int fullBandwidthRounds;
     private boolean startup = true;
+    private long startupCongestionEvidenceBytes;
+    private long startupLostEvidenceBytes;
     private boolean persistentCongestion;
     private double inflightLimit = Double.POSITIVE_INFINITY;
     private int lossFreeRounds;
@@ -80,18 +90,24 @@ final class RakModelCongestionController {
 
     private long minimumRttMillis = Long.MAX_VALUE;
     private long minimumRttTimestampMillis = -1L;
-    private boolean pathProbeActive;
+    private PathState pathState = PathState.STEADY;
     private long pathSuspicionMinimumRttMillis = Long.MAX_VALUE;
     private long pathSuspicionMaximumRttMillis = -1L;
     private long pathSuspicionDeliveredAtSend = -1L;
     private long pathSuspicionObservedAtMillis = -1L;
-    private long pathSuspicionStartedRound = -1L;
-    private long pathSuspicionCooldownUntilRound = -1L;
     private int pathSuspicionSamples;
-    private long pathProbeStartedRound = -1L;
-    private long pathStepStartedAtMillis = -1L;
+    private long pathSuspectRttMillis = -1L;
+    private long pathProbeDeadlineMillis = -1L;
+    private long pathCooldownUntilMillis = -1L;
+    private long pathProbeBoundaryDelivered = -1L;
+    private long pathLowFlightSinceMillis = -1L;
+    private long pathDrainHoldMillis;
+    private double pathPreProbeCwnd;
+    private int pathAttempts;
     private long pathStepMinimumRttMillis = Long.MAX_VALUE;
     private long pathStepMaximumRttMillis = -1L;
+    private long pathStepDeliveredAtSend = -1L;
+    private long pathStepObservedAtMillis = -1L;
     private int pathStepSamples;
 
     private double pacingTokens;
@@ -106,12 +122,14 @@ final class RakModelCongestionController {
         this.sendQuantumMillis = Math.max(1L, sendQuantumMillis);
         // RFC 9002's initial window formula: min(10*MDS, max(2*MDS, 14720)).
         this.cwnd = Math.min(10D * mtu, Math.max(2D * mtu, 14_720D));
+        this.initialCwnd = this.cwnd;
         this.minimumCwnd = 2D * mtu;
         // A finite implementation safety bound; normal control should remain at the measured BDP well below it.
         this.maximumCwnd = 4D * 1024D * 1024D;
     }
 
     int transmissionAllowance(long nowMillis, int bytesInFlight) {
+        this.advancePathState(nowMillis);
         this.refillPacingTokens(nowMillis);
         int windowAllowance = Math.max(0, (int) (this.cwnd - bytesInFlight));
         return Math.min(windowAllowance, Math.max(0, (int) this.pacingTokens));
@@ -191,9 +209,8 @@ final class RakModelCongestionController {
         }
 
         if (rttSampleMillis >= 0L) {
-            int intervalInFlight = Math.max(txInFlight, currentBytesInFlight);
-            this.updateMinimumRtt(nowMillis, Math.max(1L, rttSampleMillis), intervalInFlight,
-                    priorDelivered);
+            this.updateMinimumRtt(nowMillis, Math.max(1L, rttSampleMillis), txInFlight,
+                    currentBytesInFlight, priorDelivered, modelSendTime);
         }
         if (smoothedRttMillis >= 0D) {
             this.latestSmoothedRtt = smoothedRttMillis;
@@ -205,7 +222,9 @@ final class RakModelCongestionController {
         this.deliveredTimeMillis = nowMillis;
 
         boolean newRound = priorDelivered >= this.nextRoundDelivered;
+        long completedRoundDeliveredBytes = 0L;
         if (newRound) {
+            completedRoundDeliveredBytes = this.roundDeliveredBytes;
             this.finishRound();
             this.roundCount++;
             this.bandwidthFilterIndex = (this.bandwidthFilterIndex + 1) % BANDWIDTH_FILTER_ROUNDS;
@@ -230,7 +249,7 @@ final class RakModelCongestionController {
             }
         }
 
-        this.updateFullBandwidth(newRound);
+        this.updateFullBandwidth(newRound, completedRoundDeliveredBytes);
         this.updateCongestionWindow(acknowledgedBytes);
         this.firstSendTimeMillis = modelSendTime;
     }
@@ -256,6 +275,8 @@ final class RakModelCongestionController {
         this.startup = true;
         this.fullBandwidthBytesPerMillis = 0D;
         this.fullBandwidthRounds = 0;
+        this.startupCongestionEvidenceBytes = 0L;
+        this.startupLostEvidenceBytes = 0L;
         this.maxBandwidthBytesPerMillis = 0D;
         for (int i = 0; i < this.bandwidthFilter.length; i++) {
             this.bandwidthFilter[i] = 0D;
@@ -264,24 +285,32 @@ final class RakModelCongestionController {
         this.inflightLimit = this.minimumCwnd;
         this.lossFreeRounds = 0;
         this.pacingTokens = 0D;
-        this.pathProbeActive = false;
-        this.pathProbeStartedRound = -1L;
-        this.pathSuspicionCooldownUntilRound = -1L;
-        this.resetPathSuspicion();
-        this.resetPathStepCandidate();
+        this.resetPathTransition();
         this.persistentCongestion = true;
     }
 
     private void finishRound() {
         long total = this.roundDeliveredBytes + this.roundLostBytes;
         if (total > 0L) {
-            double lossRate = (double) this.roundLostBytes / total;
-            this.recentLossRate = lossRate;
-            boolean inflatedDelay = this.minimumRttMillis != Long.MAX_VALUE && this.latestSmoothedRtt >= 0D
-                    && !this.pathProbeActive && !this.isPathSuspicionProtected()
+            double roundLossRate = (double) this.roundLostBytes / total;
+            this.recentLossRate = roundLossRate;
+            double controlLossRate = roundLossRate;
+            if (this.startup) {
+                this.startupCongestionEvidenceBytes = saturatingAdd(
+                        this.startupCongestionEvidenceBytes, total);
+                this.startupLostEvidenceBytes = saturatingAdd(
+                        this.startupLostEvidenceBytes, this.roundLostBytes);
+                controlLossRate = (double) this.startupLostEvidenceBytes
+                        / this.startupCongestionEvidenceBytes;
+            }
+            boolean inflatedDelay = !this.startup && this.minimumRttMillis != Long.MAX_VALUE
+                    && this.latestSmoothedRtt >= 0D
+                    && !this.isPathDelayResponseSuppressed()
                     && this.latestSmoothedRtt >= this.minimumRttMillis * DELAY_INFLATION_THRESHOLD;
-            boolean congestionSignal = lossRate >= HARD_LOSS_THRESHOLD
-                    || (lossRate > LOSS_THRESHOLD && inflatedDelay);
+            boolean bootstrapEvidence = !this.startup
+                    || this.startupCongestionEvidenceBytes >= STARTUP_MINIMUM_ROUND_MTUS * (long) this.mtu;
+            boolean congestionSignal = bootstrapEvidence && (controlLossRate >= HARD_LOSS_THRESHOLD
+                    || (controlLossRate > LOSS_THRESHOLD && inflatedDelay));
             if (congestionSignal) {
                 double lossBound = this.roundMaxInFlight > 0
                         ? Math.min(this.cwnd * LOSS_BETA, this.roundMaxInFlight * LOSS_BETA)
@@ -295,6 +324,12 @@ final class RakModelCongestionController {
                 this.inflightLimit = Math.min(this.maximumCwnd,
                         Math.max(this.inflightLimit + this.mtu, this.inflightLimit * LOSS_BOUND_GROWTH));
                 this.lossFreeRounds = 0;
+            }
+            if (this.startup && bootstrapEvidence) {
+                // Startup can remain app-limited for an arbitrary number of small rounds. Evaluate disjoint,
+                // mature evidence buckets so old clean traffic cannot dilute a later sustained loss episode.
+                this.startupCongestionEvidenceBytes = 0L;
+                this.startupLostEvidenceBytes = 0L;
             }
         }
         this.roundDeliveredBytes = 0L;
@@ -310,125 +345,219 @@ final class RakModelCongestionController {
         this.maxBandwidthBytesPerMillis = maximum;
     }
 
-    private void updateMinimumRtt(long nowMillis, long rttSampleMillis, int sampleInFlight,
-                                  long deliveredAtSend) {
+    private void updateMinimumRtt(long nowMillis, long rttSampleMillis, int txInFlight,
+                                  int currentBytesInFlight, long deliveredAtSend, long sendTimeMillis) {
+        this.advancePathState(nowMillis);
+        if (this.pathAttempts > 0 && deliveredAtSend <= this.pathProbeBoundaryDelivered) {
+            // Keep the completed-attempt boundary through cooldown and retry. Otherwise an ACK that arrives at
+            // the timeout instant can advance the state first, then erase that attempt using stale RTT evidence.
+            return;
+        }
+        boolean probing = this.pathState == PathState.DRAIN || this.pathState == PathState.SAMPLE;
+        boolean lowFlight = txInFlight <= this.minimumCwnd && currentBytesInFlight <= this.minimumCwnd;
         boolean lowFlightRefresh = this.minimumRttTimestampMillis >= 0L
                 && nowMillis - this.minimumRttTimestampMillis >= MINIMUM_RTT_WINDOW_MILLIS
-                && sampleInFlight <= this.minimumCwnd;
-        if (this.minimumRttMillis == Long.MAX_VALUE || rttSampleMillis < this.minimumRttMillis
-                || lowFlightRefresh) {
+                && lowFlight;
+        if (this.minimumRttMillis == Long.MAX_VALUE || rttSampleMillis < this.minimumRttMillis) {
+            if (probing) {
+                this.restorePathProbeWindow();
+            }
             this.minimumRttMillis = rttSampleMillis;
             this.minimumRttTimestampMillis = nowMillis;
-            this.pathProbeActive = false;
-            this.pathProbeStartedRound = -1L;
-            this.pathSuspicionCooldownUntilRound = -1L;
-            this.resetPathSuspicion();
-            this.resetPathStepCandidate();
+            this.resetPathTransition();
             return;
         }
 
         long pathStepThreshold = Math.max((long) Math.ceil(this.minimumRttMillis * PATH_STEP_MULTIPLIER),
                 this.minimumRttMillis + PATH_STEP_ABSOLUTE_DELTA_MILLIS);
         if (rttSampleMillis < pathStepThreshold) {
-            this.pathProbeActive = false;
-            this.pathProbeStartedRound = -1L;
-            this.pathSuspicionCooldownUntilRound = -1L;
-            this.resetPathSuspicion();
-            this.resetPathStepCandidate();
+            if (probing) {
+                this.restorePathProbeWindow();
+            }
+            if (lowFlightRefresh) {
+                this.minimumRttMillis = rttSampleMillis;
+                this.minimumRttTimestampMillis = nowMillis;
+            }
+            this.resetPathTransition();
             return;
         }
 
-        // An upward path step and a standing queue are indistinguishable at full flight. Drain this sender to the
-        // minimum window, suppress delay-qualified (but never hard) loss response during that bounded probe, and
-        // accept the higher baseline only from an interval that stayed low-flight at both send and ACK time.
-        if (!this.pathProbeActive) {
+        if (this.pathState == PathState.COOLDOWN) {
+            return;
+        }
+        if (this.pathState == PathState.STEADY) {
+            if (this.pathAttempts >= PATH_MAX_ATTEMPTS) {
+                return;
+            }
+            this.beginPathSuspicion(nowMillis, rttSampleMillis, deliveredAtSend);
+            return;
+        }
+        if (this.pathState == PathState.SUSPECT) {
             if (!this.observePathSuspicion(nowMillis, rttSampleMillis, deliveredAtSend)) {
+                this.enterPathCooldown(nowMillis, rttSampleMillis, false);
                 return;
             }
-            boolean laterFlightConfirmed = this.pathSuspicionDeliveredAtSend >= 0L
-                    && deliveredAtSend > this.pathSuspicionDeliveredAtSend;
-            boolean laterObservationConfirmed = nowMillis > this.pathSuspicionObservedAtMillis;
-            if (this.pathSuspicionSamples < PATH_SUSPICION_CONFIRMATION_SAMPLES
-                    || !laterFlightConfirmed || !laterObservationConfirmed) {
-                return;
+            if (this.pathSuspicionSamples >= PATH_SUSPICION_CONFIRMATION_SAMPLES) {
+                this.beginPathDrain(nowMillis);
             }
-            this.pathProbeActive = true;
-            this.pathProbeStartedRound = this.roundCount;
-            this.cwnd = this.minimumCwnd;
-            this.resetPathSuspicion();
-        } else if (this.roundCount - this.pathProbeStartedRound > PATH_PROBE_MAX_ROUNDS) {
-            this.failPathTransition();
-            return;
-        }
-        if (sampleInFlight > this.minimumCwnd) {
-            this.resetPathStepCandidate();
             return;
         }
 
-        if (this.pathStepStartedAtMillis == -1L) {
-            this.pathStepStartedAtMillis = nowMillis;
-            this.pathStepMinimumRttMillis = rttSampleMillis;
-            this.pathStepMaximumRttMillis = rttSampleMillis;
-            this.pathStepSamples = 1;
-            return;
-        }
+        this.observePathCandidate(nowMillis, rttSampleMillis, txInFlight, currentBytesInFlight,
+                deliveredAtSend, sendTimeMillis);
+    }
 
-        this.pathStepMinimumRttMillis = Math.min(this.pathStepMinimumRttMillis, rttSampleMillis);
-        this.pathStepMaximumRttMillis = Math.max(this.pathStepMaximumRttMillis, rttSampleMillis);
-        this.pathStepSamples++;
-        if (this.pathStepSamples >= PATH_STEP_CONFIRMATION_SAMPLES
-                && this.pathStepMaximumRttMillis
-                <= this.pathStepMinimumRttMillis * PATH_STEP_STABILITY_MULTIPLIER) {
-            this.minimumRttMillis = this.pathStepMinimumRttMillis;
-            this.minimumRttTimestampMillis = nowMillis;
-            this.pathProbeActive = false;
-            this.pathProbeStartedRound = -1L;
-            this.pathSuspicionCooldownUntilRound = -1L;
-            this.resetPathSuspicion();
-            this.resetPathStepCandidate();
-        }
+    private void beginPathSuspicion(long nowMillis, long rttSampleMillis, long deliveredAtSend) {
+        this.pathState = PathState.SUSPECT;
+        this.pathSuspicionMinimumRttMillis = rttSampleMillis;
+        this.pathSuspicionMaximumRttMillis = rttSampleMillis;
+        this.pathSuspicionDeliveredAtSend = deliveredAtSend;
+        this.pathSuspicionObservedAtMillis = nowMillis;
+        this.pathSuspicionSamples = 1;
+        this.pathSuspectRttMillis = rttSampleMillis;
+        this.pathProbeDeadlineMillis = saturatingAdd(nowMillis, pathProbeTimeoutMillis(rttSampleMillis));
     }
 
     private boolean observePathSuspicion(long nowMillis, long rttSampleMillis, long deliveredAtSend) {
-        if (this.roundCount < this.pathSuspicionCooldownUntilRound) {
-            return false;
-        }
-        if (this.pathSuspicionSamples == 0) {
-            this.pathSuspicionMinimumRttMillis = rttSampleMillis;
-            this.pathSuspicionMaximumRttMillis = rttSampleMillis;
-            this.pathSuspicionDeliveredAtSend = deliveredAtSend;
-            this.pathSuspicionObservedAtMillis = nowMillis;
-            this.pathSuspicionStartedRound = this.roundCount;
-            this.pathSuspicionSamples = 1;
-            return true;
-        }
-        if (this.roundCount - this.pathSuspicionStartedRound > PATH_SUSPICION_MAX_ROUNDS) {
-            this.failPathTransition();
-            return false;
-        }
+        long previousDeliveredAtSend = this.pathSuspicionDeliveredAtSend;
+        long previousObservedAtMillis = this.pathSuspicionObservedAtMillis;
         long minimum = Math.min(this.pathSuspicionMinimumRttMillis, rttSampleMillis);
         long maximum = Math.max(this.pathSuspicionMaximumRttMillis, rttSampleMillis);
         if (maximum > minimum * PATH_STEP_STABILITY_MULTIPLIER) {
-            this.failPathTransition();
             return false;
+        }
+        if (deliveredAtSend <= previousDeliveredAtSend || nowMillis <= previousObservedAtMillis) {
+            return true;
         }
         this.pathSuspicionMinimumRttMillis = minimum;
         this.pathSuspicionMaximumRttMillis = maximum;
+        this.pathSuspicionDeliveredAtSend = deliveredAtSend;
+        this.pathSuspicionObservedAtMillis = nowMillis;
         this.pathSuspicionSamples++;
+        this.pathSuspectRttMillis = minimum;
         return true;
     }
 
-    private boolean isPathSuspicionProtected() {
-        return this.pathSuspicionSamples > 0
-                && this.roundCount - this.pathSuspicionStartedRound <= PATH_SUSPICION_MAX_ROUNDS;
-    }
-
-    private void failPathTransition() {
-        this.pathProbeActive = false;
-        this.pathProbeStartedRound = -1L;
+    private void beginPathDrain(long nowMillis) {
+        this.pathState = PathState.DRAIN;
+        this.pathAttempts++;
+        this.pathPreProbeCwnd = this.cwnd;
+        this.pathProbeBoundaryDelivered = this.deliveredBytes;
+        this.pathProbeDeadlineMillis = saturatingAdd(nowMillis,
+                pathProbeTimeoutMillis(this.pathSuspectRttMillis));
+        this.pathDrainHoldMillis = clamp(this.pathSuspectRttMillis,
+                PATH_DRAIN_HOLD_MIN_MILLIS, PATH_DRAIN_HOLD_MAX_MILLIS);
+        this.pathLowFlightSinceMillis = -1L;
+        this.cwnd = this.minimumCwnd;
         this.resetPathSuspicion();
         this.resetPathStepCandidate();
-        this.pathSuspicionCooldownUntilRound = this.roundCount + PATH_SUSPICION_COOLDOWN_ROUNDS;
+    }
+
+    private void observePathCandidate(long nowMillis, long rttSampleMillis, int txInFlight,
+                                      int currentBytesInFlight, long deliveredAtSend, long sendTimeMillis) {
+        if (txInFlight > this.minimumCwnd || currentBytesInFlight > this.minimumCwnd) {
+            this.pathLowFlightSinceMillis = -1L;
+            if (this.pathState == PathState.SAMPLE) {
+                this.pathState = PathState.DRAIN;
+                this.resetPathStepCandidate();
+            }
+            return;
+        }
+        if (this.pathLowFlightSinceMillis < 0L) {
+            this.pathLowFlightSinceMillis = nowMillis;
+            return;
+        }
+        if (sendTimeMillis < saturatingAdd(this.pathLowFlightSinceMillis, this.pathDrainHoldMillis)
+                || deliveredAtSend <= this.pathProbeBoundaryDelivered) {
+            return;
+        }
+        if (this.pathState == PathState.DRAIN) {
+            this.pathState = PathState.SAMPLE;
+            this.pathStepMinimumRttMillis = rttSampleMillis;
+            this.pathStepMaximumRttMillis = rttSampleMillis;
+            this.pathStepDeliveredAtSend = deliveredAtSend;
+            this.pathStepObservedAtMillis = nowMillis;
+            this.pathStepSamples = 1;
+            return;
+        }
+        if (deliveredAtSend <= this.pathStepDeliveredAtSend || nowMillis <= this.pathStepObservedAtMillis) {
+            return;
+        }
+        this.pathStepMinimumRttMillis = Math.min(this.pathStepMinimumRttMillis, rttSampleMillis);
+        this.pathStepMaximumRttMillis = Math.max(this.pathStepMaximumRttMillis, rttSampleMillis);
+        this.pathStepDeliveredAtSend = deliveredAtSend;
+        this.pathStepObservedAtMillis = nowMillis;
+        this.pathStepSamples++;
+        if (this.pathStepMaximumRttMillis
+                > this.pathStepMinimumRttMillis * PATH_STEP_STABILITY_MULTIPLIER) {
+            this.failPathProbe(nowMillis);
+            return;
+        }
+        if (this.pathStepSamples >= PATH_STEP_CONFIRMATION_SAMPLES) {
+            this.acceptPathStep(nowMillis);
+        }
+    }
+
+    private void acceptPathStep(long nowMillis) {
+        // Sampling deliberately holds the flight at two MTUs. Restore the pre-probe safe window before restarting
+        // discovery, otherwise a successfully identified high-RTT path must bootstrap from the probe floor.
+        this.restorePathProbeWindow();
+        this.minimumRttMillis = this.pathStepMinimumRttMillis;
+        this.minimumRttTimestampMillis = nowMillis;
+        // The new propagation delay changes the BDP. Retain the bandwidth seed and any loss cap, but restart
+        // full-bandwidth discovery so a clean-handshake sample cannot declare the impaired path full prematurely.
+        this.startup = true;
+        this.fullBandwidthBytesPerMillis = 0D;
+        this.fullBandwidthRounds = 0;
+        this.startupCongestionEvidenceBytes = 0L;
+        this.startupLostEvidenceBytes = 0L;
+        this.resetPathTransition();
+    }
+
+    private void advancePathState(long nowMillis) {
+        if ((this.pathState == PathState.SUSPECT || this.pathState == PathState.DRAIN
+                || this.pathState == PathState.SAMPLE) && nowMillis >= this.pathProbeDeadlineMillis) {
+            if (this.pathState == PathState.SUSPECT) {
+                this.pathState = PathState.STEADY;
+                this.resetPathSuspicion();
+                this.pathProbeDeadlineMillis = -1L;
+            } else {
+                this.failPathProbe(nowMillis);
+            }
+        } else if (this.pathState == PathState.COOLDOWN && nowMillis >= this.pathCooldownUntilMillis) {
+            this.pathState = PathState.STEADY;
+            this.pathCooldownUntilMillis = -1L;
+        }
+    }
+
+    private void failPathProbe(long nowMillis) {
+        this.restorePathProbeWindow();
+        this.enterPathCooldown(nowMillis, this.pathSuspectRttMillis, true);
+    }
+
+    private void restorePathProbeWindow() {
+        double safeOldTarget = this.initialCwnd;
+        if (this.maxBandwidthBytesPerMillis > 0D && this.minimumRttMillis != Long.MAX_VALUE) {
+            safeOldTarget = Math.max(safeOldTarget, Math.min(this.maximumCwnd,
+                    this.maxBandwidthBytesPerMillis * Math.max(this.minimumRttMillis, this.sendQuantumMillis)
+                            * CWND_GAIN));
+        }
+        double restored = Math.min(this.pathPreProbeCwnd, safeOldTarget);
+        restored = Math.min(restored, this.inflightLimit);
+        this.cwnd = Math.max(this.minimumCwnd, restored);
+    }
+
+    private void enterPathCooldown(long nowMillis, long rttSampleMillis, boolean completedAttempt) {
+        this.pathState = PathState.COOLDOWN;
+        this.pathCooldownUntilMillis = saturatingAdd(nowMillis, scaledAndClamped(rttSampleMillis,
+                PATH_COOLDOWN_RTT_MULTIPLIER, PATH_COOLDOWN_MIN_MILLIS, PATH_COOLDOWN_MAX_MILLIS));
+        this.pathProbeDeadlineMillis = -1L;
+        this.pathLowFlightSinceMillis = -1L;
+        if (!completedAttempt) {
+            this.pathSuspectRttMillis = rttSampleMillis;
+        }
+        this.resetPathSuspicion();
+        this.resetPathStepCandidate();
     }
 
     private void resetPathSuspicion() {
@@ -436,19 +565,60 @@ final class RakModelCongestionController {
         this.pathSuspicionMaximumRttMillis = -1L;
         this.pathSuspicionDeliveredAtSend = -1L;
         this.pathSuspicionObservedAtMillis = -1L;
-        this.pathSuspicionStartedRound = -1L;
         this.pathSuspicionSamples = 0;
     }
 
     private void resetPathStepCandidate() {
-        this.pathStepStartedAtMillis = -1L;
         this.pathStepMinimumRttMillis = Long.MAX_VALUE;
         this.pathStepMaximumRttMillis = -1L;
+        this.pathStepDeliveredAtSend = -1L;
+        this.pathStepObservedAtMillis = -1L;
         this.pathStepSamples = 0;
     }
 
-    private void updateFullBandwidth(boolean newRound) {
-        if (!this.startup || !newRound || this.maxBandwidthBytesPerMillis <= 0D) {
+    private void resetPathTransition() {
+        this.pathState = PathState.STEADY;
+        this.pathSuspectRttMillis = -1L;
+        this.pathProbeDeadlineMillis = -1L;
+        this.pathCooldownUntilMillis = -1L;
+        this.pathProbeBoundaryDelivered = -1L;
+        this.pathLowFlightSinceMillis = -1L;
+        this.pathDrainHoldMillis = 0L;
+        this.pathPreProbeCwnd = 0D;
+        this.pathAttempts = 0;
+        this.resetPathSuspicion();
+        this.resetPathStepCandidate();
+    }
+
+    private boolean isPathDelayResponseSuppressed() {
+        return this.pathState == PathState.DRAIN || this.pathState == PathState.SAMPLE
+                || (this.pathState == PathState.COOLDOWN && this.pathAttempts > 0
+                && this.pathAttempts < PATH_MAX_ATTEMPTS);
+    }
+
+    private static long pathProbeTimeoutMillis(long rttMillis) {
+        return scaledAndClamped(rttMillis, PATH_TIMEOUT_RTT_MULTIPLIER,
+                PATH_TIMEOUT_MIN_MILLIS, PATH_TIMEOUT_MAX_MILLIS);
+    }
+
+    private static long clamp(long value, long minimum, long maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
+    }
+
+    private static long scaledAndClamped(long value, long multiplier, long minimum, long maximum) {
+        if (value >= (maximum + multiplier - 1L) / multiplier) {
+            return maximum;
+        }
+        return clamp(value * multiplier, minimum, maximum);
+    }
+
+    private static long saturatingAdd(long value, long positiveIncrement) {
+        return value >= Long.MAX_VALUE - positiveIncrement ? Long.MAX_VALUE : value + positiveIncrement;
+    }
+
+    private void updateFullBandwidth(boolean newRound, long completedRoundDeliveredBytes) {
+        if (!this.startup || !newRound || completedRoundDeliveredBytes < STARTUP_MINIMUM_ROUND_MTUS * (long) this.mtu
+                || this.maxBandwidthBytesPerMillis <= 0D) {
             return;
         }
         if (this.fullBandwidthBytesPerMillis == 0D
@@ -467,7 +637,7 @@ final class RakModelCongestionController {
         double target = Math.max(this.minimumCwnd, Math.min(this.maximumCwnd,
                 this.maxBandwidthBytesPerMillis * Math.max(this.minimumRttMillis, this.sendQuantumMillis)
                         * CWND_GAIN));
-        if (this.pathProbeActive) {
+        if (this.pathState == PathState.DRAIN || this.pathState == PathState.SAMPLE) {
             target = this.minimumCwnd;
         }
         target = Math.min(target, this.inflightLimit);
@@ -501,11 +671,17 @@ final class RakModelCongestionController {
     }
 
     private double pacingRateBytesPerMillis() {
+        double rate;
         if (this.maxBandwidthBytesPerMillis > 0D) {
-            return this.maxBandwidthBytesPerMillis
+            rate = this.maxBandwidthBytesPerMillis
                     * (this.startup ? STARTUP_PACING_GAIN : this.steadyPacingGain());
+        } else {
+            rate = this.cwnd / INITIAL_RTT_MILLIS * STARTUP_PACING_GAIN;
         }
-        return this.cwnd / INITIAL_RTT_MILLIS * STARTUP_PACING_GAIN;
+        if (this.startup || this.pathState != PathState.STEADY) {
+            rate = Math.max(rate, this.minimumCwnd / this.sendQuantumMillis);
+        }
+        return rate;
     }
 
     private double steadyPacingGain() {
@@ -571,12 +747,24 @@ final class RakModelCongestionController {
         return this.persistentCongestion;
     }
 
+    int getPathAttempts() {
+        return this.pathAttempts;
+    }
+
     double getRecentLossRate() {
         return this.recentLossRate;
     }
 
     long getRoundCount() {
         return this.roundCount;
+    }
+
+    private enum PathState {
+        STEADY,
+        SUSPECT,
+        DRAIN,
+        SAMPLE,
+        COOLDOWN
     }
 
     static final class SendState {

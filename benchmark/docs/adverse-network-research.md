@@ -295,7 +295,10 @@ but not its complete state machine:
 - **Packet-timed filtering.** A packet-timed round starts when an ACK covers
   data sent after the previous round boundary. The controller keeps the
   maximum delivery-rate sample from ten recent rounds. This is a small custom
-  filter, not BBRv3's two-`ProbeBW`-cycle max filter.
+  filter, not BBRv3's two-`ProbeBW`-cycle max filter. During startup, a
+  completed round must deliver at least four MTUs before it can advance the
+  full-bandwidth plateau counter; tiny handshake-only rounds cannot end
+  discovery.
 - **minRTT and BDP.** Clean RTT samples maintain a raw minimum propagation-time
   estimate. The target window is
   `2 * estimated bandwidth * max(minRTT, captured session send quantum)`, with
@@ -315,14 +318,21 @@ but not its complete state machine:
   scheduled send task (`RAK_FLUSH_INTERVAL` with auto-flush, otherwise the
   10 ms maintenance tick). Burst capacity is
   `max(2*MTU, min(8*MTU, pacingRate*capturedSendQuantum + MTU))`. The 0.75 drain
-  gain is custom; BBR draft-06 specifies a 0.90 `ProbeDown` pacing gain. This
-  is a simplified capacity probe, not BBRv3 `Startup`, `Drain`, or full
-  `ProbeBW`.
-- **Loss response.** Per-round loss above 20%, or above 2% together with
-  smoothed RTT at least 1.25 times minRTT, caps flight at 70% of the smaller of
-  the prior window and observed maximum flight. Three non-congestive rounds
-  release that cap gradually. These are experimental guardrails, not BBRv3's
-  loss-bound or ECN algorithms.
+  gain is custom. Startup and path-transition pacing retain a progress floor
+  of `2*MTU/capturedSendQuantum`, while the burst ceiling remains eight MTUs.
+  BBR draft-06 specifies a 0.90 `ProbeDown` pacing gain. This is a simplified
+  capacity probe, not BBRv3 `Startup`, `Drain`, or full `ProbeBW`.
+- **Loss response.** After startup, per-round loss at least 20%, or above 2%
+  together with smoothed RTT at least 1.25 times minRTT, caps flight at 70% of
+  the smaller of the prior window and observed maximum flight. Three
+  non-congestive rounds release that cap gradually. Startup does not classify
+  one tiny first-flight loss as a mature round: it evaluates disjoint aggregate
+  lost/total byte buckets once each bucket reaches four MTUs. A mature startup
+  bucket retains the at-least-20% hard-loss response but does not use delay
+  inflation until startup is complete; a non-congestive bucket is then cleared
+  so neither an old clean history nor an old loss episode can dominate later
+  evidence. These are experimental guardrails, not BBRv3's loss-bound or ECN
+  algorithms.
 
 RFC 9002 and the BBR draft both make pacing and in-flight volume separate
 controls: a BDP-sized window sent as one burst can still build a BDP-sized
@@ -347,11 +357,33 @@ prototype therefore applies narrower guardrails:
 - an apparent upward step must meet the greater of four times the old minRTT
   and the old minRTT plus 50 ms, and needs two stable observations from
   distinct delivery progress and observation times;
-- the sender then drains to the two-MTU floor and accepts a higher minRTT only
-  after two stable low-flight samples, within four packet rounds; and
-- an inconclusive probe enters an eight-round cooldown. Moderate
-  delay-qualified loss response is suppressed during the bounded suspicion
-  interval and the active probe; the 20% hard-loss response remains active.
+- the sender then saves its useful pre-probe window and delivered boundary and
+  drains to the two-MTU floor. A candidate must be an original, Karn-safe
+  attempt sent after that boundary and after
+  `clamp(suspectRTT, 50 ms, 500 ms)` has elapsed from an observed low-flight
+  ACK. Its send-time and ACK-time flight snapshots must both be at or below two
+  MTUs. Two stable candidates from distinct delivery progress and observation
+  times accept the new minRTT;
+- each drain/sample attempt has a
+  `clamp(10*suspectRTT, 2 s, 3 s)` wall-clock deadline. Failure restores the
+  smaller of the saved pre-probe window and the safe old-path model target,
+  still bounded by any active loss cap, then waits
+  `clamp(2*suspectRTT, 250 ms, 1 s)` before retrying. Candidate and
+  low-flight states are reset between attempts, while pre-boundary ACKs remain
+  ineligible across cooldown and retry; and
+- at most three drain attempts suppress moderate delay-qualified loss. The
+  suspicion stage itself does not suppress loss, the third failed attempt
+  restores normal delay response immediately, and the at-least-20% hard-loss
+  and persistent-congestion responses remain active throughout, subject to
+  startup's four-MTU maturity gate.
+
+Acceptance restores the safe pre-probe window, preserves the filtered
+bandwidth seed and any finite hard-loss cap, and restarts startup plateau
+discovery against the new BDP. A lower original RTT sample that is eligible
+under the active provenance boundary can still improve minRTT immediately; if
+it aborts an active drain, the useful window is restored before transition
+state is cleared. Deadline arithmetic saturates rather than wrapping at the
+monotonic-clock boundary.
 
 This is inspired by BBR's requirement to obtain propagation-delay evidence at
 low flight, but it is not BBRv3 `ProbeRTT`, connection migration, or a general
