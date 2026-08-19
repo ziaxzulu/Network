@@ -104,8 +104,13 @@ final summary.
 Timeline schema 2 adds fixed `all`, `healthy`, and `affected` congestion-model
 aggregates. In `model_based` runs these include delivery and pacing rates,
 minimum RTT, recent loss, packet round, startup/persistent-congestion state, and
-NACK hint/reordering/validation counters. Per-field observed-peer counts and
-oldest/latest observation epochs make partial or stale cohort coverage explicit. Non-model and receiver-worker values are
+NACK hint/reordering/validation counters. Additive schema-2 fields also retain
+the cohort total of cumulative hard-loss and delay-qualified loss responses,
+with a separate observed-peer count for each counter. Per-field observed-peer
+counts and the shared oldest/latest model-snapshot epochs make partial or stale
+cohort coverage explicit. The counters identify controller reductions rather
+than raw lost datagrams and are cleared from live peer gauge state at the
+terminal recovery callback. Non-model and receiver-worker values are
 explicitly null with a reason in `metricAvailability`.
 Server workers also record aggregate and maximum event-loop pending tasks plus
 non-blocking scheduling-lag probes. At most one probe is outstanding per event

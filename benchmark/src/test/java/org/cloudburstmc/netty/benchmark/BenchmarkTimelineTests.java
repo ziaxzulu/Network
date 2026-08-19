@@ -54,7 +54,7 @@ public class BenchmarkTimelineTests {
         peer.recoveryState(1_000L, 300, 1200.0D, 2400.0D, 50.0D, 5.0D,
                 250L, 1, 1_000L, 800L);
         peer.congestionModelState(1_000L, 50_000.0D, 60_000.0D, 25L,
-                0.05D, 7L, true, false);
+                0.05D, 7L, true, false, 3L, 2L);
         peer.nackRecoveryHint(40L);
         peer.nackReorderingResolved(20L);
         peer.nackLossValidated(45L);
@@ -88,6 +88,8 @@ public class BenchmarkTimelineTests {
         Assertions.assertEquals(-1.0D, lifetime.congestionWindow());
         Assertions.assertEquals(-1L, lifetime.lastAckProgressAtMillis());
         Assertions.assertEquals(-1L, lifetime.congestionModelObservedAtMillis());
+        Assertions.assertEquals(-1L, lifetime.hardLossResponseCount());
+        Assertions.assertEquals(-1L, lifetime.delayLossResponseCount());
         Assertions.assertEquals(1L, lifetime.nackRecoveryHints());
         Assertions.assertEquals(1L, lifetime.nackReorderingResolved());
         Assertions.assertEquals(1L, lifetime.nackLossValidated());
@@ -101,11 +103,11 @@ public class BenchmarkTimelineTests {
                 config, EnvironmentInfo.capture(), 1_000_000L, 1_000_000_000L);
         PeerStats healthy = peer(0, false, 100L);
         healthy.congestionModelState(1_000_100L, 100_000.0D, 120_000.0D,
-                20L, 0.02D, 4L, true, false);
+                20L, 0.02D, 4L, true, false, 3L, 1L);
         healthy.nackRecoveryHint(30L);
         PeerStats affected = peer(1, true, 200L);
         affected.congestionModelState(1_000_200L, 40_000.0D, 50_000.0D,
-                80L, 0.15D, 3L, false, true);
+                80L, 0.15D, 3L, false, true, 2L, 4L);
         affected.nackLossValidated(75L);
 
         BenchmarkTimelineRecorder recorder = new BenchmarkTimelineRecorder(
@@ -132,10 +134,19 @@ public class BenchmarkTimelineTests {
         Assertions.assertEquals(0.15D, all.maximumRecentLossRate());
         Assertions.assertEquals(1, all.startupPeers());
         Assertions.assertEquals(1, all.persistentCongestionPeers());
+        Assertions.assertEquals(2, all.hardLossResponseCountObservedPeers());
+        Assertions.assertEquals(2, all.delayLossResponseCountObservedPeers());
+        Assertions.assertEquals(5L, all.hardLossResponseCount());
+        Assertions.assertEquals(5L, all.delayLossResponseCount());
         Assertions.assertEquals(1L, all.nackRecoveryHints());
         Assertions.assertEquals(1L, all.nackLossValidated());
         Assertions.assertEquals(1, sample.healthy().congestionModel().observedPeers());
         Assertions.assertEquals(1, sample.affected().congestionModel().observedPeers());
+        JsonNode serializedModel = JSON.valueToTree(sample).path("all").path("congestionModel");
+        Assertions.assertEquals(2, serializedModel.path("hardLossResponseCountObservedPeers").asInt());
+        Assertions.assertEquals(2, serializedModel.path("delayLossResponseCountObservedPeers").asInt());
+        Assertions.assertEquals(5L, serializedModel.path("hardLossResponseCount").asLong());
+        Assertions.assertEquals(5L, serializedModel.path("delayLossResponseCount").asLong());
     }
 
     @Test
@@ -145,7 +156,7 @@ public class BenchmarkTimelineTests {
                 config, EnvironmentInfo.capture(), 1_000_000L, 1_000_000_000L);
         PeerStats available = peer(0, true, 100L);
         available.congestionModelState(1_000_100L, 100_000.0D, 120_000.0D,
-                20L, 0.02D, 4L, false, false);
+                20L, 0.02D, 4L, false, false, 1L, 2L);
         PeerStats unavailable = peer(1, true, 200L);
         unavailable.congestionModelState(1_000_200L, -1.0D, -1.0D,
                 -1L, -1.0D, -1L, false, false);
@@ -164,11 +175,41 @@ public class BenchmarkTimelineTests {
         Assertions.assertEquals(1, model.minimumRttObservedPeers());
         Assertions.assertEquals(1, model.recentLossObservedPeers());
         Assertions.assertEquals(1, model.packetRoundObservedPeers());
+        Assertions.assertEquals(1, model.hardLossResponseCountObservedPeers());
+        Assertions.assertEquals(1, model.delayLossResponseCountObservedPeers());
+        Assertions.assertEquals(1L, model.hardLossResponseCount());
+        Assertions.assertEquals(2L, model.delayLossResponseCount());
         Assertions.assertEquals(1_000_100L, model.oldestObservedAtEpochMillis());
         Assertions.assertEquals(1_000_200L, model.latestObservedAtEpochMillis());
         Assertions.assertEquals(100_000.0D, model.totalEstimatedDeliveryRateBytesPerSecond());
         Assertions.assertEquals(120_000.0D, model.totalPacingRateBytesPerSecond());
         Assertions.assertEquals(20L, model.minimumRttMillis());
+    }
+
+    @Test
+    public void testModelLossResponseCohortTotalsSaturate() {
+        BenchmarkConfig config = timelineConfig(null, "model_based");
+        BenchmarkRunResult result = new BenchmarkRunResult(
+                config, EnvironmentInfo.capture(), 1_000_000L, 1_000_000_000L);
+        PeerStats first = peer(0, true, 100L);
+        first.congestionModelState(1_000_100L, 100_000.0D, 120_000.0D,
+                20L, 0.02D, 4L, false, false, Long.MAX_VALUE, Long.MAX_VALUE);
+        PeerStats second = peer(1, true, 100L);
+        second.congestionModelState(1_000_200L, 100_000.0D, 120_000.0D,
+                20L, 0.02D, 4L, false, false, 1L, 1L);
+
+        BenchmarkTimelineRecorder recorder = new BenchmarkTimelineRecorder(
+                result, "model-counter-saturation", 2, 2,
+                () -> List.of(first.timelineSnapshot(true, true), second.timelineSnapshot(true, true)),
+                BenchmarkTimelineRecorder.Capabilities.SERVER, false);
+        BenchmarkTimeline.CongestionModel model = recorder.captureAt(
+                1_000_500L, 1_250_000_000L).affected().congestionModel();
+
+        Assertions.assertNotNull(model);
+        Assertions.assertEquals(2, model.hardLossResponseCountObservedPeers());
+        Assertions.assertEquals(2, model.delayLossResponseCountObservedPeers());
+        Assertions.assertEquals(Long.MAX_VALUE, model.hardLossResponseCount());
+        Assertions.assertEquals(Long.MAX_VALUE, model.delayLossResponseCount());
     }
 
     @Test

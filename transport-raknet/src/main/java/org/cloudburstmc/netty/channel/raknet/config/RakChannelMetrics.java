@@ -133,6 +133,35 @@ public interface RakChannelMetrics {
     }
 
     /**
+     * Reports the bounded-cardinality state of the experimental sender delivery model, including cumulative
+     * loss-response counters. The counters are lifetime-monotonic for one session and identify reductions caused by
+     * path-independent hard-loss evidence separately from reductions caused by delay-qualified loss evidence.
+     *
+     * <p>The default implementation delegates to the original eight-argument callback so existing metrics
+     * implementations continue to receive model snapshots without a source or binary compatibility break.</p>
+     *
+     * @param observedAtMillis wall-clock observation time, in milliseconds since the Unix epoch
+     * @param estimatedDeliveryRateBytesPerSecond maximum filtered delivery rate, or {@code -1} until sampled
+     * @param pacingRateBytesPerSecond current sender pacing rate
+     * @param minimumRttMillis filtered minimum RTT, or {@code -1} until sampled
+     * @param recentLossRate most recent packet-round loss fraction
+     * @param packetRound completed packet-timed round count
+     * @param startup whether the controller is still in startup
+     * @param persistentCongestion whether persistent no-progress congestion is active
+     * @param hardLossResponseCount cumulative hard-loss reductions in this session
+     * @param delayLossResponseCount cumulative delay-qualified loss reductions in this session
+     */
+    default void rakCongestionModelState(long observedAtMillis, double estimatedDeliveryRateBytesPerSecond,
+                                         double pacingRateBytesPerSecond, long minimumRttMillis,
+                                         double recentLossRate, long packetRound, boolean startup,
+                                         boolean persistentCongestion, long hardLossResponseCount,
+                                         long delayLossResponseCount) {
+        this.rakCongestionModelState(observedAtMillis, estimatedDeliveryRateBytesPerSecond,
+                pacingRateBytesPerSecond, minimumRttMillis, recentLossRate, packetRound, startup,
+                persistentCongestion);
+    }
+
+    /**
      * Records a NACK scheduled behind a reordering-validation delay in the experimental model mode.
      *
      * @param validationDelayMillis delay before the hinted attempt may be declared lost

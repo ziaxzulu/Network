@@ -146,7 +146,8 @@ final class RakRecoveryMetrics {
                 pacingRate < 0D ? -1D : pacingRate * 1_000D,
                 slidingWindow.getModelMinimumRttMillis(), slidingWindow.getModelRecentLossRate(),
                 slidingWindow.getModelRoundCount(), slidingWindow.isModelStartup(),
-                slidingWindow.isModelPersistentCongestion());
+                slidingWindow.isModelPersistentCongestion(), slidingWindow.getModelHardLossResponseCount(),
+                slidingWindow.getModelDelayLossResponseCount());
     }
 
     static final class SendState {

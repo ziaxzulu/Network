@@ -25,6 +25,34 @@ import org.junit.jupiter.api.Test;
 public class DefaultChannelToServerProxyModelMetricsTests {
 
     @Test
+    public void extendedProxyStateDelegatesToExistingServerMetricsImplementation() {
+        int[] legacyCallbacks = {0};
+        RakServerMetrics legacyMetrics = new RakServerMetrics() {
+            @Override
+            public void rakCongestionModelState(RakChildChannel channel, long observedAtMillis,
+                                                double estimatedDeliveryRateBytesPerSecond,
+                                                double pacingRateBytesPerSecond, long minimumRttMillis,
+                                                double recentLossRate, long packetRound, boolean startup,
+                                                boolean persistentCongestion) {
+                legacyCallbacks[0]++;
+            }
+        };
+        NioDatagramChannel datagramChannel = new NioDatagramChannel();
+        RakServerChannel parent = new RakServerChannel(datagramChannel);
+        try {
+            parent.config().setMetrics(legacyMetrics);
+            DefaultChannelToServerProxyMetrics proxy = new DefaultChannelToServerProxyMetrics(parent, null);
+
+            proxy.rakCongestionModelState(100L, 12_000D, 15_000D, 200L, 0.05D, 7L,
+                    true, false, 3L, 2L);
+
+            Assertions.assertEquals(1, legacyCallbacks[0]);
+        } finally {
+            datagramChannel.unsafe().closeForcibly();
+        }
+    }
+
+    @Test
     public void forwardsModelAndNackValidationMetricsWithoutChangingDimensions() {
         RecordingServerMetrics serverMetrics = new RecordingServerMetrics();
         NioDatagramChannel datagramChannel = new NioDatagramChannel();
@@ -33,7 +61,8 @@ public class DefaultChannelToServerProxyModelMetricsTests {
             parent.config().setMetrics(serverMetrics);
             DefaultChannelToServerProxyMetrics proxy = new DefaultChannelToServerProxyMetrics(parent, null);
 
-            proxy.rakCongestionModelState(100L, 12_000D, 15_000D, 200L, 0.05D, 7L, true, false);
+            proxy.rakCongestionModelState(100L, 12_000D, 15_000D, 200L, 0.05D, 7L,
+                    true, false, 3L, 2L);
             proxy.rakNackRecoveryHint(50L);
             proxy.rakNackReorderingResolved(20L);
             proxy.rakNackLossValidated(50L);
@@ -45,6 +74,8 @@ public class DefaultChannelToServerProxyModelMetricsTests {
             Assertions.assertEquals(0.05D, serverMetrics.recentLossRate);
             Assertions.assertEquals(7L, serverMetrics.packetRound);
             Assertions.assertTrue(serverMetrics.startup);
+            Assertions.assertEquals(3L, serverMetrics.hardLossResponses);
+            Assertions.assertEquals(2L, serverMetrics.delayLossResponses);
             Assertions.assertEquals(1, serverMetrics.nackHints);
             Assertions.assertEquals(1, serverMetrics.reorderedNacks);
             Assertions.assertEquals(1, serverMetrics.validatedNacks);
@@ -61,6 +92,8 @@ public class DefaultChannelToServerProxyModelMetricsTests {
         private double recentLossRate;
         private long packetRound;
         private boolean startup;
+        private long hardLossResponses;
+        private long delayLossResponses;
         private int nackHints;
         private int reorderedNacks;
         private int validatedNacks;
@@ -70,7 +103,8 @@ public class DefaultChannelToServerProxyModelMetricsTests {
                                             double estimatedDeliveryRateBytesPerSecond,
                                             double pacingRateBytesPerSecond, long minimumRttMillis,
                                             double recentLossRate, long packetRound, boolean startup,
-                                            boolean persistentCongestion) {
+                                            boolean persistentCongestion, long hardLossResponseCount,
+                                            long delayLossResponseCount) {
             this.modelStates++;
             this.deliveryRate = estimatedDeliveryRateBytesPerSecond;
             this.pacingRate = pacingRateBytesPerSecond;
@@ -78,6 +112,8 @@ public class DefaultChannelToServerProxyModelMetricsTests {
             this.recentLossRate = recentLossRate;
             this.packetRound = packetRound;
             this.startup = startup;
+            this.hardLossResponses = hardLossResponseCount;
+            this.delayLossResponses = delayLossResponseCount;
         }
 
         @Override

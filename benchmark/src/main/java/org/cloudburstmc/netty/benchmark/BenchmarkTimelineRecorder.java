@@ -491,6 +491,10 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
         private int packetRoundPeers;
         private int startupPeers;
         private int persistentCongestionPeers;
+        private int hardLossResponseCountPeers;
+        private int delayLossResponseCountPeers;
+        private long hardLossResponseCount;
+        private long delayLossResponseCount;
         private long nackRecoveryHints;
         private long nackReorderingResolved;
         private long nackLossValidated;
@@ -592,6 +596,16 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                 if (peer.persistentCongestion()) {
                     this.persistentCongestionPeers++;
                 }
+                if (peer.hardLossResponseCount() >= 0L) {
+                    this.hardLossResponseCountPeers++;
+                    this.hardLossResponseCount = saturatingAdd(
+                            this.hardLossResponseCount, peer.hardLossResponseCount());
+                }
+                if (peer.delayLossResponseCount() >= 0L) {
+                    this.delayLossResponseCountPeers++;
+                    this.delayLossResponseCount = saturatingAdd(
+                            this.delayLossResponseCount, peer.delayLossResponseCount());
+                }
             }
             this.nackRecoveryHints += peer.nackRecoveryHints();
             this.nackReorderingResolved += peer.nackReorderingResolved();
@@ -683,6 +697,10 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                             this.maximumPacketRound >= 0L ? this.maximumPacketRound : null,
                             this.startupPeers,
                             this.persistentCongestionPeers,
+                            this.hardLossResponseCountPeers,
+                            this.delayLossResponseCountPeers,
+                            this.hardLossResponseCount,
+                            this.delayLossResponseCount,
                             this.nackRecoveryHints,
                             this.nackReorderingResolved,
                             this.nackLossValidated,
@@ -698,6 +716,10 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                 return current;
             }
             return current < 0L ? candidate : Math.min(current, candidate);
+        }
+
+        private static long saturatingAdd(long value, long positiveIncrement) {
+            return value >= Long.MAX_VALUE - positiveIncrement ? Long.MAX_VALUE : value + positiveIncrement;
         }
     }
 }

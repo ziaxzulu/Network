@@ -325,9 +325,20 @@ public final class PeerStats {
                                      double pacingRateBytesPerSecond, long minimumRttMillis,
                                      double recentLossRate, long packetRound, boolean startup,
                                      boolean persistentCongestion) {
+        this.congestionModelState(observedAtMillis, estimatedDeliveryRateBytesPerSecond,
+                pacingRateBytesPerSecond, minimumRttMillis, recentLossRate, packetRound, startup,
+                persistentCongestion, -1L, -1L);
+    }
+
+    public void congestionModelState(long observedAtMillis, double estimatedDeliveryRateBytesPerSecond,
+                                     double pacingRateBytesPerSecond, long minimumRttMillis,
+                                     double recentLossRate, long packetRound, boolean startup,
+                                     boolean persistentCongestion, long hardLossResponseCount,
+                                     long delayLossResponseCount) {
         this.congestionModelState = new CongestionModelState(
                 observedAtMillis, estimatedDeliveryRateBytesPerSecond, pacingRateBytesPerSecond,
-                minimumRttMillis, recentLossRate, packetRound, startup, persistentCongestion);
+                minimumRttMillis, recentLossRate, packetRound, startup, persistentCongestion,
+                hardLossResponseCount, delayLossResponseCount);
     }
 
     public void nackRecoveryHint(long validationDelayMillis) {
@@ -437,6 +448,8 @@ public final class PeerStats {
                 model == null ? -1L : model.packetRound(),
                 model != null && model.startup(),
                 model != null && model.persistentCongestion(),
+                model == null ? -1L : model.hardLossResponseCount(),
+                model == null ? -1L : model.delayLossResponseCount(),
                 this.lifetimeNackRecoveryHints.sum(),
                 this.lifetimeNackReorderingResolved.sum(),
                 this.lifetimeNackLossValidated.sum(),
@@ -609,6 +622,8 @@ public final class PeerStats {
             long packetRound,
             boolean congestionModelStartup,
             boolean persistentCongestion,
+            long hardLossResponseCount,
+            long delayLossResponseCount,
             long nackRecoveryHints,
             long nackReorderingResolved,
             long nackLossValidated,
@@ -626,7 +641,9 @@ public final class PeerStats {
             double recentLossRate,
             long packetRound,
             boolean startup,
-            boolean persistentCongestion
+            boolean persistentCongestion,
+            long hardLossResponseCount,
+            long delayLossResponseCount
     ) {
     }
 }

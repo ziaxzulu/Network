@@ -167,6 +167,20 @@ public class DefaultChannelToServerProxyMetrics implements RakChannelMetrics {
     }
 
     @Override
+    public void rakCongestionModelState(long observedAtMillis, double estimatedDeliveryRateBytesPerSecond,
+                                        double pacingRateBytesPerSecond, long minimumRttMillis,
+                                        double recentLossRate, long packetRound, boolean startup,
+                                        boolean persistentCongestion, long hardLossResponseCount,
+                                        long delayLossResponseCount) {
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakCongestionModelState(channel, observedAtMillis, estimatedDeliveryRateBytesPerSecond,
+                    pacingRateBytesPerSecond, minimumRttMillis, recentLossRate, packetRound, startup,
+                    persistentCongestion, hardLossResponseCount, delayLossResponseCount);
+        }
+    }
+
+    @Override
     public void rakNackRecoveryHint(long validationDelayMillis) {
         RakServerMetrics metrics = this.parent.config().getMetrics();
         if (metrics != null) {

@@ -267,6 +267,21 @@ public final class BenchmarkServerMetrics implements RakServerMetrics {
     }
 
     @Override
+    public void rakCongestionModelState(RakChildChannel channel, long observedAtMillis,
+                                        double estimatedDeliveryRateBytesPerSecond,
+                                        double pacingRateBytesPerSecond, long minimumRttMillis,
+                                        double recentLossRate, long packetRound, boolean startup,
+                                        boolean persistentCongestion, long hardLossResponseCount,
+                                        long delayLossResponseCount) {
+        PeerStats peer = this.byChannel.get(channel);
+        if (peer != null) {
+            peer.congestionModelState(observedAtMillis, estimatedDeliveryRateBytesPerSecond,
+                    pacingRateBytesPerSecond, minimumRttMillis, recentLossRate, packetRound,
+                    startup, persistentCongestion, hardLossResponseCount, delayLossResponseCount);
+        }
+    }
+
+    @Override
     public void rakNackRecoveryHint(RakChildChannel channel, long validationDelayMillis) {
         PeerStats peer = this.byChannel.get(channel);
         if (peer != null) {

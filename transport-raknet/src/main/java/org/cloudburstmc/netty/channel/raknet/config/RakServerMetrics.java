@@ -168,6 +168,35 @@ public interface RakServerMetrics {
     }
 
     /**
+     * Server-scoped counterpart to the cumulative loss-response overload of
+     * {@link RakChannelMetrics#rakCongestionModelState(long, double, double, long, double, long, boolean, boolean,
+     * long, long)}. The default implementation delegates to the original callback for compatibility with existing
+     * server metrics implementations.
+     *
+     * @param channel observed child channel
+     * @param observedAtMillis wall-clock observation time, in milliseconds since the Unix epoch
+     * @param estimatedDeliveryRateBytesPerSecond maximum filtered delivery rate, or {@code -1} until sampled
+     * @param pacingRateBytesPerSecond current sender pacing rate
+     * @param minimumRttMillis filtered minimum RTT, or {@code -1} until sampled
+     * @param recentLossRate most recent packet-round loss fraction
+     * @param packetRound completed packet-timed round count
+     * @param startup whether the controller is still in startup
+     * @param persistentCongestion whether persistent no-progress congestion is active
+     * @param hardLossResponseCount cumulative hard-loss reductions in this session
+     * @param delayLossResponseCount cumulative delay-qualified loss reductions in this session
+     */
+    default void rakCongestionModelState(RakChildChannel channel, long observedAtMillis,
+                                         double estimatedDeliveryRateBytesPerSecond,
+                                         double pacingRateBytesPerSecond, long minimumRttMillis,
+                                         double recentLossRate, long packetRound, boolean startup,
+                                         boolean persistentCongestion, long hardLossResponseCount,
+                                         long delayLossResponseCount) {
+        this.rakCongestionModelState(channel, observedAtMillis, estimatedDeliveryRateBytesPerSecond,
+                pacingRateBytesPerSecond, minimumRttMillis, recentLossRate, packetRound, startup,
+                persistentCongestion);
+    }
+
+    /**
      * @param channel observed child channel
      * @param validationDelayMillis delay before the hinted attempt may be declared lost
      */

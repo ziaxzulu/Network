@@ -61,6 +61,15 @@ ordered, so that path is the performance focus. Unreliable datagrams still
 share model accounting and pacing to prevent a congestion-control bypass, but
 no new unreliable-message scheduling or deadline API is implied.
 
+Model snapshots also expose cumulative hard-loss and delay-qualified
+loss-response counts. These are monotonic for the lifetime of one session and
+count actual congestion-window reductions, not raw loss reports. The extended
+`rakCongestionModelState` overload default-delegates to the original callback,
+so existing `RakChannelMetrics` and `RakServerMetrics` implementations continue
+to receive snapshots. Exporters should sum the counters only across fixed
+cohorts, never attach a remote address or peer identifier, and remove retained
+session state when `rakRecoveryStateClosed` arrives.
+
 ## Established channel benchmarks
 
 The benchmark kit for established RakNet channel bandwidth, latency, fanout, fairness, and impaired-network matrix runs lives in the sibling [`benchmark`](../benchmark) module.

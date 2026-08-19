@@ -419,11 +419,11 @@ final class RakModelCongestionController {
                 }
                 this.lossState = LossState.HOLD;
                 this.lossHoldKind = hardSignal ? LossHoldKind.HARD : LossHoldKind.DELAY;
-                this.lossResponseCount++;
+                this.lossResponseCount = saturatingAdd(this.lossResponseCount, 1L);
                 if (hardSignal) {
-                    this.hardLossResponseCount++;
+                    this.hardLossResponseCount = saturatingAdd(this.hardLossResponseCount, 1L);
                 } else {
-                    this.delayLossResponseCount++;
+                    this.delayLossResponseCount = saturatingAdd(this.delayLossResponseCount, 1L);
                 }
             }
             if (!hardSignal && delaySignal) {

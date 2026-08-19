@@ -124,6 +124,10 @@ agree on recovery mode and both resource-safety thresholds. Timeline schema 2
 also validates fixed-cohort model telemetry and its explicit availability;
 schema 1 remains readable only for non-model historical evidence. A structured safety abort is retained
 as partial diagnostic evidence but always makes the case and campaign fail.
+Schema-2 model aggregates include additive hard-loss and delay-qualified
+loss-response totals plus observed-peer counts. They are diagnostic cumulative
+controller-response counters; they do not replace the fresh full-cohort
+delivery-rate, pacing-rate, and minimum-RTT coverage gate below.
 For a model-based case with affected clients, every analyzed impairment event
 window must contain a post-apply sample with fresh, full affected-cohort
 delivery-rate, pacing-rate, and minimum-RTT coverage; healthy-only, partial, or

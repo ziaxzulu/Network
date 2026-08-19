@@ -254,6 +254,61 @@ public class RakRecoveryMetricsTests {
         Assertions.assertEquals(-1L, minimumRtt[0]);
     }
 
+    @Test
+    public void reportsCumulativeModelLossResponseCounts() {
+        RakRecoveryMetrics recovery = new RakRecoveryMetrics();
+        RakSlidingWindow window = new RakSlidingWindow(1_200, RakRecoveryMode.MODEL_BASED) {
+            @Override
+            public long getModelHardLossResponseCount() {
+                return 3L;
+            }
+
+            @Override
+            public long getModelDelayLossResponseCount() {
+                return 2L;
+            }
+        };
+        long[] hardResponses = {-1L};
+        long[] delayResponses = {-1L};
+        RakChannelMetrics metrics = new RakChannelMetrics() {
+            @Override
+            public void rakCongestionModelState(long observedAtMillis,
+                                                double estimatedDeliveryRateBytesPerSecond,
+                                                double pacingRateBytesPerSecond, long minimumRttMillis,
+                                                double recentLossRate, long packetRound, boolean startup,
+                                                boolean persistentCongestion, long hardLossResponseCount,
+                                                long delayLossResponseCount) {
+                hardResponses[0] = hardLossResponseCount;
+                delayResponses[0] = delayLossResponseCount;
+            }
+        };
+
+        recovery.initialize(metrics, window, 1_000L);
+
+        Assertions.assertEquals(3L, hardResponses[0]);
+        Assertions.assertEquals(2L, delayResponses[0]);
+    }
+
+    @Test
+    public void extendedModelStateDelegatesToExistingMetricsImplementation() {
+        int[] legacyCallbacks = {0};
+        RakChannelMetrics legacyMetrics = new RakChannelMetrics() {
+            @Override
+            public void rakCongestionModelState(long observedAtMillis,
+                                                double estimatedDeliveryRateBytesPerSecond,
+                                                double pacingRateBytesPerSecond, long minimumRttMillis,
+                                                double recentLossRate, long packetRound, boolean startup,
+                                                boolean persistentCongestion) {
+                legacyCallbacks[0]++;
+            }
+        };
+
+        legacyMetrics.rakCongestionModelState(1_000L, 50_000D, 60_000D, 25L,
+                0.05D, 7L, false, false, 3L, 2L);
+
+        Assertions.assertEquals(1, legacyCallbacks[0]);
+    }
+
     private static final class RecordingMetrics implements RakChannelMetrics {
         private final List<Send> sends = new ArrayList<>();
         private final List<Acknowledgement> acknowledgements = new ArrayList<>();
