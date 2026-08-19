@@ -81,6 +81,12 @@ public final class PeerStats {
     private final LongAdder lifetimeTimeoutRetransmittedBytes = new LongAdder();
     private final LongAdder lifetimeAcknowledgementProgressEvents = new LongAdder();
     private final LongAdder lifetimeAcknowledgementProgressBytes = new LongAdder();
+    private final LongAdder lifetimeNackRecoveryHints = new LongAdder();
+    private final LongAdder lifetimeNackReorderingResolved = new LongAdder();
+    private final LongAdder lifetimeNackLossValidated = new LongAdder();
+    private final AtomicLong lifetimeMaxNackRecoveryHintDelayMillis = new AtomicLong();
+    private final AtomicLong lifetimeMaxNackReorderingResolvedDelayMillis = new AtomicLong();
+    private final AtomicLong lifetimeMaxNackLossValidatedDelayMillis = new AtomicLong();
     private final AtomicBoolean disconnected = new AtomicBoolean();
     private final AtomicLong currentQueuedBytes = new AtomicLong();
     private final AtomicLong lifetimeMaxQueuedBytes = new AtomicLong();
@@ -96,6 +102,7 @@ public final class PeerStats {
     private volatile int retransmittedDatagramsInFlight;
     private volatile long lastAckProgressAtMillis = -1L;
     private volatile long recoveryStartedAtMillis = -1L;
+    private volatile CongestionModelState congestionModelState;
     private volatile RakState lastState = RakState.UNCONNECTED;
 
     public PeerStats(int id, boolean impaired) {
@@ -314,6 +321,30 @@ public final class PeerStats {
         this.clearRecoveryState();
     }
 
+    public void congestionModelState(long observedAtMillis, double estimatedDeliveryRateBytesPerSecond,
+                                     double pacingRateBytesPerSecond, long minimumRttMillis,
+                                     double recentLossRate, long packetRound, boolean startup,
+                                     boolean persistentCongestion) {
+        this.congestionModelState = new CongestionModelState(
+                observedAtMillis, estimatedDeliveryRateBytesPerSecond, pacingRateBytesPerSecond,
+                minimumRttMillis, recentLossRate, packetRound, startup, persistentCongestion);
+    }
+
+    public void nackRecoveryHint(long validationDelayMillis) {
+        this.lifetimeNackRecoveryHints.increment();
+        updateMaximum(this.lifetimeMaxNackRecoveryHintDelayMillis, Math.max(0L, validationDelayMillis));
+    }
+
+    public void nackReorderingResolved(long observedDelayMillis) {
+        this.lifetimeNackReorderingResolved.increment();
+        updateMaximum(this.lifetimeMaxNackReorderingResolvedDelayMillis, Math.max(0L, observedDelayMillis));
+    }
+
+    public void nackLossValidated(long observedDelayMillis) {
+        this.lifetimeNackLossValidated.increment();
+        updateMaximum(this.lifetimeMaxNackLossValidatedDelayMillis, Math.max(0L, observedDelayMillis));
+    }
+
     private void clearRecoveryState() {
         this.recoveryObservedAtMillis = -1L;
         this.currentBytesInFlight.set(0L);
@@ -325,6 +356,7 @@ public final class PeerStats {
         this.retransmittedDatagramsInFlight = 0;
         this.lastAckProgressAtMillis = -1L;
         this.recoveryStartedAtMillis = -1L;
+        this.congestionModelState = null;
     }
 
     private void updateBytesInFlight(int bytesInFlight) {
@@ -354,6 +386,7 @@ public final class PeerStats {
     }
 
     public TimelineSnapshot timelineSnapshot(boolean channelOpen, boolean channelActive) {
+        CongestionModelState model = this.congestionModelState;
         return new TimelineSnapshot(
                 this.id,
                 this.impaired,
@@ -395,7 +428,21 @@ public final class PeerStats {
                 this.retransmissionTimeout,
                 this.retransmittedDatagramsInFlight,
                 this.lastAckProgressAtMillis,
-                this.recoveryStartedAtMillis
+                this.recoveryStartedAtMillis,
+                model == null ? -1L : model.observedAtMillis(),
+                model == null ? -1.0D : model.estimatedDeliveryRateBytesPerSecond(),
+                model == null ? -1.0D : model.pacingRateBytesPerSecond(),
+                model == null ? -1L : model.minimumRttMillis(),
+                model == null ? -1.0D : model.recentLossRate(),
+                model == null ? -1L : model.packetRound(),
+                model != null && model.startup(),
+                model != null && model.persistentCongestion(),
+                this.lifetimeNackRecoveryHints.sum(),
+                this.lifetimeNackReorderingResolved.sum(),
+                this.lifetimeNackLossValidated.sum(),
+                this.lifetimeMaxNackRecoveryHintDelayMillis.get(),
+                this.lifetimeMaxNackReorderingResolvedDelayMillis.get(),
+                this.lifetimeMaxNackLossValidatedDelayMillis.get()
         );
     }
 
@@ -553,7 +600,33 @@ public final class PeerStats {
             long retransmissionTimeout,
             int retransmittedDatagramsInFlight,
             long lastAckProgressAtMillis,
-            long recoveryStartedAtMillis
+            long recoveryStartedAtMillis,
+            long congestionModelObservedAtMillis,
+            double estimatedDeliveryRateBytesPerSecond,
+            double pacingRateBytesPerSecond,
+            long minimumRttMillis,
+            double recentLossRate,
+            long packetRound,
+            boolean congestionModelStartup,
+            boolean persistentCongestion,
+            long nackRecoveryHints,
+            long nackReorderingResolved,
+            long nackLossValidated,
+            long maxNackRecoveryHintDelayMillis,
+            long maxNackReorderingResolvedDelayMillis,
+            long maxNackLossValidatedDelayMillis
+    ) {
+    }
+
+    private record CongestionModelState(
+            long observedAtMillis,
+            double estimatedDeliveryRateBytesPerSecond,
+            double pacingRateBytesPerSecond,
+            long minimumRttMillis,
+            double recentLossRate,
+            long packetRound,
+            boolean startup,
+            boolean persistentCongestion
     ) {
     }
 }

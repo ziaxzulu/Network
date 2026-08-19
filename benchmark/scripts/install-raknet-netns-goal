@@ -114,7 +114,7 @@ fi
 
 recovery_mode="$(<"$recovery_mode_file")"
 case "$recovery_mode" in
-  legacy|bounded)
+  legacy|bounded|model_based)
     ;;
   *)
     printf 'legacy\n' >"$recovery_mode_file"
@@ -128,4 +128,5 @@ echo "Goal mode file: $mode_file"
 echo "Recovery mode file: $recovery_mode_file"
 printf '%s\n' "Select legacy recovery: printf '%s\\n' legacy > $recovery_mode_file"
 printf '%s\n' "Select bounded recovery: printf '%s\\n' bounded > $recovery_mode_file"
+printf '%s\n' "Select model-based recovery: printf '%s\\n' model_based > $recovery_mode_file"
 echo "Existing exact sudoers authorization for $launcher_target with no arguments can be retained."

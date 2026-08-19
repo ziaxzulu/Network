@@ -8,8 +8,8 @@ as the obsolete `rakbench` service account.
 
 The passwordless launcher accepts no arguments. A small `zulu`-owned goal-mode
 file selects one of six root-owned scenario definitions, while a second fixed
-selection file chooses the transport recovery algorithm (`legacy` or
-`bounded`). Recovery defaults to `legacy`.
+selection file chooses the transport recovery algorithm (`legacy`, `bounded`,
+or `model_based`). Recovery defaults to `legacy`.
 
 | Mode | Purpose |
 | --- | --- |
@@ -78,8 +78,16 @@ printf '%s\n' bounded > /var/lib/raknet-netns-benchmark/recovery-mode
 sudo -n /usr/local/sbin/raknet-netns-pilot
 ```
 
-Use `legacy` for every baseline campaign and `bounded` for every candidate
-campaign. The launcher records the selected value in the goal manifest; each
+The model-based controller is selected through the same fixed, argument-free
+launcher; this does not expand the sudoers entry:
+
+```bash
+printf '%s\n' model_based > /var/lib/raknet-netns-benchmark/recovery-mode
+sudo -n /usr/local/sbin/raknet-netns-pilot
+```
+
+Use one explicit mode consistently for each side of a pairwise comparison. The
+launcher records the selected value in the goal manifest; each
 campaign plan, case manifest, and Java timeline repeats it so analysis can
 reject missing, mixed, or mislabeled results.
 
@@ -93,6 +101,12 @@ snapshots. Transition runs also record the independently scheduled blackhole and
 path-restoration epochs. This preserves pre-failure retry, queue, direct-memory,
 CPU, recovery, and peer-lifecycle evidence even when a worker does not reach its
 final summary.
+Timeline schema 2 adds fixed `all`, `healthy`, and `affected` congestion-model
+aggregates. In `model_based` runs these include delivery and pacing rates,
+minimum RTT, recent loss, packet round, startup/persistent-congestion state, and
+NACK hint/reordering/validation counters. Per-field observed-peer counts and
+oldest/latest observation epochs make partial or stale cohort coverage explicit. Non-model and receiver-worker values are
+explicitly null with a reason in `metricAvailability`.
 Server workers also record aggregate and maximum event-loop pending tasks plus
 non-blocking scheduling-lag probes. At most one probe is outstanding per event
 loop, so a stalled loop cannot make the diagnostic build an unbounded task

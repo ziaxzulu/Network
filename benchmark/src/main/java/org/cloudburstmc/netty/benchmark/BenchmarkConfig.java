@@ -578,8 +578,9 @@ public final class BenchmarkConfig {
         return switch (value.trim().toLowerCase(Locale.ROOT)) {
             case "legacy" -> RakRecoveryMode.LEGACY;
             case "bounded" -> RakRecoveryMode.BOUNDED;
+            case "model_based" -> RakRecoveryMode.MODEL_BASED;
             default -> throw new IllegalArgumentException(
-                    "--recovery-mode must be one of: legacy, bounded");
+                    "--recovery-mode must be one of: legacy, bounded, model_based");
         };
     }
 

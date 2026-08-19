@@ -17,6 +17,8 @@ from typing import Any, Iterable
 
 
 SCHEMA_VERSION = 1
+TIMELINE_SCHEMA_VERSION = 2
+LEGACY_TIMELINE_SCHEMA_VERSION = 1
 EVENT_LABELS = ("initial-netem", "external-blackhole", "external-recovery")
 PRESSURE_FIELDS = (
     "nackRetransmittedDatagramsDelta",
@@ -40,7 +42,7 @@ QUEUE_FIELDS = (
     "currentBytesAtTPlus10",
 )
 FULL_CAMPAIGN_PROFILES = ("perfect", "near-loss", "regional-loss", "poor", "severe", "blackhole")
-RECOVERY_MODES = ("legacy", "bounded")
+RECOVERY_MODES = ("legacy", "bounded", "model_based")
 DEFAULT_MAX_PEER_QUEUE_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_HEALTHY_QUEUE_BYTES_PER_CLIENT = 1024 * 1024
 DEFAULT_MAX_AFFECTED_QUEUE_BYTES_PER_CLIENT = 8 * 1024 * 1024
@@ -484,6 +486,117 @@ def validate_resource_safety_policy(row: dict[str, Any], expected: dict[str, int
         raise AnalysisError(f"{context}.resourceSafetyPolicy.enforcementStatus must be {enforcement_status}")
 
 
+def validate_congestion_model_sample(sample: dict[str, Any], expected_recovery_mode: str,
+                                     *, receiver: bool, context: str,
+                                     previous_counters: dict[str, float] | None = None) -> None:
+    availability = sample.get("metricAvailability")
+    if not isinstance(availability, dict):
+        raise AnalysisError(f"{context}.metricAvailability must be an object")
+    expected_status = (
+        "unavailable-on-receiver-worker" if receiver
+        else "available" if expected_recovery_mode == "model_based"
+        else "not-configured-recovery-mode"
+    )
+    for field in ("congestionModelState", "nackValidationEvents"):
+        if availability.get(field) != expected_status:
+            raise AnalysisError(f"{context}.metricAvailability.{field} must be {expected_status}")
+    for cohort_name in ("all", "healthy", "affected"):
+        cohort = sample.get(cohort_name)
+        if not isinstance(cohort, dict):
+            raise AnalysisError(f"{context}.{cohort_name} must be an object")
+        model = cohort.get("congestionModel")
+        if receiver or expected_recovery_mode != "model_based":
+            if model is not None:
+                raise AnalysisError(f"{context}.{cohort_name}.congestionModel must be null")
+            continue
+        if not isinstance(model, dict):
+            raise AnalysisError(f"{context}.{cohort_name}.congestionModel must be an object")
+        for field in ("observedPeers", "estimatedDeliveryRateObservedPeers",
+                      "pacingRateObservedPeers", "minimumRttObservedPeers",
+                      "recentLossObservedPeers", "packetRoundObservedPeers",
+                      "startupPeers", "persistentCongestionPeers",
+                      "nackRecoveryHints", "nackReorderingResolved", "nackLossValidated"):
+            value = model.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise AnalysisError(f"{context}.{cohort_name}.congestionModel.{field} must be a non-negative integer")
+        coverage_fields = (
+            "estimatedDeliveryRateObservedPeers", "pacingRateObservedPeers",
+            "minimumRttObservedPeers", "recentLossObservedPeers", "packetRoundObservedPeers",
+        )
+        if model["observedPeers"] > cohort.get("observedPeers", -1) \
+                or any(model[field] > model["observedPeers"] for field in coverage_fields) \
+                or model["startupPeers"] > model["observedPeers"] \
+                or model["persistentCongestionPeers"] > model["observedPeers"]:
+            raise AnalysisError(f"{context}.{cohort_name}.congestionModel peer counts are inconsistent")
+        for field in ("oldestObservedAtEpochMillis", "latestObservedAtEpochMillis",
+                      "totalEstimatedDeliveryRateBytesPerSecond",
+                      "maxEstimatedDeliveryRateBytesPerSecond", "totalPacingRateBytesPerSecond",
+                      "maxPacingRateBytesPerSecond", "minimumRttMillis", "maximumMinimumRttMillis",
+                      "maximumRecentLossRate", "minimumPacketRound", "maximumPacketRound",
+                      "maxNackRecoveryHintDelayMillis", "maxNackReorderingResolvedDelayMillis",
+                      "maxNackLossValidatedDelayMillis"):
+            value = model.get(field)
+            if value is not None and (not finite_number(value) or value < 0):
+                raise AnalysisError(
+                    f"{context}.{cohort_name}.congestionModel.{field} must be null or non-negative"
+                )
+        loss = model.get("maximumRecentLossRate")
+        if finite_number(loss) and loss > 1:
+            raise AnalysisError(f"{context}.{cohort_name}.congestionModel.maximumRecentLossRate must be <= 1")
+        gauge_fields = (
+            "oldestObservedAtEpochMillis", "latestObservedAtEpochMillis",
+            "totalEstimatedDeliveryRateBytesPerSecond",
+            "maxEstimatedDeliveryRateBytesPerSecond", "totalPacingRateBytesPerSecond",
+            "maxPacingRateBytesPerSecond", "minimumRttMillis", "maximumMinimumRttMillis",
+            "maximumRecentLossRate", "minimumPacketRound", "maximumPacketRound",
+        )
+        if model["observedPeers"] == 0 and any(model.get(field) is not None for field in gauge_fields):
+            raise AnalysisError(f"{context}.{cohort_name}.congestionModel has gauges without observed peers")
+        oldest_observed = model.get("oldestObservedAtEpochMillis")
+        latest_observed = model.get("latestObservedAtEpochMillis")
+        if model["observedPeers"] > 0:
+            if not finite_number(oldest_observed) or not finite_number(latest_observed):
+                raise AnalysisError(
+                    f"{context}.{cohort_name}.congestionModel observation epochs are unavailable"
+                )
+            if oldest_observed > latest_observed or latest_observed > sample.get("epochMillis", -1):
+                raise AnalysisError(
+                    f"{context}.{cohort_name}.congestionModel observation epochs are inconsistent"
+                )
+        coverage_gauges = (
+            ("estimatedDeliveryRateObservedPeers",
+             ("totalEstimatedDeliveryRateBytesPerSecond", "maxEstimatedDeliveryRateBytesPerSecond")),
+            ("pacingRateObservedPeers",
+             ("totalPacingRateBytesPerSecond", "maxPacingRateBytesPerSecond")),
+            ("minimumRttObservedPeers", ("minimumRttMillis", "maximumMinimumRttMillis")),
+            ("recentLossObservedPeers", ("maximumRecentLossRate",)),
+            ("packetRoundObservedPeers", ("minimumPacketRound", "maximumPacketRound")),
+        )
+        for coverage_field, fields in coverage_gauges:
+            has_coverage = model[coverage_field] > 0
+            if any((model.get(field) is not None) != has_coverage for field in fields):
+                raise AnalysisError(
+                    f"{context}.{cohort_name}.congestionModel {coverage_field} disagrees with gauges"
+                )
+        event_delay_fields = (
+            ("nackRecoveryHints", "maxNackRecoveryHintDelayMillis"),
+            ("nackReorderingResolved", "maxNackReorderingResolvedDelayMillis"),
+            ("nackLossValidated", "maxNackLossValidatedDelayMillis"),
+        )
+        for count_field, delay_field in event_delay_fields:
+            if (model[count_field] == 0) != (model.get(delay_field) is None):
+                raise AnalysisError(
+                    f"{context}.{cohort_name}.congestionModel.{delay_field} availability disagrees with {count_field}"
+                )
+        if previous_counters is not None:
+            for field in ("nackRecoveryHints", "nackReorderingResolved", "nackLossValidated"):
+                key = f"{cohort_name}.{field}"
+                previous = previous_counters.get(key)
+                if previous is not None and model[field] < previous:
+                    raise AnalysisError(f"counter congestionModel.{field} regresses in {context}")
+                previous_counters[key] = model[field]
+
+
 def validate_role_timeline(path: Path, manifest: dict[str, Any], expected_run_id: str) -> dict[str, Any]:
     rows = read_jsonl(path)
     expected_recovery_mode = require_recovery_mode(manifest, "manifest")
@@ -491,8 +604,11 @@ def validate_role_timeline(path: Path, manifest: dict[str, Any], expected_run_id
     sequences: list[int] = []
     for index, row in enumerate(rows):
         context = f"receiver timeline record {index + 1}"
-        if row.get("schemaVersion") != SCHEMA_VERSION:
+        schema_version = row.get("schemaVersion")
+        if schema_version not in (LEGACY_TIMELINE_SCHEMA_VERSION, TIMELINE_SCHEMA_VERSION):
             raise AnalysisError(f"unsupported receiver timeline schema at {path} record {index + 1}")
+        if expected_recovery_mode == "model_based" and schema_version != TIMELINE_SCHEMA_VERSION:
+            raise AnalysisError(f"model_based receiver timeline requires schema {TIMELINE_SCHEMA_VERSION}: {path}")
         sequence = row.get("sequence")
         if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
             raise AnalysisError(f"invalid receiver timeline sequence at {path} record {index + 1}")
@@ -509,6 +625,10 @@ def validate_role_timeline(path: Path, manifest: dict[str, Any], expected_run_id
         validate_resource_safety_policy(
             row, expected_resource_safety, "not-applicable-receiver-worker", context
         )
+        if schema_version == TIMELINE_SCHEMA_VERSION and row.get("recordType") == "sample":
+            validate_congestion_model_sample(
+                row, expected_recovery_mode, receiver=True, context=context
+            )
     if sequences != sorted(sequences) or len(sequences) != len(set(sequences)):
         raise AnalysisError(f"receiver timeline sequences are not strictly increasing: {path}")
     return {
@@ -529,8 +649,11 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
     run_ids: set[str] = set()
     safety_aborts: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
-        if row.get("schemaVersion") != SCHEMA_VERSION:
+        schema_version = row.get("schemaVersion")
+        if schema_version not in (LEGACY_TIMELINE_SCHEMA_VERSION, TIMELINE_SCHEMA_VERSION):
             raise AnalysisError(f"unsupported timeline schema at {path} record {index + 1}")
+        if expected_recovery_mode == "model_based" and schema_version != TIMELINE_SCHEMA_VERSION:
+            raise AnalysisError(f"model_based timeline requires schema {TIMELINE_SCHEMA_VERSION}: {path}")
         sequence = row.get("sequence")
         if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
             raise AnalysisError(f"invalid timeline sequence at {path} record {index + 1}")
@@ -571,6 +694,8 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
     rss_available = False
     cpu_time_available = False
     event_loop_available = False
+    model_available = False
+    previous_model_counters: dict[str, float] = {}
     for index, sample in enumerate(samples):
         context = f"timeline sample {index + 1}"
         if sample.get("role") != "server":
@@ -600,6 +725,14 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
                 if previous is not None and value < previous:
                     raise AnalysisError(f"counter {field} regresses in {path}")
                 previous_counters[field] = value
+        if sample.get("schemaVersion") == TIMELINE_SCHEMA_VERSION:
+            validate_congestion_model_sample(
+                sample, expected_recovery_mode, receiver=False, context=context,
+                previous_counters=previous_model_counters
+            )
+            if expected_recovery_mode == "model_based":
+                model = sample["all"]["congestionModel"]
+                model_available = model_available or model["observedPeers"] > 0
         runtime = sample.get("runtime")
         if not isinstance(runtime, dict):
             raise AnalysisError(f"{context}.runtime must be an object")
@@ -650,6 +783,8 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
         raise AnalysisError(
             f"timeline sample gap {largest_gap:g}ms exceeds {MAX_TIMELINE_SAMPLE_GAP_MILLIS}ms: {path}"
         )
+    if expected_recovery_mode == "model_based" and not model_available:
+        raise AnalysisError(f"model_based timeline has no observed congestion-model state: {path}")
 
     configured_epochs = {
         "externalImpairmentAtEpochMillis": manifest.get("netemAtEpochMillis"),
@@ -676,6 +811,10 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
         "processCpuTime": "available",
         "residentSetSize": "available",
         "sharedEventLoops": "available" if event_loop_available else "unavailable",
+        "congestionModelState": (
+            "available" if expected_recovery_mode == "model_based"
+            else "not-configured-recovery-mode"
+        ),
         "resourceSafety": expected_resource_safety,
         "resourceSafetyAbort": safety_aborts[0] if len(safety_aborts) == 1 else None,
         "resourceSafetyAbortCount": len(safety_aborts),
@@ -1124,6 +1263,7 @@ def sustained_reclamation(
 def event_metrics(
     samples: list[dict[str, Any]], event: dict[str, Any], next_event: dict[str, Any] | None,
     previous_event: dict[str, Any] | None, *, permanent_disappearance: bool = False,
+    expected_recovery_mode: str = "legacy", affected_clients: int = 0,
 ) -> dict[str, Any]:
     start = event["applyStartedAtEpochMillis"]
     completed = event["applyCompletedAtEpochMillis"]
@@ -1231,6 +1371,99 @@ def event_metrics(
         missing_runtime.append("directMemory")
     if missing_runtime:
         raise AnalysisError(f"event window {event['label']} lacks runtime metrics: {missing_runtime}")
+    model_pre = pre_affected.get("congestionModel")
+    model_window_rows = [
+        (sample, affected(sample).get("congestionModel")) for sample in window_samples
+        if isinstance(affected(sample).get("congestionModel"), dict)
+    ]
+    complete_model_window_rows = [
+        (sample, model) for sample, model in model_window_rows
+        if affected(sample).get("observedPeers") == affected_clients
+        and model.get("observedPeers") == affected_clients
+        and model["observedPeers"] > 0
+        and model.get("estimatedDeliveryRateObservedPeers") == model["observedPeers"]
+        and model.get("pacingRateObservedPeers") == model["observedPeers"]
+        and model.get("minimumRttObservedPeers") == model["observedPeers"]
+    ]
+    usable_model_window_rows = [
+        (sample, model) for sample, model in complete_model_window_rows
+        if model.get("oldestObservedAtEpochMillis", -1) >= completed
+        and model.get("latestObservedAtEpochMillis", -1) <= sample["epochMillis"]
+    ]
+    usable_model_window = [model for _, model in usable_model_window_rows]
+    model_t_plus_10 = None if t_plus_10 is None else affected(t_plus_10).get("congestionModel")
+    congestion_model = None
+    model_available = bool(usable_model_window)
+    if expected_recovery_mode == "model_based" and isinstance(model_pre, dict) and model_window_rows:
+        model_window = [model for _, model in model_window_rows]
+        window_metrics = None
+        if usable_model_window:
+            window_metrics = {
+                "minimumObservedPeers": min(model["observedPeers"] for model in usable_model_window),
+                "minimumEstimatedDeliveryRateObservedPeers": min(
+                    model["estimatedDeliveryRateObservedPeers"] for model in usable_model_window
+                ),
+                "minimumPacingRateObservedPeers": min(
+                    model["pacingRateObservedPeers"] for model in usable_model_window
+                ),
+                "minimumRttObservedPeers": min(
+                    model["minimumRttObservedPeers"] for model in usable_model_window
+                ),
+                "minimumEstimatedDeliveryRateBytesPerSecond": min(
+                    (model["totalEstimatedDeliveryRateBytesPerSecond"] for model in usable_model_window
+                     if finite_number(model.get("totalEstimatedDeliveryRateBytesPerSecond"))),
+                    default=None,
+                ),
+                "minimumPacingRateBytesPerSecond": min(
+                    (model["totalPacingRateBytesPerSecond"] for model in usable_model_window
+                     if finite_number(model.get("totalPacingRateBytesPerSecond"))),
+                    default=None,
+                ),
+                "maximumRecentLossRate": maximum_available(
+                    model.get("maximumRecentLossRate") for model in usable_model_window
+                ),
+                "maximumPersistentCongestionPeers": maximum_available(
+                    model.get("persistentCongestionPeers") for model in usable_model_window
+                ),
+                "maximumMinimumRttMillis": maximum_available(
+                    model.get("maximumMinimumRttMillis") for model in usable_model_window
+                ),
+            }
+        congestion_model = {
+            "preEvent": model_pre,
+            "atTPlus10": model_t_plus_10 if isinstance(model_t_plus_10, dict) else None,
+            "coverage": {
+                "sampleCount": len(model_window),
+                "samplesWithObservedPeers": sum(model["observedPeers"] > 0 for model in model_window),
+                "samplesWithCompleteKeyCoverage": len(complete_model_window_rows),
+                "samplesWithFreshCompleteKeyCoverage": len(usable_model_window_rows),
+                "minimumObservedPeers": min(model["observedPeers"] for model in model_window),
+                "maximumObservedPeers": max(model["observedPeers"] for model in model_window),
+                "minimumEstimatedDeliveryRateObservedPeers": min(
+                    model["estimatedDeliveryRateObservedPeers"] for model in model_window
+                ),
+                "maximumEstimatedDeliveryRateObservedPeers": max(
+                    model["estimatedDeliveryRateObservedPeers"] for model in model_window
+                ),
+                "minimumPacingRateObservedPeers": min(
+                    model["pacingRateObservedPeers"] for model in model_window
+                ),
+                "maximumPacingRateObservedPeers": max(
+                    model["pacingRateObservedPeers"] for model in model_window
+                ),
+                "minimumRttObservedPeers": min(
+                    model["minimumRttObservedPeers"] for model in model_window
+                ),
+                "maximumRttObservedPeers": max(
+                    model["minimumRttObservedPeers"] for model in model_window
+                ),
+            },
+            "window": window_metrics,
+            "eventDeltas": {
+                field: model_window[-1][field] - model_pre[field]
+                for field in ("nackRecoveryHints", "nackReorderingResolved", "nackLossValidated")
+            },
+        }
     result = {
         **event,
         "analysisWindow": {
@@ -1254,6 +1487,7 @@ def event_metrics(
             "reclamation": None,
         },
         "runtimeMaxima": runtime_maxima,
+        "affectedCongestionModel": congestion_model,
         "dataAvailability": {
             "postEventTPlus10": (
                 "available" if t_plus_10 is not None
@@ -1263,6 +1497,14 @@ def event_metrics(
             "affectedRetryCounters": "available",
             "affectedQueueCounters": "available",
             "runtime": "available",
+            "affectedCongestionModel": (
+                "available" if model_available
+                else "unavailable-no-affected-model-samples"
+                if expected_recovery_mode == "model_based" and affected_clients > 0
+                else "not-applicable-no-affected-clients"
+                if expected_recovery_mode == "model_based"
+                else "not-configured-recovery-mode"
+            ),
             "usefulDeliveryInEventWindow": "unavailable-on-server-worker",
         },
     }
@@ -1419,10 +1661,14 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
         result["dataAvailability"]["receiverTimelines"] = receiver_timeline_availability
         aggregate, merged_summary = load_summary(case_root / "merged" / "lab-summary.json")
         result["aggregate"] = aggregate
+        if aggregate.get("recoveryModeProvenanceValid") is not True \
+                or aggregate.get("recoveryMode") != result["recoveryMode"]:
+            raise AnalysisError("merged summary recovery-mode provenance is invalid or disagrees with manifest")
         server_provenance = merged_summary.get("server")
         if not isinstance(server_provenance, dict) \
                 or server_provenance.get("runId") != run_id \
                 or server_provenance.get("role") != "server" \
+                or server_provenance.get("recoveryMode") != result["recoveryMode"] \
                 or not isinstance(server_provenance.get("gitRevision"), str) \
                 or not server_provenance["gitRevision"].strip():
             raise AnalysisError("merged summary lacks exact server run/revision provenance")
@@ -1443,6 +1689,7 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
             receiver_run_id = receiver.get("runId")
             receiver_revision = receiver.get("gitRevision")
             if receiver.get("role") != "client" \
+                    or receiver.get("recoveryMode") != result["recoveryMode"] \
                     or receiver_run_id not in expected_receivers \
                     or receiver_run_id in seen_receiver_runs \
                     or receiver.get("clients") != expected_receivers.get(receiver_run_id) \
@@ -1511,6 +1758,8 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
             result["externalEvents"].append(event_metrics(
                 samples, event, next_event, previous_event,
                 permanent_disappearance=permanent_disappearance,
+                expected_recovery_mode=result["recoveryMode"],
+                affected_clients=manifest["affectedClients"],
             ))
         result["runtimeMaxima"] = {
             "heapUsedBytes": max(sample["runtime"]["heapUsedBytes"] for sample in samples),
@@ -1575,6 +1824,12 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
             for event in result["externalEvents"]
         ):
             result["issues"].append("timeline does not reach T+10 for every external event")
+        if result["recoveryMode"] == "model_based" and manifest["affectedClients"] > 0 \
+                and any(event["dataAvailability"]["affectedCongestionModel"] != "available"
+                        for event in result["externalEvents"]):
+            result["issues"].append(
+                "model_based event window lacks usable affected-cohort model samples"
+            )
         result["status"] = "pass" if not result["issues"] else "fail"
     except (AnalysisError, KeyError, TypeError, ValueError, ArithmeticError) as error:
         reason = str(error) or error.__class__.__name__
@@ -1760,7 +2015,8 @@ def reduction(baseline: float, candidate: float) -> tuple[str, float | None]:
 def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]],
                   baseline_campaigns: list[dict[str, Any]], candidate_campaigns: list[dict[str, Any]],
                   minimum: float, max_affected_queue_per_client: int,
-                  minimum_campaigns: int, peer_reclamation_millis: int) -> dict[str, Any]:
+                  minimum_campaigns: int, peer_reclamation_millis: int,
+                  baseline_recovery_mode: str, candidate_recovery_mode: str) -> dict[str, Any]:
     complete_baseline_rows = [
         campaign for campaign in baseline_campaigns
         if campaign["status"] == "pass" and campaign["fullCampaign"]
@@ -1970,7 +2226,7 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
     candidate_scoped_cases = candidate
     candidate_scoped_campaigns = candidate_campaigns
     baseline_mode_provenance = {
-        "expected": "legacy",
+        "expected": baseline_recovery_mode,
         "caseModes": sorted({case.get("recoveryMode") for case in baseline_scoped_cases},
                             key=lambda value: str(value)),
         "campaignModes": sorted(
@@ -1979,7 +2235,7 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
         ),
     }
     candidate_mode_provenance = {
-        "expected": "bounded",
+        "expected": candidate_recovery_mode,
         "caseModes": sorted({case.get("recoveryMode") for case in candidate_scoped_cases},
                             key=lambda value: str(value)),
         "campaignModes": sorted(
@@ -1990,10 +2246,10 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
     recovery_modes_pass = (
         bool(baseline_scoped_cases) and bool(candidate_scoped_cases)
         and bool(complete_baseline_rows) and bool(complete_candidate_rows)
-        and all(case.get("recoveryMode") == "legacy" for case in baseline_scoped_cases)
-        and all(case.get("recoveryMode") == "bounded" for case in candidate_scoped_cases)
-        and all(campaign.get("recoveryMode") == "legacy" for campaign in complete_baseline_rows)
-        and all(campaign.get("recoveryMode") == "bounded" for campaign in candidate_scoped_campaigns)
+        and all(case.get("recoveryMode") == baseline_recovery_mode for case in baseline_scoped_cases)
+        and all(case.get("recoveryMode") == candidate_recovery_mode for case in candidate_scoped_cases)
+        and all(campaign.get("recoveryMode") == baseline_recovery_mode for campaign in complete_baseline_rows)
+        and all(campaign.get("recoveryMode") == candidate_recovery_mode for campaign in candidate_scoped_campaigns)
     )
     campaigns_pass = (
         len(baseline_identities) >= minimum_campaigns
@@ -2014,7 +2270,10 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
     if len(configuration_keys) != 1:
         issues.append("complete campaigns do not share one exact experiment configuration")
     if not recovery_modes_pass:
-        issues.append("comparison requires every baseline campaign/case to be legacy and every candidate campaign/case to be bounded")
+        issues.append(
+            f"comparison requires every baseline campaign/case to be {baseline_recovery_mode} "
+            f"and every candidate campaign/case to be {candidate_recovery_mode}"
+        )
     if not distribution_provenance_pass:
         issues.append("comparison requires one identical source revision and staged jar distribution across both recovery modes")
     if not permanent_disappearance_pass:
@@ -2224,6 +2483,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     mode.add_argument("--baseline-root", action="append", type=Path,
                       help="baseline goal/campaign/case root; repeatable; requires --candidate-root")
     parser.add_argument("--candidate-root", action="append", type=Path)
+    parser.add_argument("--baseline-recovery-mode", choices=RECOVERY_MODES, default="legacy",
+                        help="required baseline provenance in comparison mode (default: legacy)")
+    parser.add_argument("--candidate-recovery-mode", choices=RECOVERY_MODES, default="bounded",
+                        help="required candidate provenance in comparison mode (default: bounded)")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--healthy-p50-min", type=float, default=4.75)
     parser.add_argument("--healthy-fairness", type=float, default=0.99)
@@ -2247,6 +2510,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--baseline-root requires --candidate-root")
     if args.candidate_root and not args.baseline_root:
         parser.error("--candidate-root requires --baseline-root")
+    if args.baseline_root and args.baseline_recovery_mode == args.candidate_recovery_mode:
+        parser.error("comparison recovery modes must differ")
     for name in ("healthy_p50_min", "healthy_fairness", "healthy_send_deliver",
                  "poor_affected_p50", "poor_send_deliver", "minimum_pressure_reduction_percent"):
         value = getattr(args, name)
@@ -2330,7 +2595,8 @@ def main(argv: list[str]) -> int:
         comparison = compare_cases(
             baseline, candidate, baseline_campaigns, candidate_campaigns,
             args.minimum_pressure_reduction_percent, args.max_affected_queue_per_client,
-            args.minimum_complete_campaigns, args.peer_reclamation
+            args.minimum_complete_campaigns, args.peer_reclamation,
+            args.baseline_recovery_mode, args.candidate_recovery_mode
         )
         baseline_comparison_roots = set(comparison["requiredCompleteCampaigns"]["baseline"])
         candidate_comparison_roots = set(comparison["requiredCompleteCampaigns"]["candidate"])
@@ -2394,7 +2660,10 @@ def main(argv: list[str]) -> int:
             "scope": "comparison",
             "status": comparison["gateStatus"]["recoveryModeProvenance"],
             "actual": comparison["recoveryModeProvenance"],
-            "operator": "baseline legacy and candidate bounded",
+            "operator": (
+                f"baseline {args.baseline_recovery_mode} and "
+                f"candidate {args.candidate_recovery_mode}"
+            ),
             "threshold": True,
             "reason": None,
         }, {
@@ -2441,6 +2710,8 @@ def main(argv: list[str]) -> int:
         "mode": mode,
         "status": status,
         "thresholds": {
+            "baselineRecoveryMode": args.baseline_recovery_mode if comparison is not None else None,
+            "candidateRecoveryMode": args.candidate_recovery_mode if comparison is not None else None,
             "healthyP50Mbps": args.healthy_p50_min,
             "healthyFairness": args.healthy_fairness,
             "healthySendDeliver": args.healthy_send_deliver,

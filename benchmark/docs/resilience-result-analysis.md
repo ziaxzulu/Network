@@ -26,6 +26,8 @@ benchmark/scripts/analyze-resilience-results.py \
   --baseline-root /results/baseline-goal-2 \
   --candidate-root /results/candidate-goal-1 \
   --candidate-root /results/candidate-goal-2 \
+  --baseline-recovery-mode bounded \
+  --candidate-recovery-mode model_based \
   --out benchmark/build/resilience-comparison
 ```
 
@@ -118,8 +120,16 @@ An impaired profile is invalid without its initial-netem event, and a
 blackhole case is invalid without its external-blackhole event; omitting the
 same required event from baseline and candidate cannot bypass comparison.
 Every plan, manifest, server/receiver timeline record, and merged summary must
-agree on both resource-safety thresholds. A structured safety abort is retained
+agree on recovery mode and both resource-safety thresholds. Timeline schema 2
+also validates fixed-cohort model telemetry and its explicit availability;
+schema 1 remains readable only for non-model historical evidence. A structured safety abort is retained
 as partial diagnostic evidence but always makes the case and campaign fail.
+For a model-based case with affected clients, every analyzed impairment event
+window must contain a post-apply sample with fresh, full affected-cohort
+delivery-rate, pacing-rate, and minimum-RTT coverage; healthy-only, partial, or
+stale callback coverage is reported as `unavailable-no-affected-model-samples`
+and fails the case. Bounded coverage diagnostics and representative states are
+retained even on failure.
 Shared server event-loop pending-task and scheduling-lag availability and maxima
 are reported without inventing values when the runtime cannot expose them.
 
@@ -128,10 +138,11 @@ execution identities on each side, not two directory copies of one execution.
 Because the autonomous launcher runs at most one six-profile pilot per goal,
 the path-independent goal `generatedAt` identity is the repetition key;
 campaign output paths are provenance pointers, not evidence of another run.
-All baseline campaign plans, case manifests, and timeline records must say
-`legacy`; all candidate evidence must say `bounded`. The analyzer permits that
-single intentional algorithm difference, then requires every other network and
-workload parameter to match exactly across all four or more campaigns. Missing,
+`--baseline-recovery-mode` and `--candidate-recovery-mode` select the two
+different expected modes (`legacy`, `bounded`, or `model_based`); defaults remain
+`legacy` and `bounded`. The analyzer permits that single intentional algorithm
+difference, then requires every other network and workload parameter to match
+exactly across all four or more campaigns. Missing,
 invalid, mixed, or plan/manifest/timeline-disagreeing recovery values fail the
 comparison. A
 complete campaign must have an executed and passing campaign

@@ -89,7 +89,8 @@ Options:
   --max-queued-bytes N              Optional per-session RAK_MAX_QUEUED_BYTES override.
   --workers N                       Optional benchmark worker count.
   --reliability MODE                Reliability mode. Default: reliable_ordered.
-  --recovery-mode legacy|bounded    RakNet recovery algorithm. Default: legacy.
+  --recovery-mode legacy|bounded|model_based
+                                    RakNet recovery algorithm. Default: legacy.
   --resource-safety-max-aggregate-queued-bytes N
                                     Fail if cohort queue exceeds N. Default: 402653184 (384 MiB).
   --resource-safety-max-direct-memory-used-bytes N
@@ -344,10 +345,10 @@ case "$direction" in
 esac
 recovery_mode="${recovery_mode,,}"
 case "$recovery_mode" in
-  legacy|bounded)
+  legacy|bounded|model_based)
     ;;
   *)
-    echo "--recovery-mode must be legacy or bounded" >&2
+    echo "--recovery-mode must be legacy, bounded, or model_based" >&2
     exit 2
     ;;
 esac

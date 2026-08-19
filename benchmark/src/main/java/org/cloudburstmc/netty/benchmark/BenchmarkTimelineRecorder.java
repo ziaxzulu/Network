@@ -104,7 +104,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
         long epochMillis = System.currentTimeMillis();
         long monotonicNanos = System.nanoTime();
         addActualEvent("timeline-started", "benchmark", epochMillis, monotonicNanos);
-        captureAt(epochMillis, monotonicNanos);
+        captureCurrent();
         if (this.executor != null) {
             long interval = this.config.timelineSampleIntervalMillis();
             this.executor.scheduleAtFixedRate(this::safeCapture, interval, interval, TimeUnit.MILLISECONDS);
@@ -120,7 +120,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
         long epochMillis = System.currentTimeMillis();
         long monotonicNanos = System.nanoTime();
         addActualEvent("phase-" + phase, "benchmark", epochMillis, monotonicNanos);
-        captureAt(epochMillis, monotonicNanos);
+        captureCurrent();
     }
 
     synchronized void recordEvent(String eventName, String source) {
@@ -130,11 +130,23 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
         long epochMillis = System.currentTimeMillis();
         long monotonicNanos = System.nanoTime();
         addActualEvent(eventName, source, epochMillis, monotonicNanos);
-        captureAt(epochMillis, monotonicNanos);
+        captureCurrent();
     }
 
     synchronized BenchmarkTimeline.Sample captureAt(long epochMillis, long monotonicNanos) {
         List<PeerStats.TimelineSnapshot> peerSnapshots = this.snapshots.get();
+        return captureSnapshotsAt(peerSnapshots, epochMillis, monotonicNanos);
+    }
+
+    private BenchmarkTimeline.Sample captureCurrent() {
+        List<PeerStats.TimelineSnapshot> peerSnapshots = this.snapshots.get();
+        // Timestamp after collecting the snapshots so every callback represented by the sample is
+        // ordered at or before both its wall-clock and monotonic capture times.
+        return captureSnapshotsAt(peerSnapshots, System.currentTimeMillis(), System.nanoTime());
+    }
+
+    private BenchmarkTimeline.Sample captureSnapshotsAt(List<PeerStats.TimelineSnapshot> peerSnapshots,
+                                                        long epochMillis, long monotonicNanos) {
         MutableCohort all = new MutableCohort("all", this.configuredPeers);
         MutableCohort healthy = new MutableCohort("healthy", this.configuredPeers - this.configuredAffectedPeers);
         MutableCohort affected = new MutableCohort("affected", this.configuredAffectedPeers);
@@ -174,13 +186,17 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                 configuredEpoch(this.config.externalRecoveryAtEpochMillis()),
                 relativeMillis(epochMillis, this.config.externalRecoveryAtEpochMillis()),
                 resourceSafetyPolicy(),
-                this.capabilities.availability(this.benchmarkManagedBlackholeCounterStatus),
+                this.capabilities.availability(this.benchmarkManagedBlackholeCounterStatus,
+                        this.config.recoveryMode().usesModelBasedCongestionControl()),
                 runtime,
                 all.toSnapshot(this.capabilities, this.benchmarkManagedBlackholeCounters,
+                        this.config.recoveryMode().usesModelBasedCongestionControl(),
                         this.allQueueHighWater, this.allBytesInFlightHighWater),
                 healthy.toSnapshot(this.capabilities, this.benchmarkManagedBlackholeCounters,
+                        this.config.recoveryMode().usesModelBasedCongestionControl(),
                         this.healthyQueueHighWater, this.healthyBytesInFlightHighWater),
                 affected.toSnapshot(this.capabilities, this.benchmarkManagedBlackholeCounters,
+                        this.config.recoveryMode().usesModelBasedCongestionControl(),
                         this.affectedQueueHighWater, this.affectedBytesInFlightHighWater)
         );
         this.result.addTimelineRecord(sample);
@@ -247,7 +263,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
         try {
             synchronized (this) {
                 if (!this.closed) {
-                    captureAt(System.currentTimeMillis(), System.nanoTime());
+                    captureCurrent();
                 }
             }
         } catch (Throwable error) {
@@ -349,7 +365,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
             long epochMillis = System.currentTimeMillis();
             long monotonicNanos = System.nanoTime();
             addActualEvent("timeline-stopped", "benchmark", epochMillis, monotonicNanos);
-            captureAt(epochMillis, monotonicNanos);
+            captureCurrent();
         }
         this.closed = true;
     }
@@ -369,7 +385,8 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
             this.transport = transport;
         }
 
-        BenchmarkTimeline.MetricAvailability availability(String benchmarkManagedBlackholeCounterStatus) {
+        BenchmarkTimeline.MetricAvailability availability(String benchmarkManagedBlackholeCounterStatus,
+                                                           boolean modelBased) {
             boolean benchmarkManagedBlackholeCounters = "available".equals(benchmarkManagedBlackholeCounterStatus);
             List<String> unavailable = new ArrayList<>();
             if (!this.usefulSend) {
@@ -388,6 +405,9 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                         "cohort.retransmittedBytes", "cohort.staleDatagrams", "cohort.nackIn", "cohort.nackOut",
                         "cohort.currentQueuedBytes", "cohort.currentBytesInFlight", "cohort.recoveryState");
             }
+            if (!this.transport || !modelBased) {
+                unavailable.add("cohort.congestionModel");
+            }
             if (!benchmarkManagedBlackholeCounters) {
                 unavailable.add("cohort.blackholedDatagramsIn");
                 unavailable.add("cohort.blackholedDatagramsOut");
@@ -398,6 +418,10 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                     this.transport ? "available" : "unavailable-on-receiver-worker",
                     this.transport ? "available" : "unavailable-on-receiver-worker",
                     this.transport ? "available" : "unavailable-on-receiver-worker",
+                    !this.transport ? "unavailable-on-receiver-worker"
+                            : modelBased ? "available" : "not-configured-recovery-mode",
+                    !this.transport ? "unavailable-on-receiver-worker"
+                            : modelBased ? "available" : "not-configured-recovery-mode",
                     benchmarkManagedBlackholeCounterStatus,
                     Collections.unmodifiableList(unavailable)
             );
@@ -448,6 +472,31 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
         private double maxRttVariance = -1.0D;
         private long maxRetransmissionTimeout = -1L;
         private int recoveryStatePeers;
+        private int congestionModelPeers;
+        private long congestionModelOldestObservedAtMillis = -1L;
+        private long congestionModelObservedAtMillis = -1L;
+        private double totalEstimatedDeliveryRate;
+        private double maxEstimatedDeliveryRate = -1.0D;
+        private int deliveryRatePeers;
+        private double totalPacingRate;
+        private double maxPacingRate = -1.0D;
+        private int pacingRatePeers;
+        private long minimumRtt = -1L;
+        private long maximumMinimumRtt = -1L;
+        private int minimumRttPeers;
+        private double maximumRecentLossRate = -1.0D;
+        private int recentLossPeers;
+        private long minimumPacketRound = -1L;
+        private long maximumPacketRound = -1L;
+        private int packetRoundPeers;
+        private int startupPeers;
+        private int persistentCongestionPeers;
+        private long nackRecoveryHints;
+        private long nackReorderingResolved;
+        private long nackLossValidated;
+        private long maxNackRecoveryHintDelayMillis;
+        private long maxNackReorderingResolvedDelayMillis;
+        private long maxNackLossValidatedDelayMillis;
 
         private MutableCohort(String name, int configuredPeers) {
             this.name = name;
@@ -506,10 +555,58 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                 this.maxRttVariance = Math.max(this.maxRttVariance, peer.rttVariance());
                 this.maxRetransmissionTimeout = Math.max(this.maxRetransmissionTimeout, peer.retransmissionTimeout());
             }
+            if (peer.congestionModelObservedAtMillis() >= 0L) {
+                this.congestionModelPeers++;
+                this.congestionModelOldestObservedAtMillis = minimumEpoch(
+                        this.congestionModelOldestObservedAtMillis, peer.congestionModelObservedAtMillis());
+                this.congestionModelObservedAtMillis = Math.max(
+                        this.congestionModelObservedAtMillis, peer.congestionModelObservedAtMillis());
+                if (peer.estimatedDeliveryRateBytesPerSecond() >= 0.0D) {
+                    this.deliveryRatePeers++;
+                    this.totalEstimatedDeliveryRate += peer.estimatedDeliveryRateBytesPerSecond();
+                    this.maxEstimatedDeliveryRate = Math.max(
+                            this.maxEstimatedDeliveryRate, peer.estimatedDeliveryRateBytesPerSecond());
+                }
+                if (peer.pacingRateBytesPerSecond() >= 0.0D) {
+                    this.pacingRatePeers++;
+                    this.totalPacingRate += peer.pacingRateBytesPerSecond();
+                    this.maxPacingRate = Math.max(this.maxPacingRate, peer.pacingRateBytesPerSecond());
+                }
+                if (peer.minimumRttMillis() >= 0L) {
+                    this.minimumRttPeers++;
+                    this.minimumRtt = minimumEpoch(this.minimumRtt, peer.minimumRttMillis());
+                    this.maximumMinimumRtt = Math.max(this.maximumMinimumRtt, peer.minimumRttMillis());
+                }
+                if (peer.recentLossRate() >= 0.0D) {
+                    this.recentLossPeers++;
+                    this.maximumRecentLossRate = Math.max(this.maximumRecentLossRate, peer.recentLossRate());
+                }
+                if (peer.packetRound() >= 0L) {
+                    this.packetRoundPeers++;
+                    this.minimumPacketRound = minimumEpoch(this.minimumPacketRound, peer.packetRound());
+                    this.maximumPacketRound = Math.max(this.maximumPacketRound, peer.packetRound());
+                }
+                if (peer.congestionModelStartup()) {
+                    this.startupPeers++;
+                }
+                if (peer.persistentCongestion()) {
+                    this.persistentCongestionPeers++;
+                }
+            }
+            this.nackRecoveryHints += peer.nackRecoveryHints();
+            this.nackReorderingResolved += peer.nackReorderingResolved();
+            this.nackLossValidated += peer.nackLossValidated();
+            this.maxNackRecoveryHintDelayMillis = Math.max(
+                    this.maxNackRecoveryHintDelayMillis, peer.maxNackRecoveryHintDelayMillis());
+            this.maxNackReorderingResolvedDelayMillis = Math.max(
+                    this.maxNackReorderingResolvedDelayMillis, peer.maxNackReorderingResolvedDelayMillis());
+            this.maxNackLossValidatedDelayMillis = Math.max(
+                    this.maxNackLossValidatedDelayMillis, peer.maxNackLossValidatedDelayMillis());
         }
 
         private BenchmarkTimeline.Cohort toSnapshot(Capabilities capabilities,
                                                     boolean benchmarkManagedBlackholeCounters,
+                                                    boolean modelBased,
                                                     long queueHighWater, long bytesInFlightHighWater) {
             boolean transport = capabilities.transport;
             long retransmittedDatagrams = this.nackRetransmittedDatagrams + this.timeoutRetransmittedDatagrams;
@@ -563,7 +660,36 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                     recoveryObserved ? this.slowStartThreshold : null,
                     recoveryObserved && this.maxSmoothedRtt >= 0.0D ? this.maxSmoothedRtt : null,
                     recoveryObserved && this.maxRttVariance >= 0.0D ? this.maxRttVariance : null,
-                    recoveryObserved && this.maxRetransmissionTimeout >= 0L ? this.maxRetransmissionTimeout : null
+                    recoveryObserved && this.maxRetransmissionTimeout >= 0L ? this.maxRetransmissionTimeout : null,
+                    capabilities.transport && modelBased ? new BenchmarkTimeline.CongestionModel(
+                            this.congestionModelPeers,
+                            this.deliveryRatePeers,
+                            this.pacingRatePeers,
+                            this.minimumRttPeers,
+                            this.recentLossPeers,
+                            this.packetRoundPeers,
+                            this.congestionModelOldestObservedAtMillis >= 0L
+                                    ? this.congestionModelOldestObservedAtMillis : null,
+                            this.congestionModelObservedAtMillis >= 0L
+                                    ? this.congestionModelObservedAtMillis : null,
+                            this.deliveryRatePeers > 0 ? this.totalEstimatedDeliveryRate : null,
+                            this.deliveryRatePeers > 0 ? this.maxEstimatedDeliveryRate : null,
+                            this.pacingRatePeers > 0 ? this.totalPacingRate : null,
+                            this.pacingRatePeers > 0 ? this.maxPacingRate : null,
+                            this.minimumRtt >= 0L ? this.minimumRtt : null,
+                            this.maximumMinimumRtt >= 0L ? this.maximumMinimumRtt : null,
+                            this.maximumRecentLossRate >= 0.0D ? this.maximumRecentLossRate : null,
+                            this.minimumPacketRound >= 0L ? this.minimumPacketRound : null,
+                            this.maximumPacketRound >= 0L ? this.maximumPacketRound : null,
+                            this.startupPeers,
+                            this.persistentCongestionPeers,
+                            this.nackRecoveryHints,
+                            this.nackReorderingResolved,
+                            this.nackLossValidated,
+                            this.nackRecoveryHints > 0 ? this.maxNackRecoveryHintDelayMillis : null,
+                            this.nackReorderingResolved > 0 ? this.maxNackReorderingResolvedDelayMillis : null,
+                            this.nackLossValidated > 0 ? this.maxNackLossValidatedDelayMillis : null
+                    ) : null
             );
         }
 

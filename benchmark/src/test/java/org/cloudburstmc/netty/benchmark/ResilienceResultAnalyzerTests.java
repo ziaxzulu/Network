@@ -607,6 +607,210 @@ public class ResilienceResultAnalyzerTests {
     }
 
     @Test
+    public void comparisonSupportsExplicitBoundedToModelBasedPairWithModelTelemetry() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-bounded-baseline");
+        Path candidate = Files.createTempDirectory("raknet-resilience-model-candidate");
+        buildFullCampaignSet(baseline, "bounded");
+        buildFullCampaignSet(candidate, "model_based");
+        scaleCandidatePressure(candidate, 10);
+        Path output = Files.createTempDirectory("raknet-resilience-model-comparison");
+
+        ProcessResult result = compare(
+                baseline, candidate, output, "bounded", "model_based");
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        JsonNode report = readReport(output);
+        Assertions.assertEquals("pass", report.path("comparison").path("status").asText());
+        Assertions.assertEquals("bounded", report.path("comparison").path("recoveryModeProvenance")
+                .path("baseline").path("expected").asText());
+        Assertions.assertEquals("model_based", report.path("comparison").path("recoveryModeProvenance")
+                .path("candidate").path("expected").asText());
+        boolean modelEventObserved = false;
+        for (JsonNode caseResult : report.path("cases")) {
+            if (!"candidate".equals(caseResult.path("side").asText())) {
+                continue;
+            }
+            Assertions.assertEquals("available", caseResult.path("dataAvailability")
+                    .path("timeline").path("congestionModelState").asText());
+            for (JsonNode event : caseResult.path("externalEvents")) {
+                modelEventObserved |= event.path("affectedCongestionModel").isObject();
+            }
+        }
+        Assertions.assertTrue(modelEventObserved);
+
+        Path modelTimeline;
+        try (var paths = Files.walk(candidate.resolve("campaign-1/cases/02-near-loss/server"))) {
+            modelTimeline = paths.filter(path -> path.getFileName().toString().equals("timeline.jsonl"))
+                    .findFirst().orElseThrow();
+        }
+        List<String> rows = Files.readAllLines(modelTimeline, StandardCharsets.UTF_8);
+        ObjectNode first = (ObjectNode) JSON.readTree(rows.get(0));
+        first.put("schemaVersion", 1);
+        rows.set(0, JSON.writeValueAsString(first));
+        Files.writeString(modelTimeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+        Path invalidOutput = Files.createTempDirectory("raknet-resilience-model-schema-invalid");
+        ProcessResult invalid = compare(
+                baseline, candidate, invalidOutput, "bounded", "model_based");
+        Assertions.assertEquals(1, invalid.exitCode, invalid.output);
+        Assertions.assertTrue(readReport(invalidOutput).path("cases").toString()
+                .contains("model_based timeline requires schema 2"));
+    }
+
+    @Test
+    public void modelBasedComparisonRequiresAffectedModelSamplesInEveryEventWindow() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-model-window-baseline");
+        Path candidate = Files.createTempDirectory("raknet-resilience-model-window-candidate");
+        buildFullCampaignSet(baseline, "bounded");
+        buildFullCampaignSet(candidate, "model_based");
+        scaleCandidatePressure(candidate, 10);
+        Path modelTimeline;
+        try (var paths = Files.walk(candidate.resolve("campaign-1/cases/02-near-loss/server"))) {
+            modelTimeline = paths.filter(path -> path.getFileName().toString().equals("timeline.jsonl"))
+                    .findFirst().orElseThrow();
+        }
+        List<String> rows = Files.readAllLines(modelTimeline, StandardCharsets.UTF_8);
+        List<String> originalRows = List.copyOf(rows);
+        for (int index = 0; index < rows.size(); index++) {
+            ObjectNode row = (ObjectNode) JSON.readTree(rows.get(index));
+            if (!"sample".equals(row.path("recordType").asText())) {
+                continue;
+            }
+            ObjectNode model = (ObjectNode) row.path("affected").path("congestionModel");
+            model.put("observedPeers", 0);
+            model.put("estimatedDeliveryRateObservedPeers", 0);
+            model.put("pacingRateObservedPeers", 0);
+            model.put("minimumRttObservedPeers", 0);
+            model.put("recentLossObservedPeers", 0);
+            model.put("packetRoundObservedPeers", 0);
+            model.put("startupPeers", 0);
+            model.put("persistentCongestionPeers", 0);
+            for (String field : List.of("oldestObservedAtEpochMillis", "latestObservedAtEpochMillis",
+                    "totalEstimatedDeliveryRateBytesPerSecond", "maxEstimatedDeliveryRateBytesPerSecond",
+                    "totalPacingRateBytesPerSecond", "maxPacingRateBytesPerSecond",
+                    "minimumRttMillis", "maximumMinimumRttMillis", "maximumRecentLossRate",
+                    "minimumPacketRound", "maximumPacketRound")) {
+                model.putNull(field);
+            }
+            rows.set(index, JSON.writeValueAsString(row));
+        }
+        Files.writeString(modelTimeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+        Path output = Files.createTempDirectory("raknet-resilience-model-window-report");
+
+        ProcessResult result = compare(baseline, candidate, output, "bounded", "model_based");
+
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        JsonNode cases = readReport(output).path("cases");
+        Assertions.assertTrue(cases.toString().contains("unavailable-no-affected-model-samples"));
+        Assertions.assertTrue(cases.toString()
+                .contains("model_based event window lacks usable affected-cohort model samples"));
+
+        rows = new ArrayList<>(originalRows);
+        for (int index = 0; index < rows.size(); index++) {
+            ObjectNode row = (ObjectNode) JSON.readTree(rows.get(index));
+            if (!"sample".equals(row.path("recordType").asText())) {
+                continue;
+            }
+            ObjectNode model = (ObjectNode) row.path("affected").path("congestionModel");
+            int observedPeers = model.path("observedPeers").asInt();
+            if (observedPeers > 0) {
+                model.put("estimatedDeliveryRateObservedPeers", observedPeers - 1);
+                model.put("pacingRateObservedPeers", observedPeers - 1);
+                model.put("minimumRttObservedPeers", observedPeers - 1);
+            }
+            rows.set(index, JSON.writeValueAsString(row));
+        }
+        Files.writeString(modelTimeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+        Path partialOutput = Files.createTempDirectory("raknet-resilience-model-partial-window-report");
+
+        ProcessResult partial = compare(baseline, candidate, partialOutput, "bounded", "model_based");
+
+        Assertions.assertEquals(1, partial.exitCode, partial.output);
+        JsonNode partialCases = readReport(partialOutput).path("cases");
+        Assertions.assertTrue(partialCases.toString().contains("unavailable-no-affected-model-samples"));
+        Assertions.assertTrue(partialCases.toString()
+                .contains("model_based event window lacks usable affected-cohort model samples"));
+        JsonNode partialEvent = null;
+        for (JsonNode caseResult : partialCases) {
+            if (!"candidate".equals(caseResult.path("side").asText())
+                    || !caseResult.path("caseRoot").asText()
+                    .contains("campaign-1/cases/02-near-loss")) {
+                continue;
+            }
+            partialEvent = caseResult.path("externalEvents").get(0);
+        }
+        Assertions.assertNotNull(partialEvent);
+        Assertions.assertTrue(partialEvent.path("affectedCongestionModel").isObject());
+        Assertions.assertTrue(partialEvent.path("affectedCongestionModel").path("window").isNull());
+        Assertions.assertTrue(partialEvent.path("affectedCongestionModel").path("coverage")
+                .path("sampleCount").asInt() > 0);
+
+        rows = new ArrayList<>(originalRows);
+        for (int index = 0; index < rows.size(); index++) {
+            ObjectNode row = (ObjectNode) JSON.readTree(rows.get(index));
+            if (!"sample".equals(row.path("recordType").asText())) {
+                continue;
+            }
+            ObjectNode model = (ObjectNode) row.path("affected").path("congestionModel");
+            int cohortPeers = row.path("affected").path("observedPeers").asInt();
+            if (cohortPeers > 0) {
+                int modelPeers = cohortPeers - 1;
+                model.put("observedPeers", modelPeers);
+                model.put("estimatedDeliveryRateObservedPeers", modelPeers);
+                model.put("pacingRateObservedPeers", modelPeers);
+                model.put("minimumRttObservedPeers", modelPeers);
+                model.put("recentLossObservedPeers", modelPeers);
+                model.put("packetRoundObservedPeers", modelPeers);
+                model.put("startupPeers", 0);
+                model.put("persistentCongestionPeers", modelPeers);
+                if (modelPeers == 0) {
+                    for (String field : List.of("oldestObservedAtEpochMillis", "latestObservedAtEpochMillis",
+                            "totalEstimatedDeliveryRateBytesPerSecond", "maxEstimatedDeliveryRateBytesPerSecond",
+                            "totalPacingRateBytesPerSecond", "maxPacingRateBytesPerSecond",
+                            "minimumRttMillis", "maximumMinimumRttMillis", "maximumRecentLossRate",
+                            "minimumPacketRound", "maximumPacketRound")) {
+                        model.putNull(field);
+                    }
+                }
+            }
+            rows.set(index, JSON.writeValueAsString(row));
+        }
+        Files.writeString(modelTimeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+        Path incompleteCohortOutput = Files.createTempDirectory(
+                "raknet-resilience-model-incomplete-cohort-window-report");
+
+        ProcessResult incompleteCohort = compare(
+                baseline, candidate, incompleteCohortOutput, "bounded", "model_based");
+
+        Assertions.assertEquals(1, incompleteCohort.exitCode, incompleteCohort.output);
+        Assertions.assertTrue(readReport(incompleteCohortOutput).path("cases").toString()
+                .contains("unavailable-no-affected-model-samples"));
+
+        rows = new ArrayList<>(originalRows);
+        for (int index = 0; index < rows.size(); index++) {
+            ObjectNode row = (ObjectNode) JSON.readTree(rows.get(index));
+            if (!"sample".equals(row.path("recordType").asText())) {
+                continue;
+            }
+            ObjectNode model = (ObjectNode) row.path("affected").path("congestionModel");
+            if (model.path("observedPeers").asInt() > 0) {
+                long staleEpoch = Math.min(101_000L, row.path("epochMillis").asLong());
+                model.put("oldestObservedAtEpochMillis", staleEpoch);
+                model.put("latestObservedAtEpochMillis", staleEpoch);
+            }
+            rows.set(index, JSON.writeValueAsString(row));
+        }
+        Files.writeString(modelTimeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+        Path staleOutput = Files.createTempDirectory("raknet-resilience-model-stale-window-report");
+
+        ProcessResult stale = compare(baseline, candidate, staleOutput, "bounded", "model_based");
+
+        Assertions.assertEquals(1, stale.exitCode, stale.output);
+        JsonNode staleCases = readReport(staleOutput).path("cases");
+        Assertions.assertTrue(staleCases.toString().contains("unavailable-no-affected-model-samples"));
+        Assertions.assertTrue(staleCases.toString().contains("samplesWithFreshCompleteKeyCoverage\":0"));
+    }
+
+    @Test
     public void comparisonRequiresOneExactStagedDistribution() throws Exception {
         Path baseline = Files.createTempDirectory("raknet-resilience-dist-baseline");
         Path candidate = Files.createTempDirectory("raknet-resilience-dist-candidate");
@@ -999,10 +1203,17 @@ public class ResilienceResultAnalyzerTests {
     }
 
     private static ProcessResult compare(Path baseline, Path candidate, Path output) throws Exception {
+        return compare(baseline, candidate, output, "legacy", "bounded");
+    }
+
+    private static ProcessResult compare(Path baseline, Path candidate, Path output,
+                                         String baselineMode, String candidateMode) throws Exception {
         return runProcess(root, Duration.ofSeconds(10),
                 "python3", analyzer.toString(),
                 "--baseline-root", baseline.toString(),
                 "--candidate-root", candidate.toString(),
+                "--baseline-recovery-mode", baselineMode,
+                "--candidate-recovery-mode", candidateMode,
                 "--out", output.toString());
     }
 
@@ -1147,10 +1358,14 @@ public class ResilienceResultAnalyzerTests {
     }
 
     private static void setMergedProvenance(ObjectNode summary, String runId, int healthyClients,
-                                            int affectedClients, String revision) {
+                                            int affectedClients, String revision, String recoveryMode) {
+        ObjectNode aggregate = (ObjectNode) summary.withObject("/aggregate");
+        aggregate.put("recoveryModeProvenanceValid", true);
+        aggregate.put("recoveryMode", recoveryMode);
         summary.putObject("server")
                 .put("runId", runId)
                 .put("role", "server")
+                .put("recoveryMode", recoveryMode)
                 .put("gitRevision", revision);
         ArrayNode receivers = summary.putArray("receivers");
         if (affectedClients > 0) {
@@ -1158,17 +1373,20 @@ public class ResilienceResultAnalyzerTests {
                     .put("runId", runId + "-affected")
                     .put("role", "client")
                     .put("clients", affectedClients)
+                    .put("recoveryMode", recoveryMode)
                     .put("gitRevision", revision);
             receivers.addObject()
                     .put("runId", runId + "-healthy")
                     .put("role", "client")
                     .put("clients", healthyClients)
+                    .put("recoveryMode", recoveryMode)
                     .put("gitRevision", revision);
         } else {
             receivers.addObject()
                     .put("runId", runId + "-receiver")
                     .put("role", "client")
                     .put("clients", healthyClients)
+                    .put("recoveryMode", recoveryMode)
                     .put("gitRevision", revision);
         }
     }
@@ -1402,6 +1620,9 @@ public class ResilienceResultAnalyzerTests {
                 row.putNull("externalBlackholeAtEpochMillis");
                 row.putNull("externalRecoveryAtEpochMillis");
             }
+            if ("model_based".equals(recoveryMode) && "sample".equals(row.path("recordType").asText())) {
+                addModelTelemetry(row, false);
+            }
             rows.add(JSON.writeValueAsString(row));
         }
         Files.writeString(timeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
@@ -1424,7 +1645,7 @@ public class ResilienceResultAnalyzerTests {
         aggregate.put("affectedClientMbpsP50", perfect ? 0.0D : 4.0D);
         aggregate.put("affectedSentToDeliveredBytesRatio", perfect ? 0.0D : 1.5D);
         setMergedProvenance(summary, runId, perfect ? 10 : 8, perfect ? 0 : 2,
-                fixtureCandidateRevision(FIXTURE_BENCHMARK_JAR_SHA256));
+                fixtureCandidateRevision(FIXTURE_BENCHMARK_JAR_SHA256), recoveryMode);
         Files.writeString(caseRoot.resolve("merged/lab-summary.json"),
                 JSON.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n", StandardCharsets.UTF_8);
 
@@ -1460,6 +1681,9 @@ public class ResilienceResultAnalyzerTests {
             ObjectNode row = (ObjectNode) JSON.readTree(line);
             row.put("runId", newRunId);
             row.put("recoveryMode", recoveryMode);
+            if ("model_based".equals(recoveryMode) && "sample".equals(row.path("recordType").asText())) {
+                addModelTelemetry(row, true);
+            }
             rows.add(JSON.writeValueAsString(row));
         }
         Files.createDirectories(newTimeline.getParent());
@@ -1475,6 +1699,79 @@ public class ResilienceResultAnalyzerTests {
             case "severe" -> new String[]{"200ms", "20ms", "10%"};
             default -> new String[]{"0ms", "0ms", "0%"};
         };
+    }
+
+    private static void addModelTelemetry(ObjectNode row, boolean receiver) {
+        row.put("schemaVersion", 2);
+        ObjectNode availability = row.withObject("/metricAvailability");
+        availability.put("congestionModelState",
+                receiver ? "unavailable-on-receiver-worker" : "available");
+        availability.put("nackValidationEvents",
+                receiver ? "unavailable-on-receiver-worker" : "available");
+        for (String cohortName : List.of("all", "healthy", "affected")) {
+            ObjectNode cohort;
+            if (row.path(cohortName).isObject()) {
+                cohort = (ObjectNode) row.path(cohortName);
+            } else {
+                cohort = row.putObject(cohortName);
+                cohort.put("name", cohortName);
+                cohort.put("observedPeers", 0);
+            }
+            if (receiver) {
+                cohort.putNull("congestionModel");
+                continue;
+            }
+            int peers = cohort.path("observedPeers").asInt();
+            ObjectNode model = cohort.putObject("congestionModel");
+            model.put("observedPeers", peers);
+            model.put("estimatedDeliveryRateObservedPeers", peers);
+            model.put("pacingRateObservedPeers", peers);
+            model.put("minimumRttObservedPeers", peers);
+            model.put("recentLossObservedPeers", peers);
+            model.put("packetRoundObservedPeers", peers);
+            if (peers > 0) {
+                model.put("oldestObservedAtEpochMillis", row.path("epochMillis").asLong());
+                model.put("latestObservedAtEpochMillis", row.path("epochMillis").asLong());
+                model.put("totalEstimatedDeliveryRateBytesPerSecond", peers * 500_000.0D);
+                model.put("maxEstimatedDeliveryRateBytesPerSecond", 500_000.0D);
+                model.put("totalPacingRateBytesPerSecond", peers * 600_000.0D);
+                model.put("maxPacingRateBytesPerSecond", 600_000.0D);
+                model.put("minimumRttMillis", 20L);
+                model.put("maximumMinimumRttMillis", 25L);
+                model.put("maximumRecentLossRate", 0.05D);
+                model.put("minimumPacketRound", 2L);
+                model.put("maximumPacketRound", 4L);
+            } else {
+                for (String field : List.of("oldestObservedAtEpochMillis", "latestObservedAtEpochMillis",
+                        "totalEstimatedDeliveryRateBytesPerSecond", "maxEstimatedDeliveryRateBytesPerSecond",
+                        "totalPacingRateBytesPerSecond", "maxPacingRateBytesPerSecond",
+                        "minimumRttMillis", "maximumMinimumRttMillis", "maximumRecentLossRate",
+                        "minimumPacketRound", "maximumPacketRound")) {
+                    model.putNull(field);
+                }
+            }
+            model.put("startupPeers", 0);
+            model.put("persistentCongestionPeers", "affected".equals(cohortName) ? peers : 0);
+            long counter = row.path("sequence").asLong();
+            model.put("nackRecoveryHints", counter);
+            model.put("nackReorderingResolved", counter / 2L);
+            model.put("nackLossValidated", counter / 3L);
+            if (counter > 0) {
+                model.put("maxNackRecoveryHintDelayMillis", 30L);
+            } else {
+                model.putNull("maxNackRecoveryHintDelayMillis");
+            }
+            if (counter / 2L > 0) {
+                model.put("maxNackReorderingResolvedDelayMillis", 20L);
+            } else {
+                model.putNull("maxNackReorderingResolvedDelayMillis");
+            }
+            if (counter / 3L > 0) {
+                model.put("maxNackLossValidatedDelayMillis", 40L);
+            } else {
+                model.putNull("maxNackLossValidatedDelayMillis");
+            }
+        }
     }
 
     private static String initialNetemEvidence(String namespace, String iface, long started, long completed,
@@ -1721,6 +2018,7 @@ public class ResilienceResultAnalyzerTests {
                 Files.writeString(timeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
             }
         }
+        addMergedRecoveryProvenance(campaign);
     }
 
     private static void makePermanentBlackhole(Path campaign, Long reclaimAtEpochMillis) throws Exception {
@@ -1809,6 +2107,31 @@ public class ResilienceResultAnalyzerTests {
             for (Path timeline : paths.filter(path -> path.getFileName().toString().equals("timeline.jsonl"))
                     .toList()) {
                 densifyTimeline(timeline);
+            }
+        }
+        addMergedRecoveryProvenance(destination);
+    }
+
+    private static void addMergedRecoveryProvenance(Path rootPath) throws Exception {
+        try (var summaries = Files.walk(rootPath)) {
+            for (Path summaryPath : summaries.filter(path -> path.getFileName().toString()
+                    .equals("lab-summary.json")).toList()) {
+                Path caseRoot = summaryPath.getParent().getParent();
+                ObjectNode manifest = (ObjectNode) JSON.readTree(Files.readString(
+                        caseRoot.resolve("manifest.json"), StandardCharsets.UTF_8));
+                String recoveryMode = manifest.path("recoveryMode").asText();
+                ObjectNode summary = (ObjectNode) JSON.readTree(Files.readString(
+                        summaryPath, StandardCharsets.UTF_8));
+                ObjectNode aggregate = (ObjectNode) summary.path("aggregate");
+                aggregate.put("recoveryModeProvenanceValid", true);
+                aggregate.put("recoveryMode", recoveryMode);
+                ((ObjectNode) summary.path("server")).put("recoveryMode", recoveryMode);
+                for (JsonNode receiver : summary.path("receivers")) {
+                    ((ObjectNode) receiver).put("recoveryMode", recoveryMode);
+                }
+                Files.writeString(summaryPath,
+                        JSON.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                        StandardCharsets.UTF_8);
             }
         }
     }

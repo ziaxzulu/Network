@@ -2751,7 +2751,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(launcher.contains("This privileged goal launcher does not accept arguments"));
         Assertions.assertTrue(launcher.contains("pilot|transition|long-hold|cap-sweep|cohort-sweep|all"));
         Assertions.assertTrue(launcher.contains("recovery_mode_file=\"$state_root/recovery-mode\""));
-        Assertions.assertTrue(launcher.contains("legacy|bounded"));
+        Assertions.assertTrue(launcher.contains("legacy|bounded|model_based"));
         Assertions.assertTrue(launcher.contains("stat -c %U:%G \"$recovery_mode_file\""));
         Assertions.assertTrue(launcher.contains("stat -c %a \"$recovery_mode_file\""));
         Assertions.assertTrue(launcher.contains("stat -c %s \"$recovery_mode_file\""));
@@ -2802,6 +2802,8 @@ public class BenchmarkKitTests {
                 < installer.indexOf("elif [[ ! -e \"$recovery_mode_file\" ]]"));
         Assertions.assertTrue(installer.contains(
                 "Select bounded recovery: printf '%s\\\\n' bounded > $recovery_mode_file"));
+        Assertions.assertTrue(installer.contains(
+                "Select model-based recovery: printf '%s\\\\n' model_based > $recovery_mode_file"));
 
         String documentation = Files.readString(root.resolve("benchmark/docs/netns-autonomous-goal.md"),
                 StandardCharsets.UTF_8);
@@ -2811,6 +2813,8 @@ public class BenchmarkKitTests {
                 "zulu ALL=(root) NOPASSWD: /usr/local/sbin/raknet-netns-pilot \"\""));
         Assertions.assertTrue(documentation.contains(
                 "printf '%s\\n' bounded > /var/lib/raknet-netns-benchmark/recovery-mode"));
+        Assertions.assertTrue(documentation.contains(
+                "printf '%s\\n' model_based > /var/lib/raknet-netns-benchmark/recovery-mode"));
     }
 
     @Test
@@ -2868,7 +2872,7 @@ public class BenchmarkKitTests {
                 + "\"probeAckSpillover\":0,\"probeResponseRate\":0.833333333333,\"probeRttCount\":10,"
                 + "\"probeRttP95Millis\":9,\"probeRttP99Millis\":10,\"maxQueuedBytes\":4096}";
         Files.writeString(server.resolve("summary.json"),
-                "{\"runId\":\"server-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"server\","
+                "{\"runId\":\"server-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"server\",\"recoveryMode\":\"model_based\","
                         + "\"probeReliability\":\"UNRELIABLE\",\"probePriority\":\"HIGH\","
                         + "\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\","
                         + "\"startAtEpochMillis\":1000,\"impairmentLatencyMillis\":0,"
@@ -2884,7 +2888,7 @@ public class BenchmarkKitTests {
                 + "{\"id\":0,\"impaired\":false,\"bulkReceivedBytes\":500000},"
                 + "{\"id\":1,\"impaired\":true,\"bulkReceivedBytes\":100000}]}";
         Files.writeString(receiver.resolve("summary.json"),
-                "{\"runId\":\"receiver-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"client\","
+                "{\"runId\":\"receiver-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"client\",\"recoveryMode\":\"model_based\","
                         + "\"probeReliability\":\"UNRELIABLE\",\"probePriority\":\"HIGH\","
                         + "\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\","
                         + "\"startAtEpochMillis\":1000,\"iterations\":["
@@ -2922,6 +2926,10 @@ public class BenchmarkKitTests {
                 summary.path("externalImpairment").path("limitPackets").asInt());
         Assertions.assertEquals("UNRELIABLE", summary.path("aggregate").path("probeReliability").asText());
         Assertions.assertTrue(summary.path("aggregate").path("probeTransportProvenanceValid").asBoolean());
+        Assertions.assertTrue(summary.path("aggregate").path("recoveryModeProvenanceValid").asBoolean());
+        Assertions.assertEquals("model_based", summary.path("aggregate").path("recoveryMode").asText());
+        Assertions.assertEquals("model_based", summary.path("server").path("recoveryMode").asText());
+        Assertions.assertEquals("model_based", summary.path("receivers").get(0).path("recoveryMode").asText());
         Assertions.assertEquals("HIGH", summary.path("receivers").get(0).path("probePriority").asText());
         Assertions.assertEquals(36, summary.path("aggregate").path("probesSent").asInt());
         Assertions.assertEquals(30, summary.path("aggregate").path("probesAcked").asInt());
@@ -2936,7 +2944,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(report.contains("Netem evidence: `" + evidence + "`"));
         String csv = Files.readString(merged.resolve("lab-summary.csv"), StandardCharsets.UTF_8);
         Assertions.assertTrue(csv.lines().findFirst().orElseThrow()
-                .contains("probe_reliability,probe_priority,probe_semantics"));
+                .contains("reliability,recovery_mode,probe_reliability,probe_priority,probe_semantics"));
         Assertions.assertTrue(csv.lines().findFirst().orElseThrow().contains(
                 "impairment_profile,external_impairment,external_blackhole_at_epoch_ms,"
                         + "external_recovery_at_epoch_ms,netem_limit_packets,netem_evidence_dir"));
@@ -2969,6 +2977,71 @@ public class BenchmarkKitTests {
                 .contains("invalid-probe-transport-provenance"));
         Assertions.assertEquals("IMMEDIATE",
                 wrongReceiverSummary.path("receivers").get(1).path("probePriority").asText());
+
+        Path wrongRecoveryReceiver = output.resolve("receiver-wrong-recovery");
+        Path wrongRecoveryMerged = output.resolve("merged-wrong-recovery");
+        Files.createDirectories(wrongRecoveryReceiver);
+        Files.writeString(wrongRecoveryReceiver.resolve("summary.json"),
+                Files.readString(receiver.resolve("summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"recoveryMode\":\"model_based\"", "\"recoveryMode\":\"bounded\""),
+                StandardCharsets.UTF_8);
+        ProcessResult wrongRecoveryResult = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/merge-worker-results.sh").toString(),
+                "--server", server.toString(),
+                "--receiver", wrongRecoveryReceiver.toString(),
+                "--out", wrongRecoveryMerged.toString(),
+                "--case", "wrong-recovery-provenance");
+        Assertions.assertNotEquals(0, wrongRecoveryResult.exitCode, wrongRecoveryResult.output);
+        JsonNode wrongRecoverySummary = JSON.readTree(Files.readString(
+                wrongRecoveryMerged.resolve("lab-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertFalse(wrongRecoverySummary.path("aggregate")
+                .path("recoveryModeProvenanceValid").asBoolean());
+        Assertions.assertTrue(wrongRecoverySummary.path("aggregate").path("recoveryMode").isNull());
+        Assertions.assertTrue(wrongRecoverySummary.path("aggregate").path("unstableReasons").toString()
+                .contains("invalid-recovery-mode-provenance"));
+
+        Path missingRecoveryReceiver = output.resolve("receiver-missing-recovery");
+        Path missingRecoveryMerged = output.resolve("merged-missing-recovery");
+        Files.createDirectories(missingRecoveryReceiver);
+        Files.writeString(missingRecoveryReceiver.resolve("summary.json"),
+                Files.readString(receiver.resolve("summary.json"), StandardCharsets.UTF_8)
+                        .replace(",\"recoveryMode\":\"model_based\"", ""),
+                StandardCharsets.UTF_8);
+        ProcessResult missingRecoveryResult = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/merge-worker-results.sh").toString(),
+                "--server", server.toString(),
+                "--receiver", missingRecoveryReceiver.toString(),
+                "--out", missingRecoveryMerged.toString(),
+                "--case", "missing-recovery-provenance");
+        Assertions.assertNotEquals(0, missingRecoveryResult.exitCode, missingRecoveryResult.output);
+        JsonNode missingRecoverySummary = JSON.readTree(Files.readString(
+                missingRecoveryMerged.resolve("lab-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingRecoverySummary.path("aggregate")
+                .path("recoveryModeProvenanceValid").asBoolean());
+        Assertions.assertTrue(missingRecoverySummary.path("aggregate").path("recoveryMode").isNull());
+
+        Path unsupportedRecoveryReceiver = output.resolve("receiver-unsupported-recovery");
+        Path unsupportedRecoveryMerged = output.resolve("merged-unsupported-recovery");
+        Files.createDirectories(unsupportedRecoveryReceiver);
+        Files.writeString(unsupportedRecoveryReceiver.resolve("summary.json"),
+                Files.readString(receiver.resolve("summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"recoveryMode\":\"model_based\"", "\"recoveryMode\":\"experimental\""),
+                StandardCharsets.UTF_8);
+        ProcessResult unsupportedRecoveryResult = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/merge-worker-results.sh").toString(),
+                "--server", server.toString(),
+                "--receiver", unsupportedRecoveryReceiver.toString(),
+                "--out", unsupportedRecoveryMerged.toString(),
+                "--case", "unsupported-recovery-provenance");
+        Assertions.assertNotEquals(0, unsupportedRecoveryResult.exitCode, unsupportedRecoveryResult.output);
+        JsonNode unsupportedRecoverySummary = JSON.readTree(Files.readString(
+                unsupportedRecoveryMerged.resolve("lab-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertFalse(unsupportedRecoverySummary.path("aggregate")
+                .path("recoveryModeProvenanceValid").asBoolean());
+        Assertions.assertTrue(unsupportedRecoverySummary.path("aggregate").path("recoveryMode").isNull());
 
         Path missingReceiver = output.resolve("receiver-missing-provenance");
         Path missingReceiverMerged = output.resolve("merged-missing-receiver-provenance");
@@ -3139,7 +3212,7 @@ public class BenchmarkKitTests {
                 "--blackhole-after", "100ms",
                 "--blackhole-duration", "200ms",
                 "--direction", "both",
-                "--recovery-mode", "bounded",
+                "--recovery-mode", "model_based",
                 "--packet-limit", "100",
                 "--global-packet-limit", "200",
                 "--max-queued-bytes", "4096",
@@ -3153,7 +3226,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("blackhole", plan.path("profiles").get(0).path("profile").asText());
         Assertions.assertEquals("200ms", plan.path("parameters").path("blackholeDuration").asText());
         Assertions.assertEquals("both", plan.path("parameters").path("direction").asText());
-        Assertions.assertEquals("bounded", plan.path("parameters").path("recoveryMode").asText());
+        Assertions.assertEquals("model_based", plan.path("parameters").path("recoveryMode").asText());
         Assertions.assertEquals(100, plan.path("parameters").path("packetLimit").asInt());
         Assertions.assertEquals(200, plan.path("parameters").path("globalPacketLimit").asInt());
         Assertions.assertEquals(4096, plan.path("parameters").path("maxQueuedBytes").asInt());
@@ -3168,7 +3241,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(200L,
                 manifest.path("recoveryAtEpochMillis").asLong()
                         - manifest.path("blackholeAtEpochMillis").asLong());
-        Assertions.assertEquals("bounded", manifest.path("recoveryMode").asText());
+        Assertions.assertEquals("model_based", manifest.path("recoveryMode").asText());
         Assertions.assertEquals(100, manifest.path("packetLimit").asInt());
         Assertions.assertEquals(200, manifest.path("globalPacketLimit").asInt());
         Assertions.assertEquals(4096, manifest.path("maxQueuedBytes").asInt());
@@ -3177,9 +3250,9 @@ public class BenchmarkKitTests {
                 manifest.path("resourceSafetyMaxAggregateQueuedBytes").asLong());
         Assertions.assertEquals(805_306_368L,
                 manifest.path("resourceSafetyMaxDirectMemoryUsedBytes").asLong());
-        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--recovery-mode bounded"));
-        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode bounded"));
-        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--recovery-mode bounded"));
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--recovery-mode model_based"));
+        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode model_based"));
+        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--recovery-mode model_based"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--packet-limit 100"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--global-packet-limit 200"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--max-queued-bytes 4096"));

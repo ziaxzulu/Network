@@ -47,6 +47,12 @@ public class BenchmarkRecoveryModeTests {
         Assertions.assertEquals(RakRecoveryMode.BOUNDED, bounded.recoveryMode());
         Assertions.assertEquals("bounded", bounded.recoveryModeName());
 
+        BenchmarkConfig modelBased = BenchmarkConfig.parse(new String[]{
+                "baseline-bandwidth", "--recovery-mode", "model_based"
+        });
+        Assertions.assertEquals(RakRecoveryMode.MODEL_BASED, modelBased.recoveryMode());
+        Assertions.assertEquals("model_based", modelBased.recoveryModeName());
+
         BenchmarkConfig uppercase = BenchmarkConfig.parse(new String[]{
                 "baseline-bandwidth", "--recovery-mode=LEGACY"
         });
@@ -56,7 +62,7 @@ public class BenchmarkRecoveryModeTests {
                 () -> BenchmarkConfig.parse(new String[]{
                         "baseline-bandwidth", "--recovery-mode", "experimental"
                 }));
-        Assertions.assertEquals("--recovery-mode must be one of: legacy, bounded", error.getMessage());
+        Assertions.assertEquals("--recovery-mode must be one of: legacy, bounded, model_based", error.getMessage());
     }
 
     @Test
@@ -76,6 +82,16 @@ public class BenchmarkRecoveryModeTests {
                 "server recovery mode must be inherited from the RakNet server parent option");
         Assertions.assertEquals(RakRecoveryMode.BOUNDED,
                 client.config().options().get(RakChannelOption.RAK_RECOVERY_MODE));
+
+        BenchmarkConfig modelBased = BenchmarkConfig.parse(new String[]{
+                "baseline-bandwidth", "--recovery-mode", "model_based"
+        });
+        RakNetBenchmarkRunner.configureServerRecoveryMode(server, modelBased);
+        RakNetBenchmarkRunner.configureClientRecoveryMode(client, modelBased);
+        Assertions.assertEquals(RakRecoveryMode.MODEL_BASED,
+                server.config().options().get(RakChannelOption.RAK_RECOVERY_MODE));
+        Assertions.assertEquals(RakRecoveryMode.MODEL_BASED,
+                client.config().options().get(RakChannelOption.RAK_RECOVERY_MODE));
     }
 
     @Test
@@ -83,9 +99,9 @@ public class BenchmarkRecoveryModeTests {
         Path output = Files.createTempDirectory("raknet-recovery-mode-output");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
                 "baseline-bandwidth",
-                "--recovery-mode", "bounded",
+                "--recovery-mode", "model_based",
                 "--out", output.toString(),
-                "--run-id", "bounded-provenance",
+                "--run-id", "model-based-provenance",
                 "--iterations", "1",
                 "--duration", "1s",
                 "--warmup", "0ms"
@@ -94,7 +110,7 @@ public class BenchmarkRecoveryModeTests {
                 config, EnvironmentInfo.capture(), 1_000L, 1_000_000_000L);
         BenchmarkTimelineRecorder recorder = new BenchmarkTimelineRecorder(
                 result,
-                "bounded-provenance",
+                "model-based-provenance",
                 0,
                 0,
                 Collections::emptyList,
@@ -103,7 +119,7 @@ public class BenchmarkRecoveryModeTests {
         );
         recorder.captureAt(1_250L, 1_250_000_000L);
         result.add(new BenchmarkIterationResult(
-                "bounded-provenance",
+                "model-based-provenance",
                 1,
                 0,
                 512,
@@ -123,30 +139,33 @@ public class BenchmarkRecoveryModeTests {
         Path directory = new BenchmarkResultWriter().write(result).toPath();
         JsonNode summary = JSON.readTree(Files.readString(
                 directory.resolve("summary.json"), StandardCharsets.UTF_8));
-        Assertions.assertEquals("bounded", summary.path("recoveryMode").asText());
+        Assertions.assertEquals("model_based", summary.path("recoveryMode").asText());
 
         JsonNode timeline = JSON.readTree(Files.readAllLines(
                 directory.resolve("timeline.jsonl"), StandardCharsets.UTF_8).get(0));
-        Assertions.assertEquals("bounded", timeline.path("recoveryMode").asText());
+        Assertions.assertEquals("model_based", timeline.path("recoveryMode").asText());
+        Assertions.assertEquals(2, timeline.path("schemaVersion").asInt());
+        Assertions.assertEquals("available",
+                timeline.path("metricAvailability").path("congestionModelState").asText());
 
         List<String> timeseries = Files.readAllLines(
                 directory.resolve("timeseries.csv"), StandardCharsets.UTF_8);
         Assertions.assertTrue(timeseries.get(0).contains("recovery_mode"));
-        Assertions.assertTrue(timeseries.get(1).contains("bounded"));
+        Assertions.assertTrue(timeseries.get(1).contains("model_based"));
 
         JsonNode capacity = JSON.readTree(Files.readAllLines(
                 directory.resolve("bandwidth-capacity.jsonl"), StandardCharsets.UTF_8).get(0));
-        Assertions.assertEquals("bounded", capacity.path("recoveryMode").asText());
+        Assertions.assertEquals("model_based", capacity.path("recoveryMode").asText());
         List<String> capacityCsv = Files.readAllLines(
                 directory.resolve("bandwidth-capacity.csv"), StandardCharsets.UTF_8);
         Assertions.assertTrue(capacityCsv.get(0).contains("recovery_mode"));
-        Assertions.assertTrue(capacityCsv.get(1).contains("bounded"));
+        Assertions.assertTrue(capacityCsv.get(1).contains("model_based"));
 
         Assertions.assertTrue(Files.readString(
                 directory.resolve("report.md"), StandardCharsets.UTF_8)
-                .contains("- Recovery mode: `bounded`"));
+                .contains("- Recovery mode: `model_based`"));
         Assertions.assertTrue(Files.readString(
                 directory.resolve("bandwidth-capacity.md"), StandardCharsets.UTF_8)
-                .contains("- Recovery mode: `bounded`"));
+                .contains("- Recovery mode: `model_based`"));
     }
 }

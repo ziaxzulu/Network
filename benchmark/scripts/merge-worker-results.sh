@@ -274,6 +274,9 @@ jq -s \
   .[0] as $server |
   .[1:] as $receivers |
   ([ $server ] + $receivers) as $probe_transport_sources |
+  ($probe_transport_sources | map(.recoveryMode // null)) as $recovery_modes |
+  (($recovery_modes | all(. == "legacy" or . == "bounded" or . == "model_based"))
+    and (($recovery_modes | unique | length) == 1)) as $recovery_mode_provenance_valid |
   ($probe_transport_sources | all(
     (.probeReliability // null) == "UNRELIABLE"
     and (.probePriority // null) == "HIGH"
@@ -321,6 +324,7 @@ jq -s \
     + (if $delivered_gbps_spread_pct > 10 then ["throughput-spread"] else [] end)
     + (if $server_p99_complete | not then ["missing-probe-p99"] else [] end)
     + (if $probe_transport_provenance_valid then [] else ["invalid-probe-transport-provenance"] end)
+    + (if $recovery_mode_provenance_valid then [] else ["invalid-recovery-mode-provenance"] end)
     + (if ($server_probe_ack_spillover_complete | not) then ["invalid-probe-ack-spillover"] else [] end)
     + (if $server_probe_ack_spillover != null and $server_probe_ack_spillover > 0 then ["probe-ack-spillover"] else [] end)
     + (if $minimum_probe_responses < $minimumProbeResponsesPerIteration then ["insufficient-probe-responses"] else [] end)
@@ -415,6 +419,8 @@ jq -s \
       receiverClients: $receiver_clients,
       payloadSize: ($server_iterations[0].payloadSize // 0),
       reliability: ($server_iterations[0].reliability // "unknown"),
+      recoveryModeProvenanceValid: $recovery_mode_provenance_valid,
+      recoveryMode: (if $recovery_mode_provenance_valid then $recovery_modes[0] else null end),
       probeTransportProvenanceValid: $probe_transport_provenance_valid,
       probeReliability: (if $probe_transport_provenance_valid then $server.probeReliability else null end),
       probePriority: (if $probe_transport_provenance_valid then $server.probePriority else null end),
@@ -546,6 +552,7 @@ jq -s \
       runId: ($server.runId // null),
       scenario: ($server.scenario // null),
       role: ($server.role // null),
+      recoveryMode: ($server.recoveryMode // null),
       iterations: ($server_iterations | length),
       connectedClients: ($aggregate.serverConnectedClients // 0),
       startAtEpochMillis: ($server.startAtEpochMillis // 0),
@@ -564,6 +571,7 @@ jq -s \
         runId: (.runId // null),
         scenario: (.scenario // null),
         role: (.role // null),
+        recoveryMode: (.recoveryMode // null),
         iterations: ((.iterations // []) | length),
         clients: ((.iterations // []) | map(.clients // 0) | max_or_zero),
         startAtEpochMillis: (.startAtEpochMillis // 0),
@@ -589,10 +597,15 @@ jq -s \
   }
 ' "$server_summary" "${receiver_summaries[@]}" >"$lab_summary"
 
+if ! jq -e '.aggregate.recoveryModeProvenanceValid == true' "$lab_summary" >/dev/null; then
+  echo "Server and every receiver summary must declare one identical supported recoveryMode" >&2
+  exit 1
+fi
+
 jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
 
 {
-  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,probe_reliability,probe_priority,probe_semantics,minimum_probe_responses_required,minimum_probe_response_rate_required,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,impairment_profile,external_impairment,external_blackhole_at_epoch_ms,external_recovery_at_epoch_ms,netem_limit_packets,netem_evidence_dir,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,undelivered_server_gbps,healthy_undelivered_server_gbps,affected_undelivered_server_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,healthy_server_datagrams_out_s,affected_server_datagrams_out_s,stale_datagrams_s,nack_out_s,probes_sent,probes_acked,probe_ack_spillover,probe_response_rate,minimum_probe_responses,minimum_probe_response_rate,probe_rtt_count,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
+  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,recovery_mode,probe_reliability,probe_priority,probe_semantics,minimum_probe_responses_required,minimum_probe_response_rate_required,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,impairment_profile,external_impairment,external_blackhole_at_epoch_ms,external_recovery_at_epoch_ms,netem_limit_packets,netem_evidence_dir,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,undelivered_server_gbps,healthy_undelivered_server_gbps,affected_undelivered_server_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,healthy_server_datagrams_out_s,affected_server_datagrams_out_s,stale_datagrams_s,nack_out_s,probes_sent,probes_acked,probe_ack_spillover,probe_response_rate,minimum_probe_responses,minimum_probe_response_rate,probe_rtt_count,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
   jq -r '
     .aggregate as $a |
     [
@@ -604,6 +617,7 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.receiverClients,
       $a.payloadSize,
       $a.reliability,
+      $a.recoveryMode,
       $a.probeReliability,
       $a.probePriority,
       $a.probeSemantics,
@@ -667,6 +681,7 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
     "- Receiver runs: `" + (.receivers | map(.runId // "unknown") | join(", ")) + "`\n" +
     "- Start at epoch ms: `" + (($a.startAtEpochMillis // 0) | tostring) + "`\n" +
     "- Impairment: `" + ($a.impairmentProfile // "unknown") + "` (external qdisc: `" + (($a.externalImpairment // false) | tostring) + "`)\n" +
+    "- Recovery mode: `" + ($a.recoveryMode // "unavailable") + "`\n" +
     "- Probe transport: `" + ($a.probeReliability // "unavailable") + "/" + ($a.probePriority // "unavailable") + "`\n" +
     "- Probe evidence gates: at least `" + (($a.minimumProbeResponsesPerIteration // 0) | tostring) + "` responses and `" + (($a.minimumProbeResponseRateRequired // 0) | tostring) + "` bounded return per iteration\n" +
     (if $a.externalBlackholeAtEpochMillis == null then "" else "- External blackhole at epoch ms: `" + ($a.externalBlackholeAtEpochMillis | tostring) + "`\n" end) +

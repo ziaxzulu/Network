@@ -433,13 +433,19 @@ before `MODEL_BASED` was added, and benchmark probes were moved outside the
 workload's ordered stream. New campaigns must preserve both controls before
 recovery or congestion-control conclusions are drawn.
 
-The next benchmark revision must add `model_based` as a fail-closed mode in the
-launcher-recorded source revision, staged distribution manifest, campaign and
-case manifests, every server and receiver timeline, and CSV/JSON/Markdown
-analysis. Every merged worker must report the same composite revision and mode,
-and the analyzer must treat recovery mode as the only intentional A/B
-difference. Until that integration exists and the trusted launcher is
-reinstalled, model runs are development evidence only.
+The benchmark requires the same launcher-recorded source revision and staged
+distribution manifest for both sides of the A/B comparison and records
+`legacy`, `bounded`, or `model_based` in the goal manifest, campaign plan, case
+manifest, every server and receiver timeline record, CSV, JSON, and Markdown
+output. Every
+merged worker must report the same composite revision. The fail-closed analyzer
+treats the explicitly selected pair of recovery modes as the only intentional
+configuration difference and rejects missing, mixed, stale, partial, or
+mislabeled candidate evidence. Because the temporary jar stage is removed after
+execution, this is reconciliation within the root-owned launcher/evidence trust
+boundary rather than post-run cryptographic attestation of the executed
+classpath. The trusted launcher must still be reinstalled before external
+`model_based` campaigns; until then, model runs remain development evidence.
 
 ## What not to copy blindly from QUIC
 

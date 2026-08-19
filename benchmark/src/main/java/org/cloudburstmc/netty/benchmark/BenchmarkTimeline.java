@@ -19,7 +19,8 @@ package org.cloudburstmc.netty.benchmark;
 import java.util.List;
 
 public final class BenchmarkTimeline {
-    public static final int SCHEMA_VERSION = 1;
+    /** Schema 2 adds recovery-model cohort telemetry and explicit availability. */
+    public static final int SCHEMA_VERSION = 2;
 
     private BenchmarkTimeline() {
     }
@@ -96,6 +97,8 @@ public final class BenchmarkTimeline {
             String transportRecoveryCounters,
             String nackCounters,
             String queueCounters,
+            String congestionModelState,
+            String nackValidationEvents,
             String benchmarkManagedBlackholeCounters,
             List<String> unavailableFields
     ) {
@@ -196,7 +199,41 @@ public final class BenchmarkTimeline {
             Double totalSlowStartThresholdBytes,
             Double maxSmoothedRttMillis,
             Double maxRttVarianceMillis,
-            Long maxRetransmissionTimeoutMillis
+            Long maxRetransmissionTimeoutMillis,
+            CongestionModel congestionModel
+    ) {
+    }
+
+    /**
+     * Bounded-cardinality aggregate of per-session model state. Gauge values are nullable until the
+     * transport has produced a usable sample; event counters remain lifetime-monotonic.
+     */
+    public record CongestionModel(
+            int observedPeers,
+            int estimatedDeliveryRateObservedPeers,
+            int pacingRateObservedPeers,
+            int minimumRttObservedPeers,
+            int recentLossObservedPeers,
+            int packetRoundObservedPeers,
+            Long oldestObservedAtEpochMillis,
+            Long latestObservedAtEpochMillis,
+            Double totalEstimatedDeliveryRateBytesPerSecond,
+            Double maxEstimatedDeliveryRateBytesPerSecond,
+            Double totalPacingRateBytesPerSecond,
+            Double maxPacingRateBytesPerSecond,
+            Long minimumRttMillis,
+            Long maximumMinimumRttMillis,
+            Double maximumRecentLossRate,
+            Long minimumPacketRound,
+            Long maximumPacketRound,
+            int startupPeers,
+            int persistentCongestionPeers,
+            long nackRecoveryHints,
+            long nackReorderingResolved,
+            long nackLossValidated,
+            Long maxNackRecoveryHintDelayMillis,
+            Long maxNackReorderingResolvedDelayMillis,
+            Long maxNackLossValidatedDelayMillis
     ) {
     }
 }

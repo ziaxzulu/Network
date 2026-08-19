@@ -108,7 +108,7 @@ case "$mode" in
 esac
 recovery_mode="$(<"$recovery_mode_file")"
 case "$recovery_mode" in
-  legacy|bounded)
+  legacy|bounded|model_based)
     ;;
   *)
     echo "Unsupported recovery mode in $recovery_mode_file" >&2

@@ -53,6 +53,11 @@ public class BenchmarkTimelineTests {
         peer.acknowledgementProgress(300, 2, 1_000L, 900L, 800L);
         peer.recoveryState(1_000L, 300, 1200.0D, 2400.0D, 50.0D, 5.0D,
                 250L, 1, 1_000L, 800L);
+        peer.congestionModelState(1_000L, 50_000.0D, 60_000.0D, 25L,
+                0.05D, 7L, true, false);
+        peer.nackRecoveryHint(40L);
+        peer.nackReorderingResolved(20L);
+        peer.nackLossValidated(45L);
         peer.addDisconnect();
         // Parent close can be observed before the internal session tick is cancelled. Reproduce the
         // late queue callback seen in a real netns disappearance run, then apply the terminal callback.
@@ -82,6 +87,124 @@ public class BenchmarkTimelineTests {
         Assertions.assertEquals(-1L, lifetime.recoveryObservedAtMillis());
         Assertions.assertEquals(-1.0D, lifetime.congestionWindow());
         Assertions.assertEquals(-1L, lifetime.lastAckProgressAtMillis());
+        Assertions.assertEquals(-1L, lifetime.congestionModelObservedAtMillis());
+        Assertions.assertEquals(1L, lifetime.nackRecoveryHints());
+        Assertions.assertEquals(1L, lifetime.nackReorderingResolved());
+        Assertions.assertEquals(1L, lifetime.nackLossValidated());
+        Assertions.assertEquals(45L, lifetime.maxNackLossValidatedDelayMillis());
+    }
+
+    @Test
+    public void testModelBasedTelemetryIsAggregatedByFixedCohortWithExplicitAvailability() {
+        BenchmarkConfig config = timelineConfig(null, "model_based");
+        BenchmarkRunResult result = new BenchmarkRunResult(
+                config, EnvironmentInfo.capture(), 1_000_000L, 1_000_000_000L);
+        PeerStats healthy = peer(0, false, 100L);
+        healthy.congestionModelState(1_000_100L, 100_000.0D, 120_000.0D,
+                20L, 0.02D, 4L, true, false);
+        healthy.nackRecoveryHint(30L);
+        PeerStats affected = peer(1, true, 200L);
+        affected.congestionModelState(1_000_200L, 40_000.0D, 50_000.0D,
+                80L, 0.15D, 3L, false, true);
+        affected.nackLossValidated(75L);
+
+        BenchmarkTimelineRecorder recorder = new BenchmarkTimelineRecorder(
+                result, "model-case", 2, 1,
+                () -> List.of(healthy.timelineSnapshot(true, true), affected.timelineSnapshot(true, true)),
+                BenchmarkTimelineRecorder.Capabilities.SERVER, false);
+        BenchmarkTimeline.Sample sample = recorder.captureAt(1_000_500L, 1_250_000_000L);
+
+        Assertions.assertEquals(2, sample.schemaVersion());
+        Assertions.assertEquals("available", sample.metricAvailability().congestionModelState());
+        Assertions.assertEquals("available", sample.metricAvailability().nackValidationEvents());
+        BenchmarkTimeline.CongestionModel all = sample.all().congestionModel();
+        Assertions.assertNotNull(all);
+        Assertions.assertEquals(2, all.observedPeers());
+        Assertions.assertEquals(2, all.estimatedDeliveryRateObservedPeers());
+        Assertions.assertEquals(2, all.pacingRateObservedPeers());
+        Assertions.assertEquals(2, all.minimumRttObservedPeers());
+        Assertions.assertEquals(1_000_100L, all.oldestObservedAtEpochMillis());
+        Assertions.assertEquals(1_000_200L, all.latestObservedAtEpochMillis());
+        Assertions.assertEquals(140_000.0D, all.totalEstimatedDeliveryRateBytesPerSecond());
+        Assertions.assertEquals(170_000.0D, all.totalPacingRateBytesPerSecond());
+        Assertions.assertEquals(20L, all.minimumRttMillis());
+        Assertions.assertEquals(80L, all.maximumMinimumRttMillis());
+        Assertions.assertEquals(0.15D, all.maximumRecentLossRate());
+        Assertions.assertEquals(1, all.startupPeers());
+        Assertions.assertEquals(1, all.persistentCongestionPeers());
+        Assertions.assertEquals(1L, all.nackRecoveryHints());
+        Assertions.assertEquals(1L, all.nackLossValidated());
+        Assertions.assertEquals(1, sample.healthy().congestionModel().observedPeers());
+        Assertions.assertEquals(1, sample.affected().congestionModel().observedPeers());
+    }
+
+    @Test
+    public void testModelBasedTelemetryReportsPartialPeerCoverageExplicitly() {
+        BenchmarkConfig config = timelineConfig(null, "model_based");
+        BenchmarkRunResult result = new BenchmarkRunResult(
+                config, EnvironmentInfo.capture(), 1_000_000L, 1_000_000_000L);
+        PeerStats available = peer(0, true, 100L);
+        available.congestionModelState(1_000_100L, 100_000.0D, 120_000.0D,
+                20L, 0.02D, 4L, false, false);
+        PeerStats unavailable = peer(1, true, 200L);
+        unavailable.congestionModelState(1_000_200L, -1.0D, -1.0D,
+                -1L, -1.0D, -1L, false, false);
+
+        BenchmarkTimelineRecorder recorder = new BenchmarkTimelineRecorder(
+                result, "model-partial-coverage", 2, 2,
+                () -> List.of(available.timelineSnapshot(true, true), unavailable.timelineSnapshot(true, true)),
+                BenchmarkTimelineRecorder.Capabilities.SERVER, false);
+        BenchmarkTimeline.CongestionModel model = recorder.captureAt(
+                1_000_500L, 1_250_000_000L).affected().congestionModel();
+
+        Assertions.assertNotNull(model);
+        Assertions.assertEquals(2, model.observedPeers());
+        Assertions.assertEquals(1, model.estimatedDeliveryRateObservedPeers());
+        Assertions.assertEquals(1, model.pacingRateObservedPeers());
+        Assertions.assertEquals(1, model.minimumRttObservedPeers());
+        Assertions.assertEquals(1, model.recentLossObservedPeers());
+        Assertions.assertEquals(1, model.packetRoundObservedPeers());
+        Assertions.assertEquals(1_000_100L, model.oldestObservedAtEpochMillis());
+        Assertions.assertEquals(1_000_200L, model.latestObservedAtEpochMillis());
+        Assertions.assertEquals(100_000.0D, model.totalEstimatedDeliveryRateBytesPerSecond());
+        Assertions.assertEquals(120_000.0D, model.totalPacingRateBytesPerSecond());
+        Assertions.assertEquals(20L, model.minimumRttMillis());
+    }
+
+    @Test
+    public void testAutomaticSampleTimestampFollowsConcurrentModelSnapshot() {
+        BenchmarkConfig config = timelineConfig(null, "model_based");
+        BenchmarkRunResult result = new BenchmarkRunResult(config, EnvironmentInfo.capture());
+        PeerStats peer = peer(0, true, 100L);
+        java.util.concurrent.atomic.AtomicLong observedAt = new java.util.concurrent.atomic.AtomicLong();
+        BenchmarkTimelineRecorder recorder = new BenchmarkTimelineRecorder(
+                result, "model-timestamp-order", 1, 1,
+                () -> {
+                    try {
+                        Thread.sleep(5L);
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError(error);
+                    }
+                    long observed = System.currentTimeMillis();
+                    observedAt.set(observed);
+                    peer.congestionModelState(observed, 100_000.0D, 120_000.0D,
+                            20L, 0.02D, 4L, false, false);
+                    return List.of(peer.timelineSnapshot(true, true));
+                },
+                BenchmarkTimelineRecorder.Capabilities.SERVER, false);
+
+        recorder.start();
+
+        BenchmarkTimeline.Sample sample = result.timelineRecords().stream()
+                .filter(BenchmarkTimeline.Sample.class::isInstance)
+                .map(BenchmarkTimeline.Sample.class::cast)
+                .findFirst()
+                .orElseThrow();
+        Assertions.assertTrue(sample.epochMillis() >= observedAt.get());
+        Assertions.assertEquals(observedAt.get(),
+                sample.affected().congestionModel().latestObservedAtEpochMillis());
+        recorder.close();
     }
 
     @Test
@@ -128,6 +251,9 @@ public class BenchmarkTimelineTests {
                 sample.metricAvailability().usefulDeliveryCounters());
         Assertions.assertTrue(sample.metricAvailability().unavailableFields()
                 .contains("cohort.usefulReceivedBytes"));
+        Assertions.assertEquals("not-configured-recovery-mode",
+                sample.metricAvailability().congestionModelState());
+        Assertions.assertNull(sample.all().congestionModel());
         Assertions.assertTrue(sample.runtime().heapUsedBytes() > 0L);
     }
 
@@ -428,6 +554,10 @@ public class BenchmarkTimelineTests {
     }
 
     private static BenchmarkConfig timelineConfig(Path output) {
+        return timelineConfig(output, "legacy");
+    }
+
+    private static BenchmarkConfig timelineConfig(Path output, String recoveryMode) {
         List<String> arguments = new java.util.ArrayList<>(List.of(
                 "baseline-bandwidth",
                 "--role", "server",
@@ -438,7 +568,8 @@ public class BenchmarkTimelineTests {
                 "--external-blackhole-at-epoch-ms", "1000400",
                 "--external-recovery-at-epoch-ms", "1000600",
                 "--timeline-sample-interval", "200ms",
-                "--run-id", "timeline-unit"
+                "--run-id", "timeline-unit",
+                "--recovery-mode", recoveryMode
         ));
         if (output != null) {
             arguments.add("--out");

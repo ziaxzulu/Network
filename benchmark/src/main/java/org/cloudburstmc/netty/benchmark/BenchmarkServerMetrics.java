@@ -253,6 +253,44 @@ public final class BenchmarkServerMetrics implements RakServerMetrics {
     }
 
     @Override
+    public void rakCongestionModelState(RakChildChannel channel, long observedAtMillis,
+                                        double estimatedDeliveryRateBytesPerSecond,
+                                        double pacingRateBytesPerSecond, long minimumRttMillis,
+                                        double recentLossRate, long packetRound, boolean startup,
+                                        boolean persistentCongestion) {
+        PeerStats peer = this.byChannel.get(channel);
+        if (peer != null) {
+            peer.congestionModelState(observedAtMillis, estimatedDeliveryRateBytesPerSecond,
+                    pacingRateBytesPerSecond, minimumRttMillis, recentLossRate, packetRound,
+                    startup, persistentCongestion);
+        }
+    }
+
+    @Override
+    public void rakNackRecoveryHint(RakChildChannel channel, long validationDelayMillis) {
+        PeerStats peer = this.byChannel.get(channel);
+        if (peer != null) {
+            peer.nackRecoveryHint(validationDelayMillis);
+        }
+    }
+
+    @Override
+    public void rakNackReorderingResolved(RakChildChannel channel, long observedDelayMillis) {
+        PeerStats peer = this.byChannel.get(channel);
+        if (peer != null) {
+            peer.nackReorderingResolved(observedDelayMillis);
+        }
+    }
+
+    @Override
+    public void rakNackLossValidated(RakChildChannel channel, long observedDelayMillis) {
+        PeerStats peer = this.byChannel.get(channel);
+        if (peer != null) {
+            peer.nackLossValidated(observedDelayMillis);
+        }
+    }
+
+    @Override
     public void rakRecoveryStateClosed(RakChildChannel channel, long observedAtMillis) {
         PeerStats peer = this.byChannel.get(channel);
         if (peer != null) {
