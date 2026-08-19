@@ -1,0 +1,50 @@
+{
+  "kind": "raknet-netns-resilience-qualification",
+  "baselineId": "zulubox-netns-100c-20260819",
+  "executionPassed": true,
+  "plannedProfiles": 6,
+  "completedProfilesPerCampaign": 6,
+  "campaigns": 2,
+  "measuredWindows": 36,
+  "stabilityGatePassed": false,
+  "baselineOfRecord": false,
+  "unstableProfiles": [
+    "perfect",
+    "near-loss",
+    "regional-loss",
+    "poor",
+    "severe",
+    "blackhole"
+  ],
+  "resilienceAssessment": {
+    "healthyClientIsolation": "strong",
+    "nearLossService": "strong",
+    "regionalLossService": "functional-with-transition-transient",
+    "poorLinkService": "degraded-and-variable",
+    "severeLinkService": "not-useful",
+    "blackholeContainment": "strong-for-healthy-clients",
+    "badPeerResourceBounding": "not-established"
+  },
+  "observed": {
+    "healthyClientMbpsP50Range": [4.9750016, 5.055965866666667],
+    "healthyFairnessMinimum": 0.9999364286460622,
+    "healthySendToDeliverRatioRange": [1.0223204405843287, 1.0270440784986452],
+    "perfectDeliveredGbps": [0.4990573226666667, 0.4992895658666667],
+    "poorAffectedClientMbpsP50": [1.7731584, 3.9903232],
+    "poorDisconnects": [4, 4],
+    "severeAffectedClientMbpsP50": [0.002321066666666667, 0.002730666666666667],
+    "severeAffectedSendToDeliverRatio": [2089.8725894976264, 1600.4832458496094],
+    "severeAffectedUndeliveredServerGbps": [0.04506171653333333, 0.0419294936],
+    "severeMaxQueuedBytes": [22069248, 22777873],
+    "blackholeHealthyDeliveredGbps": [0.44952971946666664, 0.4495145642666667],
+    "blackholeStaleDatagramsPerSecond": [1144.7666666666667, 1093.8]
+  },
+  "interpretation": "The library keeps healthy clients at target throughput and near-perfect fairness when 10 percent of peers are impaired. Moderate loss remains serviceable. Poor links become variable and disconnect some peers. Severe links preserve healthy service but spend almost the entire affected offered rate on undelivered work while delivering almost nothing, with queue growth to about 22 MB. This is good isolation but incomplete evidence of bounded disruption handling.",
+  "nextQualificationSteps": [
+    "repeat transition and steady-state windows separately",
+    "run 10-30 minute severe and blackhole holds to observe queue caps, timeouts, and cleanup",
+    "sweep per-session queue caps below the 64 MiB library default",
+    "repeat on separate hosts over a physical or validated eBPF switch",
+    "increase impaired-client share and total client count after measuring the perfect-path capacity curve"
+  ]
+}

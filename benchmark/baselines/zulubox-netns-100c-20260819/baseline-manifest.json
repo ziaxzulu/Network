@@ -1,0 +1,84 @@
+{
+  "kind": "raknet-netns-development-baseline",
+  "baselineId": "zulubox-netns-100c-20260819",
+  "capturedAt": "2026-08-18T23:54:47Z/2026-08-19T00:14:17Z",
+  "qualification": "development-reference",
+  "baselineOfRecord": false,
+  "baselinePurpose": "Compare RakNet resilience, healthy-client isolation, and retry pressure when 10 percent of clients have residential/mobile-like impairment or disappear.",
+  "notBaselineOfRecordReasons": [
+    "single-host Linux namespace and veth topology rather than separate physical hosts and a physical switch",
+    "every aggregate row exceeded the current p99-spread stability threshold",
+    "the 30-second measured interval does not establish long-duration queue bounds or dead-peer cleanup"
+  ],
+  "snapshot": {
+    "gitRevision": "3ba49e9188ff+netns-14c4123c2ace",
+    "host": "zulubox",
+    "os": "Linux 7.1.8-200.fc44.x86_64",
+    "javaVersion": "26.0.2",
+    "processorsPerWorkerView": 8,
+    "maxHeapBytesPerWorker": 1073741824
+  },
+  "topology": {
+    "kind": "single-host-netns-veth",
+    "serverNamespaces": 1,
+    "healthyReceiverNamespaces": 1,
+    "affectedReceiverNamespaces": 1,
+    "shaping": "external tc netem on the server-to-affected-receiver veth",
+    "direction": "server-to-client"
+  },
+  "workload": {
+    "clients": 100,
+    "healthyClients": 90,
+    "affectedClients": 10,
+    "payloadSize": 512,
+    "reliability": "RELIABLE_ORDERED",
+    "targetMbpsPerClient": 5,
+    "nominalAggregateTargetGbps": 0.5,
+    "warmupSeconds": 5,
+    "measurementSecondsPerIteration": 10,
+    "measuredIterationsPerProfile": 3,
+    "campaigns": 2,
+    "measuredWindows": 36
+  },
+  "profiles": [
+    {"name": "perfect", "latencyMillis": 0, "jitterMillis": 0, "lossPercent": 0},
+    {"name": "near-loss", "latencyMillis": 10, "jitterMillis": 2, "lossPercent": 2},
+    {"name": "regional-loss", "latencyMillis": 50, "jitterMillis": 5, "lossPercent": 2},
+    {"name": "poor", "latencyMillis": 100, "jitterMillis": 10, "lossPercent": 5},
+    {"name": "severe", "latencyMillis": 200, "jitterMillis": 20, "lossPercent": 10},
+    {"name": "blackhole", "lossPercentAfterWarmup": 100, "blackholeAfterMeasurementStartSeconds": 5}
+  ],
+  "campaigns": [
+    {
+      "name": "campaign-1",
+      "source": "/var/lib/raknet-netns-benchmark/runs/netns-pilot-20260818T235447Z-PmWwPY",
+      "startedAt": "2026-08-18T23:54:47Z",
+      "completedAt": "2026-08-19T00:04:05Z",
+      "planSha256": "0c5057327ceff1e55ebb0306a09a0174780843cf829e7f73e1128ce12789afe8",
+      "statusSha256": "f7adfb98e8f4c3c8ddca671f39f9ffed288765022a1e3510d740fb6a88b9ea0a",
+      "aggregateSha256": "c9d653277ebaf60942731bd5455ec954cea15213db5f2c470adf099278f92622"
+    },
+    {
+      "name": "campaign-2",
+      "source": "/var/lib/raknet-netns-benchmark/runs/netns-pilot-20260819T000459Z-K8p6rF",
+      "startedAt": "2026-08-19T00:04:59Z",
+      "completedAt": "2026-08-19T00:14:17Z",
+      "planSha256": "b12125eece7a4c3698b5e1cfce3bcbf4bea00299e7981712a2e6f84881b6b595",
+      "statusSha256": "b254af25794b3c1811f571ccfb16bd34c293a14f058380da030f9cb15b8591c3",
+      "aggregateSha256": "d5062510f337ea0ca1d8d83d8f95deed3799a7d8b0f024eef765af0e7c4a9623"
+    }
+  ],
+  "referenceSuite": {
+    "sourceCampaign": "campaign-2",
+    "path": "reference-suite-aggregate.jsonl",
+    "sha256": "a9e0b6619d4ff6148ff289ec987834e1bc5427374eeb14dc00413fa8349c324e",
+    "normalization": "Profile appended to case keys; timed blackhole restored as external-blackhole metadata.",
+    "intendedUse": "Development comparison only; do not promote as a line-rate or production baseline."
+  },
+  "evidence": {
+    "resultsReport": "RESULTS.md",
+    "qualification": "qualification.json",
+    "netemEvidenceHashes": "netem-evidence.sha256",
+    "rawArtifacts": "Retained at each campaign source path on zulubox."
+  }
+}

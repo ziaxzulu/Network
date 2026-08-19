@@ -49,6 +49,17 @@ public class BenchmarkKitTests {
     private static final CsvMapper CSV = new CsvMapper();
 
     @Test
+    public void testEnvironmentInfoUsesConfiguredGitRevision() {
+        String originalRevision = System.getProperty("benchmark.gitRevision");
+        try {
+            System.setProperty("benchmark.gitRevision", "installed-snapshot-1234");
+            Assertions.assertEquals("installed-snapshot-1234", EnvironmentInfo.capture().gitRevision);
+        } finally {
+            restoreProperty("benchmark.gitRevision", originalRevision);
+        }
+    }
+
+    @Test
     public void testConfigParsing() {
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
                 "bandwidth-latency-curve",
@@ -2456,6 +2467,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(0, result.exitCode, result.output);
         Assertions.assertTrue(result.output.contains("External blackhole scheduled"));
         Assertions.assertTrue(result.output.contains("apply 100% loss to server-to-client affected path"));
+        Assertions.assertTrue(result.output.contains("--external-blackhole-at-epoch-ms"));
         Assertions.assertFalse(result.output.contains("initial-netem"));
 
         JsonNode manifest = JSON.readTree(Files.readString(output.resolve("manifest.json"), StandardCharsets.UTF_8));
@@ -2471,6 +2483,149 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--impaired-clients 2"));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--clients 2"));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
+    }
+
+    @Test
+    public void testWorkerMergeRecordsExternalNetemImpairment() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-worker-merge-netem-test");
+        Path server = output.resolve("server");
+        Path receiver = output.resolve("receiver");
+        Path evidence = output.resolve("netem");
+        Path merged = output.resolve("merged");
+        Files.createDirectories(server);
+        Files.createDirectories(receiver);
+        Files.createDirectories(evidence);
+        Files.writeString(evidence.resolve("qdisc.txt"), "netem evidence\n", StandardCharsets.UTF_8);
+
+        String serverIteration = "{\"iteration\":%d,\"clients\":2,\"payloadSize\":512,"
+                + "\"reliability\":\"RELIABLE_ORDERED\",\"targetMbps\":10,\"targetClientMbps\":5,"
+                + "\"elapsedMillis\":1000,\"offeredGbps\":0.01,\"serverBytesOut\":750000,"
+                + "\"healthyServerBytesOut\":625000,\"affectedServerBytesOut\":125000,"
+                + "\"serverDatagramsOut\":1500,\"healthyServerDatagramsOut\":1250,"
+                + "\"affectedServerDatagramsOut\":250,\"probeRttP99Millis\":10,\"maxQueuedBytes\":4096}";
+        Files.writeString(server.resolve("summary.json"),
+                "{\"runId\":\"server-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"server\","
+                        + "\"startAtEpochMillis\":1000,\"impairmentLatencyMillis\":0,"
+                        + "\"impairmentJitterMillis\":0,\"impairmentLossPercent\":0,"
+                        + "\"environment\":{\"gitRevision\":\"test-revision\"},\"iterations\":["
+                        + serverIteration.formatted(1) + "," + serverIteration.formatted(2) + ","
+                        + serverIteration.formatted(3) + "]}\n",
+                StandardCharsets.UTF_8);
+
+        String receiverIteration = "{\"iteration\":%d,\"clients\":2,\"affectedClients\":1,"
+                + "\"elapsedMillis\":1000,\"bulkReceivedBytes\":600000,"
+                + "\"bulkReceivedMessages\":1200,\"logicalPacketsReceived\":1200,\"peers\":["
+                + "{\"id\":0,\"impaired\":false,\"bulkReceivedBytes\":500000},"
+                + "{\"id\":1,\"impaired\":true,\"bulkReceivedBytes\":100000}]}";
+        Files.writeString(receiver.resolve("summary.json"),
+                "{\"runId\":\"receiver-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"client\","
+                        + "\"startAtEpochMillis\":1000,\"iterations\":["
+                        + receiverIteration.formatted(1) + "," + receiverIteration.formatted(2) + ","
+                        + receiverIteration.formatted(3) + "]}\n",
+                StandardCharsets.UTF_8);
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/merge-worker-results.sh").toString(),
+                "--server", server.toString(),
+                "--receiver", receiver.toString(),
+                "--out", merged.toString(),
+                "--case", "external-poor",
+                "--benchmark-name", "fairness",
+                "--external-impairment-latency-ms", "100",
+                "--external-impairment-jitter-ms", "10",
+                "--external-impairment-loss-percent", "5",
+                "--netem-evidence", evidence.toString()
+        );
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        JsonNode summary = JSON.readTree(Files.readString(merged.resolve("lab-summary.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertEquals("100ms/10ms/5%", summary.path("aggregate").path("impairmentProfile").asText());
+        Assertions.assertTrue(summary.path("aggregate").path("externalImpairment").asBoolean());
+        Assertions.assertEquals(evidence.toString(), summary.path("aggregate").path("netemEvidenceDir").asText());
+        Assertions.assertEquals(100, summary.path("externalImpairment").path("latencyMillis").asInt());
+        Assertions.assertEquals(10, summary.path("externalImpairment").path("jitterMillis").asInt());
+        Assertions.assertEquals(5.0D, summary.path("externalImpairment").path("lossPercent").asDouble(), 0.001D);
+
+        String report = Files.readString(merged.resolve("README.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(report.contains("Impairment: `100ms/10ms/5%` (external qdisc: `true`)"));
+        Assertions.assertTrue(report.contains("Netem evidence: `" + evidence + "`"));
+        String csv = Files.readString(merged.resolve("lab-summary.csv"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(csv.lines().findFirst().orElseThrow().contains(
+                "impairment_profile,external_impairment,netem_evidence_dir"));
+        Assertions.assertTrue(csv.contains("\"100ms/10ms/5%\",true,\"" + evidence + "\""));
+
+        Path blackholeMerged = output.resolve("blackhole-merged");
+        ProcessResult blackholeResult = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/merge-worker-results.sh").toString(),
+                "--server", server.toString(),
+                "--receiver", receiver.toString(),
+                "--out", blackholeMerged.toString(),
+                "--case", "external-blackhole",
+                "--benchmark-name", "disappearing-clients",
+                "--external-blackhole-at-epoch-ms", "1234567890",
+                "--netem-evidence", evidence.toString()
+        );
+        Assertions.assertEquals(0, blackholeResult.exitCode, blackholeResult.output);
+        JsonNode blackholeSummary = JSON.readTree(Files.readString(
+                blackholeMerged.resolve("lab-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertEquals("blackhole", blackholeSummary.path("externalImpairment").path("kind").asText());
+        Assertions.assertEquals(100.0D,
+                blackholeSummary.path("externalImpairment").path("lossPercent").asDouble(), 0.001D);
+        Assertions.assertEquals(1_234_567_890L,
+                blackholeSummary.path("aggregate").path("externalBlackholeAtEpochMillis").asLong());
+        Assertions.assertEquals("external-blackhole",
+                blackholeSummary.path("aggregate").path("impairmentProfile").asText());
+        Assertions.assertTrue(blackholeSummary.path("aggregate").path("externalImpairment").asBoolean());
+        Assertions.assertTrue(blackholeSummary.path("aggregate").path("externalBlackhole").asBoolean());
+    }
+
+    @Test
+    public void testNetnsPilotCampaignDryRunProducesDefinedProfileMatrix() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-netns-pilot-test").resolve("pilot");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(20),
+                "bash",
+                root.resolve("benchmark/scripts/run-netns-pilot-campaign.sh").toString(),
+                "--out", output.toString(),
+                "--clients", "10",
+                "--affected-clients", "2",
+                "--warmup", "1s",
+                "--duration", "1s",
+                "--iterations", "1",
+                "--start-offset", "10s",
+                "--netem-before-start", "2s"
+        );
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        Assertions.assertTrue(result.output.contains("Dry-run only"));
+        JsonNode plan = JSON.readTree(Files.readString(output.resolve("campaign-plan.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertEquals("raknet-netns-pilot-campaign", plan.path("kind").asText());
+        Assertions.assertFalse(plan.path("execute").asBoolean());
+        Assertions.assertEquals(6, plan.path("profiles").size());
+        Assertions.assertEquals("perfect", plan.path("profiles").get(0).path("profile").asText());
+        Assertions.assertEquals("near-loss", plan.path("profiles").get(1).path("profile").asText());
+        Assertions.assertEquals("regional-loss", plan.path("profiles").get(2).path("profile").asText());
+        Assertions.assertEquals("poor", plan.path("profiles").get(3).path("profile").asText());
+        Assertions.assertEquals("severe", plan.path("profiles").get(4).path("profile").asText());
+        Assertions.assertEquals("blackhole", plan.path("profiles").get(5).path("profile").asText());
+        Assertions.assertTrue(Files.exists(output.resolve("cases/01-perfect/manifest.json")));
+        Assertions.assertTrue(Files.exists(output.resolve("cases/06-blackhole/manifest.json")));
+
+        JsonNode summary = JSON.readTree(Files.readString(output.resolve("campaign-summary.json"),
+                StandardCharsets.UTF_8));
+        Assertions.assertFalse(summary.path("executed").asBoolean());
+        Assertions.assertFalse(summary.path("executionPassed").asBoolean());
+        Assertions.assertEquals(6, summary.path("statuses").size());
+        String report = Files.readString(output.resolve("campaign-summary.md"), StandardCharsets.UTF_8);
+        Assertions.assertTrue(report.contains("Stability gate: `not-run`"));
     }
 
     @Test

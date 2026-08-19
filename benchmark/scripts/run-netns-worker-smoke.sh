@@ -17,6 +17,7 @@ duration="10s"
 iterations="3"
 start_delay="20s"
 start_offset="45s"
+netem_before_start="5s"
 blackhole_after="5s"
 port="19132"
 latency="0ms"
@@ -29,6 +30,11 @@ max_queued_bytes=""
 workers=""
 reliability="reliable_ordered"
 namespace_prefix=""
+benchmark_run_user=""
+benchmark_run_group=""
+benchmark_run_home=""
+benchmark_java_home=""
+benchmark_git_revision=""
 
 usage() {
   cat <<'USAGE'
@@ -60,6 +66,7 @@ Options:
   --iterations N                    Measured iterations. Default: 3.
   --start-delay DURATION            Server wait for clients. Default: 20s.
   --start-offset DURATION           Coordinated start offset from now. Default: 45s.
+  --netem-before-start DURATION     Apply initial netem this far before coordinated start. Default: 5s.
   --blackhole-after DURATION        For --case blackhole, apply 100% loss this far into measurement. Default: 5s.
   --port PORT                       UDP port. Default: 19132.
   --latency DURATION                Netem latency for affected path. Default: 0ms.
@@ -145,6 +152,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --start-offset)
       start_offset="$2"
+      shift 2
+      ;;
+    --netem-before-start)
+      netem_before_start="$2"
       shift 2
       ;;
     --blackhole-after)
@@ -352,14 +363,31 @@ if [[ "$case_type" == "fairness" || "$case_type" == "blackhole" ]]; then
   fi
 fi
 
-for duration_value in "$warmup" "$duration" "$start_delay" "$start_offset" "$blackhole_after"; do
+for duration_value in "$warmup" "$duration" "$start_delay" "$start_offset" "$netem_before_start" "$blackhole_after"; do
   duration_millis "$duration_value" >/dev/null
 done
+if [[ "$(duration_millis "$netem_before_start")" -ge "$(duration_millis "$start_offset")" ]]; then
+  echo "--netem-before-start must be shorter than --start-offset" >&2
+  exit 2
+fi
 
 if "$execute"; then
   if [[ "$(id -u)" -ne 0 ]]; then
     echo "--execute requires root or equivalent CAP_NET_ADMIN privileges to create namespaces and apply tc netem" >&2
     exit 2
+  fi
+  benchmark_run_user="${BENCHMARK_RUN_USER:-${SUDO_USER:-}}"
+  if [[ -n "$benchmark_run_user" && "$benchmark_run_user" != "root" ]]; then
+    if ! id "$benchmark_run_user" >/dev/null 2>&1; then
+      echo "Benchmark run user does not exist: $benchmark_run_user" >&2
+      exit 2
+    fi
+    benchmark_run_group="$(id -gn "$benchmark_run_user")"
+    benchmark_run_home="$(getent passwd "$benchmark_run_user" | cut -d: -f6)"
+    if [[ -z "$benchmark_run_home" || ! -d "$benchmark_run_home" ]]; then
+      echo "Benchmark run user has no usable home directory: $benchmark_run_user" >&2
+      exit 2
+    fi
   fi
   for tool in ip tc jq; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -367,9 +395,40 @@ if "$execute"; then
       exit 2
     fi
   done
+  if [[ -n "$benchmark_run_user" && "$benchmark_run_user" != "root" ]] && ! command -v runuser >/dev/null 2>&1; then
+    echo "runuser is required to execute benchmark workers as $benchmark_run_user" >&2
+    exit 2
+  fi
+
+  benchmark_java_home="${BENCHMARK_JAVA_HOME:-}"
+  if [[ -z "$benchmark_java_home" ]]; then
+    for candidate in /usr/lib/jvm/java-26-temurin-jdk /usr/lib/jvm/temurin-26-jdk; do
+      if [[ -x "$candidate/bin/java" ]]; then
+        benchmark_java_home="$candidate"
+        break
+      fi
+    done
+  fi
+  if [[ -z "$benchmark_java_home" || ! -x "$benchmark_java_home/bin/java" ]]; then
+    echo "Java 26 is required; set BENCHMARK_JAVA_HOME to a Java 26+ installation" >&2
+    exit 2
+  fi
+  benchmark_git_revision="${BENCHMARK_GIT_REVISION:-}"
+  if [[ -z "$benchmark_git_revision" ]] && command -v git >/dev/null 2>&1; then
+    benchmark_git_revision="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || true)"
+  fi
+  benchmark_git_revision="${benchmark_git_revision:-unknown}"
+  benchmark_lib_dir="$repo_root/benchmark/build/install/benchmark/lib"
+  if [[ ! -d "$benchmark_lib_dir" ]] || ! find "$benchmark_lib_dir" -maxdepth 1 -type f -name 'benchmark-*.jar' -print -quit | grep -q .; then
+    echo "Benchmark distribution is missing. Run ./gradlew --no-daemon :benchmark:installDist before --execute" >&2
+    exit 2
+  fi
 fi
 
 mkdir -p "$output_root/netem"
+if "$execute" && [[ -n "$benchmark_run_user" && "$benchmark_run_user" != "root" ]]; then
+  chown "$benchmark_run_user:$benchmark_run_group" "$output_root" "$output_root/netem"
+fi
 cd "$repo_root"
 
 if [[ -z "$namespace_prefix" ]]; then
@@ -419,6 +478,8 @@ affected_log="$output_root/receiver-affected.log"
 
 start_at_ms=$((($(date +%s) * 1000) + $(duration_millis "$start_offset")))
 warmup_ms="$(duration_millis "$warmup")"
+netem_before_start_ms="$(duration_millis "$netem_before_start")"
+netem_at_ms=$((start_at_ms - netem_before_start_ms))
 blackhole_after_ms="$(duration_millis "$blackhole_after")"
 blackhole_at_ms=$((start_at_ms + warmup_ms + blackhole_after_ms))
 
@@ -453,19 +514,43 @@ join_args() {
   fi
 }
 
-common_worker_string="$(join_args "${common_worker_args[@]}")"
 if [[ "$case_type" == "curve" ]]; then
-  rate_args="--rate-mbps $rate_mbps"
+  rate_args=(--rate-mbps "$rate_mbps")
 else
-  rate_args="--per-client-mbps $per_client_mbps"
+  rate_args=(--per-client-mbps "$per_client_mbps")
 fi
-server_args="server-worker --role server --bind-host 0.0.0.0 --port $port --clients $clients --start-delay $start_delay --start-at-epoch-ms $start_at_ms $common_worker_string $rate_args --impaired-clients $affected_clients --out $server_out --run-id $run_id"
-healthy_receiver_args="receiver-worker --role client --host $server_healthy_ip --port $port --clients $healthy_clients --start-at-epoch-ms $start_at_ms $common_worker_string $rate_args --out $healthy_out --run-id $run_id-healthy"
-affected_receiver_args="receiver-worker --role client --host $server_affected_ip --port $port --clients $affected_clients --start-at-epoch-ms $start_at_ms $common_worker_string $rate_args --impaired-clients $affected_clients --out $affected_out --run-id $run_id-affected"
+
+server_args_array=(
+  server-worker --role server --bind-host 0.0.0.0 --port "$port" --clients "$clients"
+  --start-delay "$start_delay" --start-at-epoch-ms "$start_at_ms"
+  "${common_worker_args[@]}" "${rate_args[@]}"
+  --impaired-clients "$affected_clients" --out "$server_out" --run-id "$run_id"
+)
+healthy_receiver_args_array=(
+  receiver-worker --role client --host "$server_healthy_ip" --port "$port" --clients "$healthy_clients"
+  --start-at-epoch-ms "$start_at_ms"
+  "${common_worker_args[@]}" "${rate_args[@]}"
+  --out "$healthy_out" --run-id "$run_id-healthy"
+)
+affected_receiver_args_array=(
+  receiver-worker --role client --host "$server_affected_ip" --port "$port" --clients "$affected_clients"
+  --start-at-epoch-ms "$start_at_ms"
+  "${common_worker_args[@]}" "${rate_args[@]}"
+  --impaired-clients "$affected_clients" --out "$affected_out" --run-id "$run_id-affected"
+)
 
 if [[ "$affected_clients" -eq 0 ]]; then
-  healthy_receiver_args="receiver-worker --role client --host $server_healthy_ip --port $port --clients $healthy_clients --start-at-epoch-ms $start_at_ms $common_worker_string $rate_args --out $healthy_out --run-id $run_id-receiver"
+  healthy_receiver_args_array=(
+    receiver-worker --role client --host "$server_healthy_ip" --port "$port" --clients "$healthy_clients"
+    --start-at-epoch-ms "$start_at_ms"
+    "${common_worker_args[@]}" "${rate_args[@]}"
+    --out "$healthy_out" --run-id "$run_id-receiver"
+  )
 fi
+
+server_args="$(join_args "${server_args_array[@]}")"
+healthy_receiver_args="$(join_args "${healthy_receiver_args_array[@]}")"
+affected_receiver_args="$(join_args "${affected_receiver_args_array[@]}")"
 
 cat >"$manifest" <<EOF
 {
@@ -486,6 +571,7 @@ cat >"$manifest" <<EOF
   "loss": "$(json_escape "$loss")",
   "direction": "$(json_escape "$direction")",
   "startAtEpochMillis": $start_at_ms,
+  "netemAtEpochMillis": $(if has_netem; then echo "$netem_at_ms"; else echo "null"; fi),
   "blackholeAtEpochMillis": $(if [[ "$case_type" == "blackhole" ]]; then echo "$blackhole_at_ms"; else echo "null"; fi),
   "namespaces": {
     "server": "$(json_escape "$server_ns")",
@@ -510,6 +596,7 @@ cat >"$report" <<EOF
 - Healthy clients: \`$healthy_clients\`
 - Affected clients: \`$affected_clients\`
 - Start at epoch ms: \`$start_at_ms\`
+- Initial netem at epoch ms: \`$(if has_netem; then echo "$netem_at_ms"; else echo "not scheduled"; fi)\`
 - Direction: \`$direction\`
 - Netem: latency \`$latency\`, jitter \`$jitter\`, loss \`$loss\`
 - Output root: \`$output_root\`
@@ -557,6 +644,14 @@ cleanup() {
     local ns
     for ns in "${namespaces_created[@]:-}"; do
       ip netns del "$ns" >/dev/null 2>&1 || true
+    done
+  fi
+  if "$execute" && [[ -n "$benchmark_run_user" && "$benchmark_run_user" != "root" ]]; then
+    local path
+    for path in "$manifest" "$report" "$server_log" "$healthy_log" "$affected_log" "$output_root/netem"; do
+      if [[ -e "$path" ]]; then
+        chown -R "$benchmark_run_user:$benchmark_run_group" "$path" >/dev/null 2>&1 || true
+      fi
     done
   fi
 }
@@ -676,11 +771,51 @@ sleep_until_epoch_ms() {
 run_worker_bg() {
   local ns="$1"
   local log_file="$2"
-  local args="$3"
-  log_command ip netns exec "$ns" ./gradlew --no-daemon :benchmark:raknetBenchmark "-PbenchmarkArgs=$args"
+  shift 2
+  local worker_command=(ip netns exec "$ns")
+  if "$execute" && [[ -n "$benchmark_run_user" && "$benchmark_run_user" != "root" ]]; then
+    worker_command+=(runuser --user "$benchmark_run_user" -- env
+      "HOME=$benchmark_run_home"
+      "USER=$benchmark_run_user"
+      "LOGNAME=$benchmark_run_user"
+      "JAVA_HOME=$benchmark_java_home"
+      "PATH=$benchmark_java_home/bin:$PATH")
+  fi
   if "$execute"; then
-    ip netns exec "$ns" ./gradlew --no-daemon :benchmark:raknetBenchmark "-PbenchmarkArgs=$args" >"$log_file" 2>&1 &
+    worker_command+=(
+      "$benchmark_java_home/bin/java"
+      -Xms1g -Xmx1g
+      "-Dbenchmark.repoRoot=$repo_root"
+      "-Dbenchmark.defaultOutputRoot=$repo_root/benchmark/build/benchmark-results"
+      "-Dbenchmark.gitRevision=$benchmark_git_revision"
+      -cp "$benchmark_lib_dir/*"
+      org.cloudburstmc.netty.benchmark.BenchmarkMain
+      "$@"
+    )
+  else
+    local args
+    args="$(join_args "$@")"
+    worker_command+=(./gradlew --no-daemon :benchmark:raknetBenchmark "-PbenchmarkArgs=$args")
+  fi
+  log_command "${worker_command[@]}"
+  if "$execute"; then
+    "${worker_command[@]}" >"$log_file" 2>&1 &
     worker_pids+=("$!")
+  fi
+}
+
+run_benchmark_command() {
+  if "$execute" && [[ -n "$benchmark_run_user" && "$benchmark_run_user" != "root" ]]; then
+    local command=(runuser --user "$benchmark_run_user" -- env
+      "HOME=$benchmark_run_home"
+      "USER=$benchmark_run_user"
+      "LOGNAME=$benchmark_run_user"
+      "PATH=$PATH"
+      "$@")
+    log_command "${command[@]}"
+    "${command[@]}"
+  else
+    run_command "$@"
   fi
 }
 
@@ -709,13 +844,24 @@ if [[ "$affected_clients" -gt 0 ]]; then
   capture_status "$affected_ns" "$receiver_affected_iface" "receiver-affected-before"
 fi
 
-if [[ "$affected_clients" -gt 0 ]] && has_netem; then
-  apply_netem_path "initial-netem" "apply"
-elif [[ "$affected_clients" -eq 0 ]] && has_netem; then
+if [[ "$affected_clients" -eq 0 ]] && has_netem; then
   affected_ns="$healthy_ns"
   server_affected_iface="$server_healthy_iface"
   receiver_affected_iface="$receiver_healthy_iface"
-  apply_netem_path "initial-netem" "apply"
+fi
+
+if has_netem; then
+  echo "Initial netem scheduled at epoch ms $netem_at_ms, after connection establishment and before coordinated start"
+  if "$execute"; then
+    (
+      sleep_until_epoch_ms "$netem_at_ms"
+      apply_netem_path "initial-netem" "apply"
+    ) &
+    helper_pids+=("$!")
+  else
+    echo "+ sleep until $netem_at_ms; apply latency $latency jitter $jitter loss $loss to $direction affected path"
+    apply_netem_path "initial-netem" "apply"
+  fi
 fi
 
 if [[ "$case_type" == "blackhole" ]]; then
@@ -731,18 +877,18 @@ if [[ "$case_type" == "blackhole" ]]; then
   fi
 fi
 
-run_worker_bg "$server_ns" "$server_log" "$server_args"
+run_worker_bg "$server_ns" "$server_log" "${server_args_array[@]}"
 if "$execute"; then
   sleep 2
 fi
 if [[ "$affected_clients" -gt 0 ]]; then
-  run_worker_bg "$affected_ns" "$affected_log" "$affected_receiver_args"
+  run_worker_bg "$affected_ns" "$affected_log" "${affected_receiver_args_array[@]}"
   if "$execute"; then
     sleep 1
   fi
 fi
 if [[ "$healthy_clients" -gt 0 ]]; then
-  run_worker_bg "$healthy_ns" "$healthy_log" "$healthy_receiver_args"
+  run_worker_bg "$healthy_ns" "$healthy_log" "${healthy_receiver_args_array[@]}"
 fi
 
 if "$execute"; then
@@ -753,7 +899,7 @@ if "$execute"; then
     fi
   done
   if [[ "$failed" -ne 0 ]]; then
-    for pid in "${helper_pids[@]:-}"; do
+    for pid in "${helper_pids[@]}"; do
       if kill -0 "$pid" >/dev/null 2>&1; then
         kill "$pid" >/dev/null 2>&1 || true
       fi
@@ -761,7 +907,7 @@ if "$execute"; then
     echo "One or more netns worker processes failed. See logs under $output_root" >&2
     exit 1
   fi
-  for pid in "${helper_pids[@]:-}"; do
+  for pid in "${helper_pids[@]}"; do
     if ! wait "$pid"; then
       echo "A netns helper process failed. See netem evidence under $output_root/netem" >&2
       exit 1
@@ -780,13 +926,30 @@ if "$execute"; then
     fi
   fi
   merge_args+=(--out "$merged_out" --case "$case_name" --benchmark-name "$benchmark_name")
-  run_command "${merge_args[@]}"
+  if has_netem; then
+    merge_args+=(
+      --external-impairment-latency-ms "$(duration_millis "$latency")"
+      --external-impairment-jitter-ms "$(duration_millis "$jitter")"
+      --external-impairment-loss-percent "${loss%\%}"
+      --netem-evidence "$output_root/netem"
+    )
+  elif [[ "$case_type" == "blackhole" ]]; then
+    merge_args+=(
+      --external-blackhole-at-epoch-ms "$blackhole_at_ms"
+      --netem-evidence "$output_root/netem"
+    )
+  fi
+  run_benchmark_command "${merge_args[@]}"
   echo "Merged artifact: $merged_out"
 else
   echo
   echo "Merge command after execution:"
   if [[ "$affected_clients" -gt 0 ]]; then
-    echo "benchmark/scripts/merge-worker-results.sh --server $server_out/$run_id --receiver $affected_out/$run_id-affected --receiver $healthy_out/$run_id-healthy --out $merged_out --case $case_name --benchmark-name $benchmark_name"
+    merge_command="benchmark/scripts/merge-worker-results.sh --server $server_out/$run_id --receiver $affected_out/$run_id-affected --receiver $healthy_out/$run_id-healthy --out $merged_out --case $case_name --benchmark-name $benchmark_name"
+    if [[ "$case_type" == "blackhole" ]]; then
+      merge_command+=" --external-blackhole-at-epoch-ms $blackhole_at_ms --netem-evidence $output_root/netem"
+    fi
+    echo "$merge_command"
   else
     echo "benchmark/scripts/merge-worker-results.sh --server $server_out/$run_id --receiver $healthy_out/$run_id-receiver --out $merged_out --case $case_name --benchmark-name $benchmark_name"
   fi

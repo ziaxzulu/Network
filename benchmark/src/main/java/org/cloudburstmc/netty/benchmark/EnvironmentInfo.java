@@ -68,6 +68,10 @@ public final class EnvironmentInfo {
     }
 
     private static String gitRevision() {
+        String configuredRevision = System.getProperty("benchmark.gitRevision", "").trim();
+        if (!configuredRevision.isEmpty()) {
+            return configuredRevision;
+        }
         Process process = null;
         try {
             process = new ProcessBuilder("git", "rev-parse", "--short=12", "HEAD").redirectErrorStream(true).start();

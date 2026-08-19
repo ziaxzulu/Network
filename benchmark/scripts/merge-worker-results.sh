@@ -6,6 +6,11 @@ receivers=()
 output_root=""
 case_name=""
 benchmark_name=""
+external_impairment_latency_ms=""
+external_impairment_jitter_ms=""
+external_impairment_loss_percent=""
+external_blackhole_at_epoch_ms=""
+netem_evidence_dir=""
 
 usage() {
   cat <<'USAGE'
@@ -18,6 +23,16 @@ Options:
   --out DIR           Output directory for merged lab artifacts.
   --case NAME         Case name for suite-aggregate.jsonl. Default: server runId.
   --benchmark-name    Benchmark name for suite-aggregate.jsonl. Default: server scenario.
+  --external-impairment-latency-ms N
+                      Override merged impairment latency for an external qdisc run.
+  --external-impairment-jitter-ms N
+                      Override merged impairment jitter for an external qdisc run.
+  --external-impairment-loss-percent N
+                      Override merged impairment loss for an external qdisc run.
+  --external-blackhole-at-epoch-ms N
+                      Record a timed external 100% loss event.
+  --netem-evidence DIR
+                      Directory containing qdisc apply/status evidence.
   --help              Show this help.
 
 Outputs:
@@ -50,6 +65,26 @@ while [[ $# -gt 0 ]]; do
       benchmark_name="$2"
       shift 2
       ;;
+    --external-impairment-latency-ms)
+      external_impairment_latency_ms="$2"
+      shift 2
+      ;;
+    --external-impairment-jitter-ms)
+      external_impairment_jitter_ms="$2"
+      shift 2
+      ;;
+    --external-impairment-loss-percent)
+      external_impairment_loss_percent="$2"
+      shift 2
+      ;;
+    --external-blackhole-at-epoch-ms)
+      external_blackhole_at_epoch_ms="$2"
+      shift 2
+      ;;
+    --netem-evidence)
+      netem_evidence_dir="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -64,6 +99,29 @@ done
 
 if [[ -z "$server_path" || "${#receivers[@]}" -eq 0 || -z "$output_root" ]]; then
   usage >&2
+  exit 2
+fi
+
+external_impairment_count=0
+for value in "$external_impairment_latency_ms" "$external_impairment_jitter_ms" "$external_impairment_loss_percent"; do
+  [[ -n "$value" ]] && external_impairment_count=$((external_impairment_count + 1))
+done
+if [[ "$external_impairment_count" -ne 0 && "$external_impairment_count" -ne 3 ]]; then
+  echo "External impairment latency, jitter, and loss overrides must be supplied together" >&2
+  exit 2
+fi
+if [[ "$external_impairment_count" -eq 3 ]]; then
+  if ! [[ "$external_impairment_latency_ms" =~ ^[0-9]+$ && "$external_impairment_jitter_ms" =~ ^[0-9]+$ && "$external_impairment_loss_percent" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "External impairment latency/jitter must be integer milliseconds and loss must be numeric" >&2
+    exit 2
+  fi
+fi
+if [[ -n "$external_blackhole_at_epoch_ms" ]] && ! [[ "$external_blackhole_at_epoch_ms" =~ ^[0-9]+$ && "$external_blackhole_at_epoch_ms" -gt 0 ]]; then
+  echo "External blackhole epoch must be a positive integer" >&2
+  exit 2
+fi
+if [[ "$external_impairment_count" -eq 3 && -n "$external_blackhole_at_epoch_ms" ]]; then
+  echo "Static external impairment and a timed external blackhole cannot be supplied together" >&2
   exit 2
 fi
 
@@ -108,6 +166,10 @@ lab_summary="$output_root/lab-summary.json"
 lab_csv="$output_root/lab-summary.csv"
 suite_aggregate="$output_root/suite-aggregate.jsonl"
 report="$output_root/README.md"
+external_impairment_latency_json="${external_impairment_latency_ms:-null}"
+external_impairment_jitter_json="${external_impairment_jitter_ms:-null}"
+external_impairment_loss_json="${external_impairment_loss_percent:-null}"
+external_blackhole_at_epoch_json="${external_blackhole_at_epoch_ms:-null}"
 
 jq -s \
   --arg generatedAt "$generated_at" \
@@ -115,6 +177,11 @@ jq -s \
   --arg benchmarkName "$benchmark_name" \
   --arg serverPath "$server_summary" \
   --argjson receiverPaths "$receiver_paths_json" \
+  --argjson externalImpairmentLatencyMillis "$external_impairment_latency_json" \
+  --argjson externalImpairmentJitterMillis "$external_impairment_jitter_json" \
+  --argjson externalImpairmentLossPercent "$external_impairment_loss_json" \
+  --argjson externalBlackholeAtEpochMillis "$external_blackhole_at_epoch_json" \
+  --arg netemEvidenceDir "$netem_evidence_dir" \
   --arg outputRoot "$output_root" '
   def median:
     if length == 0 then 0
@@ -263,6 +330,9 @@ jq -s \
   (ratio($server_bytes_out; $receiver_bytes)) as $send_deliver_ratio |
   (ratio($server_healthy_bytes_out; $healthy_receiver_bytes)) as $healthy_send_deliver_ratio |
   (ratio($server_affected_bytes_out; $affected_receiver_bytes)) as $affected_send_deliver_ratio |
+  ($externalImpairmentLatencyMillis // ($server.impairmentLatencyMillis // 0)) as $impairment_latency_ms |
+  ($externalImpairmentJitterMillis // ($server.impairmentJitterMillis // 0)) as $impairment_jitter_ms |
+  ($externalImpairmentLossPercent // ($server.impairmentLossPercent // 0)) as $impairment_loss_percent |
   (
     {
       summaryKind: "aggregate",
@@ -288,10 +358,14 @@ jq -s \
 	      targetClientMbps: ($server_iterations[0].targetClientMbps // 0),
 	      disappearanceMode: ($server_iterations[0].disappearanceMode // $server.disappearanceMode // null),
 	      startAtEpochMillis: ($server.startAtEpochMillis // 0),
-      impairmentProfile: ((($server.impairmentLatencyMillis // 0) | tostring) + "ms/" + (($server.impairmentJitterMillis // 0) | tostring) + "ms/" + (($server.impairmentLossPercent // 0) | tostring) + "%"),
-      impairmentLatencyMillis: ($server.impairmentLatencyMillis // 0),
-      impairmentJitterMillis: ($server.impairmentJitterMillis // 0),
-      impairmentLossPercent: ($server.impairmentLossPercent // 0),
+      impairmentProfile: (if $externalBlackholeAtEpochMillis == null then (($impairment_latency_ms | tostring) + "ms/" + ($impairment_jitter_ms | tostring) + "ms/" + ($impairment_loss_percent | tostring) + "%") else "external-blackhole" end),
+      impairmentLatencyMillis: $impairment_latency_ms,
+      impairmentJitterMillis: $impairment_jitter_ms,
+      impairmentLossPercent: $impairment_loss_percent,
+      externalImpairment: ($externalImpairmentLatencyMillis != null or $externalBlackholeAtEpochMillis != null),
+      externalBlackhole: ($externalBlackholeAtEpochMillis != null),
+      externalBlackholeAtEpochMillis: $externalBlackholeAtEpochMillis,
+      netemEvidenceDir: (if $netemEvidenceDir == "" then null else $netemEvidenceDir end),
       elapsedMillis: $receiver_elapsed_ms,
       serverElapsedMillis: $server_elapsed_ms,
       offeredGbps: ($server_iterations | map(.offeredGbps // 0) | median),
@@ -353,6 +427,22 @@ jq -s \
     case: $caseName,
     serverSummary: $serverPath,
     receiverSummaries: $receiverPaths,
+    externalImpairment:
+      if $externalImpairmentLatencyMillis != null then {
+        kind: "netem",
+        latencyMillis: $externalImpairmentLatencyMillis,
+        jitterMillis: $externalImpairmentJitterMillis,
+        lossPercent: $externalImpairmentLossPercent,
+        netemEvidenceDir: (if $netemEvidenceDir == "" then null else $netemEvidenceDir end)
+      }
+      elif $externalBlackholeAtEpochMillis != null then {
+        kind: "blackhole",
+        lossPercent: 100,
+        blackholeAtEpochMillis: $externalBlackholeAtEpochMillis,
+        netemEvidenceDir: (if $netemEvidenceDir == "" then null else $netemEvidenceDir end)
+      }
+      else null
+      end,
     server: {
       runId: ($server.runId // null),
       scenario: ($server.scenario // null),
@@ -394,7 +484,7 @@ jq -s \
 jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
 
 {
-	  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,undelivered_server_gbps,healthy_undelivered_server_gbps,affected_undelivered_server_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,healthy_server_datagrams_out_s,affected_server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
+  echo "case,benchmark_name,server_iterations,receiver_workers,server_connected_clients,receiver_clients,payload_size,reliability,batched,batch_interval_ms,logical_packets_per_batch,batch_groups,target_mbps,target_client_mbps,disappearance_mode,start_at_epoch_ms,impairment_profile,external_impairment,netem_evidence_dir,delivered_gbps,healthy_delivered_gbps,affected_delivered_gbps,undelivered_server_gbps,healthy_undelivered_server_gbps,affected_undelivered_server_gbps,client_mbps_p50,client_mbps_p99,send_delivered_bytes_ratio,server_datagrams_out_s,healthy_server_datagrams_out_s,affected_server_datagrams_out_s,stale_datagrams_s,nack_out_s,probe_p99_ms,max_queued_bytes,configured_max_queued_bytes,fairness,healthy_fairness,affected_fairness,warnings,artifact"
   jq -r '
     .aggregate as $a |
     [
@@ -409,11 +499,14 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
       $a.batched,
       $a.batchIntervalMillis,
       $a.logicalPacketsPerBatch,
-	      $a.batchGroups,
-	      $a.targetMbps,
-	      $a.targetClientMbps,
-	      $a.disappearanceMode,
-	      $a.startAtEpochMillis,
+      $a.batchGroups,
+      $a.targetMbps,
+      $a.targetClientMbps,
+      $a.disappearanceMode,
+      $a.startAtEpochMillis,
+      $a.impairmentProfile,
+      $a.externalImpairment,
+      $a.netemEvidenceDir,
       $a.deliveredGbps,
       $a.healthyDeliveredGbps,
       $a.affectedDeliveredGbps,
@@ -450,6 +543,8 @@ jq -c '.aggregate' "$lab_summary" >"$suite_aggregate"
     "- Server run: `" + (.server.runId // "unknown") + "` (`" + (.server.gitRevision // "unknown") + "`)\n" +
     "- Receiver runs: `" + (.receivers | map(.runId // "unknown") | join(", ")) + "`\n" +
     "- Start at epoch ms: `" + (($a.startAtEpochMillis // 0) | tostring) + "`\n" +
+    "- Impairment: `" + ($a.impairmentProfile // "unknown") + "` (external qdisc: `" + (($a.externalImpairment // false) | tostring) + "`)\n" +
+    (if $a.netemEvidenceDir == null then "" else "- Netem evidence: `" + $a.netemEvidenceDir + "`\n" end) +
     "- Warnings: `" + ((.warnings // []) | if length == 0 then "none" else join(",") end) + "`\n"
   ' "$lab_summary"
   echo "| Metric | Value |"

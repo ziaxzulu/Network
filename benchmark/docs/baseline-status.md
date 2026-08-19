@@ -36,13 +36,34 @@ Local loopback artifacts are useful for regression shape only. They should not b
 
 For a stronger single-host smoke path, use `benchmark/scripts/run-netns-worker-smoke.sh`. It runs the normal server/receiver worker roles through Linux network namespaces and veth pairs so `tc netem` and blackhole behavior are applied outside the JVM. This is useful for local retry-pressure and external-qdisc regression checks, but it is still not accepted as line-rate or baseline-of-record evidence.
 
-Current netns blackhole dry-run artifact in this worktree:
+Current executed netns resilience baseline:
 
 ```text
-benchmark/build/benchmark-results/netns-blackhole-dry-current/
+benchmark/baselines/zulubox-netns-100c-20260819/
 ```
 
-This dry-run generated the server, healthy-receiver, affected-receiver, qdisc-status, blackhole-scheduling, and merge commands for a `20` client disappearing-client smoke with `18` healthy clients, `2` affected clients, payload `512`, `5Mbps` per client, and server-to-client blackhole applied outside the JVM. It did not execute traffic: this host has `ip` and `tc`, but `sudo -n true` reports that a password is required, and `run-netns-worker-smoke.sh --execute` requires root or equivalent `CAP_NET_ADMIN`.
+Two complete campaigns exercised `100` established clients at `5Mbps` each,
+with `90` healthy clients and `10` clients behind external `tc netem`. The six
+profiles were perfect, near-loss (`10ms/2ms/2%`), regional-loss
+(`50ms/5ms/2%`), poor (`100ms/10ms/5%`), severe (`200ms/20ms/10%`), and a
+timed 100% blackhole. All 36 measured windows completed.
+
+The main product result is strong client isolation: healthy-client p50 stayed
+between `4.975` and `5.056Mbps`, healthy Jain fairness stayed above `0.999936`,
+and healthy send/deliver cost stayed near `1.02-1.03` under every impairment.
+Low single-digit loss remained serviceable. Poor links were degraded and
+variable, while severe links delivered almost nothing to affected clients and
+consumed `42-45Mbps` of undelivered affected-path work with roughly `22MB`
+reported maximum queue growth. This is good evidence that bad peers do not
+poison healthy peers, but it does not yet prove that retries, queues, and dead
+peers are bounded during a long disruption.
+
+See [`../baselines/zulubox-netns-100c-20260819/RESULTS.md`](../baselines/zulubox-netns-100c-20260819/RESULTS.md)
+for the resilience scorecard, cross-campaign table, caveats, raw artifact paths,
+and recommended next measurements. This package is intentionally classified as
+a development resilience baseline rather than the separate-host baseline of
+record: all rows exceeded the current p99-spread threshold, and the topology is
+still a single physical host using namespaces and veth pairs.
 
 Latest current-branch smoke artifact in this worktree:
 
