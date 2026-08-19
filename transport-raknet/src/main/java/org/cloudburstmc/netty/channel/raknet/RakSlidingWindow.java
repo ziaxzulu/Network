@@ -49,10 +49,21 @@ public class RakSlidingWindow {
     }
 
     public RakSlidingWindow(int mtu, RakRecoveryMode recoveryMode) {
+        this(mtu, recoveryMode, 10L);
+    }
+
+    /**
+     * Creates a sliding window whose model controller accounts for the session's actual send opportunity quantum.
+     *
+     * @param mtu datagram MTU in bytes
+     * @param recoveryMode recovery and congestion-control mode
+     * @param sendQuantumMillis maximum regular interval between session send opportunities
+     */
+    public RakSlidingWindow(int mtu, RakRecoveryMode recoveryMode, long sendQuantumMillis) {
         this.mtu = mtu;
         this.recoveryMode = recoveryMode;
         this.modelController = recoveryMode.usesModelBasedCongestionControl()
-                ? new RakModelCongestionController(mtu) : null;
+                ? new RakModelCongestionController(mtu, sendQuantumMillis) : null;
         this.cwnd = this.modelController == null ? mtu : this.modelController.getCongestionWindow();
     }
 

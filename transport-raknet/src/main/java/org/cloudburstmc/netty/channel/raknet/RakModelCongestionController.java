@@ -39,7 +39,6 @@ final class RakModelCongestionController {
     private static final double DELAY_INFLATION_THRESHOLD = 1.25D;
     private static final double LOSS_BETA = 0.70D;
     private static final int MAX_BURST_DATAGRAMS = 8;
-    private static final long PACING_QUANTUM_MILLIS = 10L;
     private static final long MINIMUM_RTT_WINDOW_MILLIS = 10_000L;
     private static final double PATH_STEP_MULTIPLIER = 4.0D;
     private static final long PATH_STEP_ABSOLUTE_DELTA_MILLIS = 50L;
@@ -53,6 +52,7 @@ final class RakModelCongestionController {
     private static final double LOSS_BOUND_GROWTH = 1.05D;
 
     private final int mtu;
+    private final long sendQuantumMillis;
     private final double minimumCwnd;
     private final double maximumCwnd;
     private final double[] bandwidthFilter = new double[BANDWIDTH_FILTER_ROUNDS];
@@ -98,7 +98,12 @@ final class RakModelCongestionController {
     private long pacingUpdatedAtMillis = -1L;
 
     RakModelCongestionController(int mtu) {
+        this(mtu, 10L);
+    }
+
+    RakModelCongestionController(int mtu, long sendQuantumMillis) {
         this.mtu = mtu;
+        this.sendQuantumMillis = Math.max(1L, sendQuantumMillis);
         // RFC 9002's initial window formula: min(10*MDS, max(2*MDS, 14720)).
         this.cwnd = Math.min(10D * mtu, Math.max(2D * mtu, 14_720D));
         this.minimumCwnd = 2D * mtu;
@@ -460,7 +465,8 @@ final class RakModelCongestionController {
             return;
         }
         double target = Math.max(this.minimumCwnd, Math.min(this.maximumCwnd,
-                this.maxBandwidthBytesPerMillis * this.minimumRttMillis * CWND_GAIN));
+                this.maxBandwidthBytesPerMillis * Math.max(this.minimumRttMillis, this.sendQuantumMillis)
+                        * CWND_GAIN));
         if (this.pathProbeActive) {
             target = this.minimumCwnd;
         }
@@ -514,7 +520,7 @@ final class RakModelCongestionController {
     }
 
     private double maximumBurstBytes() {
-        double pacedQuantum = this.pacingRateBytesPerMillis() * PACING_QUANTUM_MILLIS + this.mtu;
+        double pacedQuantum = this.pacingRateBytesPerMillis() * this.sendQuantumMillis + this.mtu;
         return Math.max(2D * this.mtu, Math.min(MAX_BURST_DATAGRAMS * (double) this.mtu, pacedQuantum));
     }
 

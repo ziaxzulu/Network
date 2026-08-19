@@ -296,10 +296,13 @@ but not its complete state machine:
   data sent after the previous round boundary. The controller keeps the
   maximum delivery-rate sample from ten recent rounds. This is a small custom
   filter, not BBRv3's two-`ProbeBW`-cycle max filter.
-- **minRTT and BDP.** Clean RTT samples maintain a minimum propagation-time
-  estimate. The target window is `2 * estimated bandwidth * minRTT`, with a
-  two-MTU floor and a 4 MiB implementation ceiling. Growth is limited by newly
-  acknowledged bytes. The initial window copies the RFC 9002 formula
+- **minRTT and BDP.** Clean RTT samples maintain a raw minimum propagation-time
+  estimate. The target window is
+  `2 * estimated bandwidth * max(minRTT, captured session send quantum)`, with
+  a two-MTU floor and a 4 MiB implementation ceiling. This effective RTT is
+  used only for the BDP/quantization budget; path-change logic and reported
+  minRTT retain the raw observation. Growth is limited by newly acknowledged
+  bytes. The initial window copies the RFC 9002 formula
   `min(10*MDS, max(2*MDS, 14720))`; this does not import QUIC's wire protocol.
 - **Pacing.** A per-session token bucket gates ordinary/data reliable original
   sends and retransmissions through the same budget. The terminal disconnect
@@ -307,10 +310,14 @@ but not its complete state machine:
   because the channel closes immediately afterward. Before a delivery
   estimate exists, the rate derives from the initial window and a 333 ms
   assumed RTT. Startup uses a 2.77 pacing gain. The steady experiment cycles
-  once over eight rounds through gains 1.25, 0.75, then 1.0. Burst capacity is
-  `max(2*MTU, min(8*MTU, pacingRate*10ms + MTU))`. The 0.75 drain gain is
-  custom; BBR draft-06 specifies a 0.90 `ProbeDown` pacing gain. This is a
-  simplified capacity probe, not BBRv3 `Startup`, `Drain`, or full `ProbeBW`.
+  once over eight rounds through gains 1.25, 0.75, then 1.0. At session
+  activation the controller captures the same fixed interval used by the
+  scheduled send task (`RAK_FLUSH_INTERVAL` with auto-flush, otherwise the
+  10 ms maintenance tick). Burst capacity is
+  `max(2*MTU, min(8*MTU, pacingRate*capturedSendQuantum + MTU))`. The 0.75 drain
+  gain is custom; BBR draft-06 specifies a 0.90 `ProbeDown` pacing gain. This
+  is a simplified capacity probe, not BBRv3 `Startup`, `Drain`, or full
+  `ProbeBW`.
 - **Loss response.** Per-round loss above 20%, or above 2% together with
   smoothed RTT at least 1.25 times minRTT, caps flight at 70% of the smaller of
   the prior window and observed maximum flight. Three non-congestive rounds

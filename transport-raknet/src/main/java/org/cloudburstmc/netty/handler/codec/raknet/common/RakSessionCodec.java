@@ -26,6 +26,7 @@ import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.*;
+import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelMetrics;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.channel.raknet.config.RakDatagramSendType;
@@ -117,7 +118,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         int mtu = this.getMtu();
 
         this.recoveryMode = this.channel.config().getRecoveryMode();
-        this.slidingWindow = new RakSlidingWindow(mtu, this.recoveryMode);
+        int flushInterval = captureFlushInterval(this.channel.config());
+        this.slidingWindow = new RakSlidingWindow(mtu, this.recoveryMode, flushInterval);
         this.boundedRecovery = this.recoveryMode.usesBoundedRecovery()
                 ? new RakBoundedRecovery(this.clock) : null;
         this.recoveryMetrics.initialize(this.getMetrics(), this.slidingWindow, this.currentTimeMillis());
@@ -153,13 +155,16 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.reliableDatagramQueue = new BitQueue(512);
         this.splitPackets = new RoundRobinArray<>(256);
 
-        // After session is fully initialized, start ticking.
-        boolean autoFlush = this.channel.config().isAutoFlush();
-        // Make sure there happens at least one flush per 10ms to respect standard RakNet behavior
-        int flushInterval = autoFlush ? this.channel.config().getFlushInterval() : 10;
+        // After session is fully initialized, start the configured auto-flush cadence or the 10 ms maintenance tick.
         this.tickFuture = ctx.channel().eventLoop().scheduleAtFixedRate(this::tryTick, 0, flushInterval, TimeUnit.MILLISECONDS);
 
         ctx.fireChannelActive(); // fire channel active on rakPipeline()
+    }
+
+    static int captureFlushInterval(RakChannelConfig config) {
+        // channelActive captures one value for both the fixed-rate task and controller. Later option changes do not
+        // reschedule the task and therefore must not change the controller's accounting quantum either.
+        return config.isAutoFlush() ? config.getFlushInterval() : 10;
     }
 
     @Override

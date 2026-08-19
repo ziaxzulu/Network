@@ -34,6 +34,115 @@ public class RakSlidingWindowModelTests {
     private static final int MTU = 1_200;
 
     @Test
+    public void oneMillisecondPathWithTenMillisecondSendQuantumSustainsSerializedFiveMegabits() {
+        QuantizedSendResult result = simulateQuantizedShortRtt();
+        Assertions.assertTrue(result.measuredMbps >= 4.5D,
+                () -> "send-quantized model collapsed below the serialized offer: "
+                        + result.measuredMbps + " Mbps");
+        Assertions.assertEquals(1L, result.minimumObservedRttMillis,
+                "send-quantum accounting must not rewrite the raw propagation RTT");
+        Assertions.assertEquals(1L, result.finalMinimumRttMillis,
+                "serialized data must not replace the raw minimum with the effective send quantum");
+        Assertions.assertTrue(result.finalBandwidthBytesPerMillis >= 500D
+                        && result.finalBandwidthBytesPerMillis <= 700D,
+                () -> "delivery estimator diverged from the 625 B/ms path: "
+                        + result.finalBandwidthBytesPerMillis + " B/ms");
+        Assertions.assertTrue(result.finalCwnd >= 8D * MTU && result.finalCwnd <= 24D * MTU,
+                () -> "effective-RTT BDP window is unreasonable: " + result.finalCwnd + " bytes");
+        Assertions.assertTrue(result.maxBytesSentInTick <= 8 * MTU,
+                "accounting for the send quantum must retain the bounded catch-up burst");
+        Assertions.assertTrue(result.finalQueuedBytes < 100_000L,
+                () -> "a healthy saturated sender retained a growing queue: " + result.finalQueuedBytes);
+    }
+
+    private static QuantizedSendResult simulateQuantizedShortRtt() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED, 10L);
+        PriorityQueue<Delivery> deliveries = new PriorityQueue<>(Comparator
+                .comparingLong((Delivery value) -> value.at)
+                .thenComparingLong(value -> value.datagram.getSendOrdinal()));
+        long offeredCredit = 0L;
+        long deliveredMeasurementBytes = 0L;
+        long sendOrdinal = 0L;
+        long minimumObservedRttMillis = Long.MAX_VALUE;
+        double nextLinkAvailableMillis = 10D;
+        int maxBytesSentInTick = 0;
+        final int payloadBytes = 1_000;
+        final long offeredBytesPerSecond = 625_000L;
+        final double linkBytesPerMillis = 625D;
+        final long measurementStartMillis = 2_000L;
+        final long measurementEndMillis = 12_000L;
+
+        try {
+            // A small pre-data flight records the true 1 ms propagation minimum. Its serialization is below this
+            // controller's millisecond clock resolution; saturated data below still traverses the serialized link.
+            RakDatagramPacket handshake = datagram(1);
+            handshake.setSequenceIndex(0);
+            handshake.setSendOrdinal(sendOrdinal++);
+            handshake.setSendTime(0L);
+            window.onReliableSend(handshake, true);
+            window.onAck(1L, handshake, sendOrdinal);
+            minimumObservedRttMillis = window.getModelMinimumRttMillis();
+            handshake.release();
+
+            for (long now = 10L; now <= measurementEndMillis + 100L; now++) {
+                while (!deliveries.isEmpty() && deliveries.peek().at <= now) {
+                    Delivery delivery = deliveries.poll();
+                    window.onAck(now, delivery.datagram, sendOrdinal);
+                    minimumObservedRttMillis = Math.min(minimumObservedRttMillis,
+                            window.getModelMinimumRttMillis());
+                    if (now >= measurementStartMillis && now < measurementEndMillis) {
+                        deliveredMeasurementBytes += payloadBytes;
+                    }
+                    releaseIfNeeded(delivery.datagram);
+                }
+                if (now >= measurementEndMillis) {
+                    continue;
+                }
+
+                offeredCredit += offeredBytesPerSecond;
+                if (now % 10L != 0L) {
+                    continue;
+                }
+                int bytesSentInTick = 0;
+                while (offeredCredit >= payloadBytes * 1_000L) {
+                    RakDatagramPacket datagram = datagram(payloadBytes);
+                    if (window.getTransmissionBandwidth(now) < datagram.getSize()) {
+                        datagram.release();
+                        break;
+                    }
+                    datagram.setSequenceIndex((int) sendOrdinal);
+                    datagram.setSendOrdinal(sendOrdinal++);
+                    datagram.setSendTime(now);
+                    offeredCredit -= payloadBytes * 1_000L;
+                    window.onReliableSend(datagram, offeredCredit < payloadBytes * 1_000L);
+                    bytesSentInTick += datagram.getSize();
+
+                    double serviceStartedAt = Math.max(now, nextLinkAvailableMillis);
+                    nextLinkAvailableMillis = serviceStartedAt + datagram.getSize() / linkBytesPerMillis;
+                    long acknowledgeAt = (long) Math.ceil(nextLinkAvailableMillis + 1D);
+                    deliveries.offer(new Delivery(acknowledgeAt, datagram, false));
+                }
+                maxBytesSentInTick = Math.max(maxBytesSentInTick, bytesSentInTick);
+            }
+
+            long applicationQueuedBytes = offeredCredit / 1_000L;
+            long linkQueuedBytes = (long) Math.ceil(
+                    Math.max(0D, nextLinkAvailableMillis - measurementEndMillis) * linkBytesPerMillis);
+            return new QuantizedSendResult(
+                    deliveredMeasurementBytes * 8D
+                            / ((measurementEndMillis - measurementStartMillis) * 1_000D),
+                    window.getCongestionWindow(), minimumObservedRttMillis, maxBytesSentInTick,
+                    applicationQueuedBytes + linkQueuedBytes, window.getModelBandwidthBytesPerMillis(),
+                    window.getModelMinimumRttMillis());
+        } finally {
+            while (!deliveries.isEmpty()) {
+                releaseIfNeeded(deliveries.poll().datagram);
+            }
+            window.close();
+        }
+    }
+
+    @Test
     public void ackCompressedFlightCannotSampleFasterThanItWasSent() {
         RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
         List<RakDatagramPacket> flight = new ArrayList<>();
@@ -867,6 +976,28 @@ public class RakSlidingWindowModelTests {
             this.restartMbps = restartMbps;
             this.maxBytesSentInTick = maxBytesSentInTick;
             this.finalBandwidthBytesPerMillis = finalBandwidthBytesPerMillis;
+        }
+    }
+
+    private static final class QuantizedSendResult {
+        private final double measuredMbps;
+        private final double finalCwnd;
+        private final long minimumObservedRttMillis;
+        private final int maxBytesSentInTick;
+        private final long finalQueuedBytes;
+        private final double finalBandwidthBytesPerMillis;
+        private final long finalMinimumRttMillis;
+
+        private QuantizedSendResult(double measuredMbps, double finalCwnd, long minimumObservedRttMillis,
+                                    int maxBytesSentInTick, long finalQueuedBytes,
+                                    double finalBandwidthBytesPerMillis, long finalMinimumRttMillis) {
+            this.measuredMbps = measuredMbps;
+            this.finalCwnd = finalCwnd;
+            this.minimumObservedRttMillis = minimumObservedRttMillis;
+            this.maxBytesSentInTick = maxBytesSentInTick;
+            this.finalQueuedBytes = finalQueuedBytes;
+            this.finalBandwidthBytesPerMillis = finalBandwidthBytesPerMillis;
+            this.finalMinimumRttMillis = finalMinimumRttMillis;
         }
     }
 }
