@@ -2885,6 +2885,8 @@ public class BenchmarkKitTests {
                 + "{\"id\":1,\"impaired\":true,\"bulkReceivedBytes\":100000}]}";
         Files.writeString(receiver.resolve("summary.json"),
                 "{\"runId\":\"receiver-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"client\","
+                        + "\"probeReliability\":\"UNRELIABLE\",\"probePriority\":\"HIGH\","
+                        + "\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\","
                         + "\"startAtEpochMillis\":1000,\"iterations\":["
                         + receiverIteration.formatted(1) + "," + receiverIteration.formatted(2) + ","
                         + receiverIteration.formatted(3) + "]}\n",
@@ -2919,6 +2921,8 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(10_000,
                 summary.path("externalImpairment").path("limitPackets").asInt());
         Assertions.assertEquals("UNRELIABLE", summary.path("aggregate").path("probeReliability").asText());
+        Assertions.assertTrue(summary.path("aggregate").path("probeTransportProvenanceValid").asBoolean());
+        Assertions.assertEquals("HIGH", summary.path("receivers").get(0).path("probePriority").asText());
         Assertions.assertEquals(36, summary.path("aggregate").path("probesSent").asInt());
         Assertions.assertEquals(30, summary.path("aggregate").path("probesAcked").asInt());
         Assertions.assertEquals(0, summary.path("aggregate").path("probeAckSpillover").asInt());
@@ -2937,6 +2941,56 @@ public class BenchmarkKitTests {
                 "impairment_profile,external_impairment,external_blackhole_at_epoch_ms,"
                         + "external_recovery_at_epoch_ms,netem_limit_packets,netem_evidence_dir"));
         Assertions.assertTrue(csv.contains("\"100ms/10ms/5%\",true,,,10000,\"" + evidence + "\""));
+
+        Path wrongReceiver = output.resolve("receiver-wrong-provenance");
+        Path wrongReceiverMerged = output.resolve("merged-wrong-receiver-provenance");
+        Files.createDirectories(wrongReceiver);
+        Files.writeString(wrongReceiver.resolve("summary.json"),
+                Files.readString(receiver.resolve("summary.json"), StandardCharsets.UTF_8)
+                        .replace("\"probePriority\":\"HIGH\"", "\"probePriority\":\"IMMEDIATE\""),
+                StandardCharsets.UTF_8);
+        ProcessResult wrongReceiverResult = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/merge-worker-results.sh").toString(),
+                "--server", server.toString(),
+                "--receiver", receiver.toString(),
+                "--receiver", wrongReceiver.toString(),
+                "--out", wrongReceiverMerged.toString(),
+                "--case", "wrong-receiver-provenance");
+        Assertions.assertEquals(0, wrongReceiverResult.exitCode, wrongReceiverResult.output);
+        JsonNode wrongReceiverSummary = JSON.readTree(Files.readString(
+                wrongReceiverMerged.resolve("lab-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertFalse(wrongReceiverSummary.path("aggregate")
+                .path("probeTransportProvenanceValid").asBoolean());
+        Assertions.assertTrue(wrongReceiverSummary.path("aggregate").path("probeReliability").isNull());
+        Assertions.assertTrue(wrongReceiverSummary.path("aggregate").path("probePriority").isNull());
+        Assertions.assertTrue(wrongReceiverSummary.path("aggregate").path("probeSemantics").isNull());
+        Assertions.assertTrue(wrongReceiverSummary.path("aggregate").path("unstableReasons").toString()
+                .contains("invalid-probe-transport-provenance"));
+        Assertions.assertEquals("IMMEDIATE",
+                wrongReceiverSummary.path("receivers").get(1).path("probePriority").asText());
+
+        Path missingReceiver = output.resolve("receiver-missing-provenance");
+        Path missingReceiverMerged = output.resolve("merged-missing-receiver-provenance");
+        Files.createDirectories(missingReceiver);
+        Files.writeString(missingReceiver.resolve("summary.json"),
+                Files.readString(receiver.resolve("summary.json"), StandardCharsets.UTF_8)
+                        .replace(",\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\"", ""),
+                StandardCharsets.UTF_8);
+        ProcessResult missingReceiverResult = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/merge-worker-results.sh").toString(),
+                "--server", server.toString(),
+                "--receiver", missingReceiver.toString(),
+                "--out", missingReceiverMerged.toString(),
+                "--case", "missing-receiver-provenance");
+        Assertions.assertEquals(0, missingReceiverResult.exitCode, missingReceiverResult.output);
+        JsonNode missingReceiverSummary = JSON.readTree(Files.readString(
+                missingReceiverMerged.resolve("lab-summary.json"), StandardCharsets.UTF_8));
+        Assertions.assertFalse(missingReceiverSummary.path("aggregate")
+                .path("probeTransportProvenanceValid").asBoolean());
+        Assertions.assertTrue(missingReceiverSummary.path("aggregate").path("unstableReasons").toString()
+                .contains("invalid-probe-transport-provenance"));
 
         Path missingProbeServer = output.resolve("server-missing-probes");
         Path missingProbeMerged = output.resolve("merged-missing-probes");

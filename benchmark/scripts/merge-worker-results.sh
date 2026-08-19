@@ -273,6 +273,12 @@ jq -s \
 
   .[0] as $server |
   .[1:] as $receivers |
+  ([ $server ] + $receivers) as $probe_transport_sources |
+  ($probe_transport_sources | all(
+    (.probeReliability // null) == "UNRELIABLE"
+    and (.probePriority // null) == "HIGH"
+    and (.probeSemantics // null) == $expectedProbeSemantics
+  )) as $probe_transport_provenance_valid |
   ($server.iterations // []) as $server_iterations |
   ([$receivers[] | (.iterations // [])[]] ) as $receiver_iterations |
   ([$receivers[] | .runId // "receiver"] ) as $receiver_run_ids |
@@ -314,7 +320,7 @@ jq -s \
     + (if $server_iteration_count < 3 then ["insufficient-iterations"] else [] end)
     + (if $delivered_gbps_spread_pct > 10 then ["throughput-spread"] else [] end)
     + (if $server_p99_complete | not then ["missing-probe-p99"] else [] end)
-    + (if (($server.probeReliability // null) != "UNRELIABLE") or (($server.probePriority // null) != "HIGH") or (($server.probeSemantics // null) != $expectedProbeSemantics) then ["invalid-probe-transport-provenance"] else [] end)
+    + (if $probe_transport_provenance_valid then [] else ["invalid-probe-transport-provenance"] end)
     + (if ($server_probe_ack_spillover_complete | not) then ["invalid-probe-ack-spillover"] else [] end)
     + (if $server_probe_ack_spillover != null and $server_probe_ack_spillover > 0 then ["probe-ack-spillover"] else [] end)
     + (if $minimum_probe_responses < $minimumProbeResponsesPerIteration then ["insufficient-probe-responses"] else [] end)
@@ -409,9 +415,10 @@ jq -s \
       receiverClients: $receiver_clients,
       payloadSize: ($server_iterations[0].payloadSize // 0),
       reliability: ($server_iterations[0].reliability // "unknown"),
-      probeReliability: ($server.probeReliability // null),
-      probePriority: ($server.probePriority // null),
-      probeSemantics: ($server.probeSemantics // null),
+      probeTransportProvenanceValid: $probe_transport_provenance_valid,
+      probeReliability: (if $probe_transport_provenance_valid then $server.probeReliability else null end),
+      probePriority: (if $probe_transport_provenance_valid then $server.probePriority else null end),
+      probeSemantics: (if $probe_transport_provenance_valid then $server.probeSemantics else null end),
       minimumProbeResponsesPerIteration: $minimumProbeResponsesPerIteration,
       minimumProbeResponseRateRequired: $minimumProbeResponseRate,
       batched: ($server_iterations[0].batched // false),
@@ -545,6 +552,9 @@ jq -s \
       resourceSafetyMaxAggregateQueuedBytes: ($server.resourceSafetyMaxAggregateQueuedBytes // null),
       resourceSafetyMaxDirectMemoryUsedBytes: ($server.resourceSafetyMaxDirectMemoryUsedBytes // null),
       resourceSafetyStatus: ($server.resourceSafetyStatus // null),
+      probeReliability: ($server.probeReliability // null),
+      probePriority: ($server.probePriority // null),
+      probeSemantics: ($server.probeSemantics // null),
       gitRevision: ($server.environment.gitRevision // null),
       javaVersion: ($server.environment.javaVersion // null),
       osName: ($server.environment.osName // null)
@@ -557,6 +567,9 @@ jq -s \
         iterations: ((.iterations // []) | length),
         clients: ((.iterations // []) | map(.clients // 0) | max_or_zero),
         startAtEpochMillis: (.startAtEpochMillis // 0),
+        probeReliability: (.probeReliability // null),
+        probePriority: (.probePriority // null),
+        probeSemantics: (.probeSemantics // null),
         gitRevision: (.environment.gitRevision // null),
         javaVersion: (.environment.javaVersion // null),
         osName: (.environment.osName // null)
