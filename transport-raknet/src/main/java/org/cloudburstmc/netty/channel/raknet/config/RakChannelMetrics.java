@@ -67,7 +67,8 @@ public interface RakChannelMetrics {
      * @param sendType why the datagram was written
      * @param bytes encoded datagram size in bytes
      * @param retransmissionAttempt zero for an original transmission, otherwise the one-based attempt number
-     * @param bytesInFlight currently tracked reliable datagram bytes, including a newly tracked original send
+     * @param bytesInFlight congestion-controlled physical datagram bytes; in model mode this includes tracked
+     *                      unreliable datagrams as well as reliable attempts, including the newly tracked send
      */
     default void rakDatagramSent(RakDatagramSendType sendType, int bytes, int retransmissionAttempt,
                                  int bytesInFlight) {
@@ -93,7 +94,8 @@ public interface RakChannelMetrics {
      * 100 milliseconds per session; recovery transitions and the terminal snapshot are reported immediately.
      *
      * @param observedAtMillis wall-clock observation time, in milliseconds since the Unix epoch
-     * @param bytesInFlight currently tracked reliable datagram bytes
+     * @param bytesInFlight congestion-controlled physical datagram bytes; in model mode this includes tracked
+     *                      unreliable datagrams as well as reliable attempts
      * @param congestionWindow congestion window in bytes
      * @param slowStartThreshold slow-start threshold in bytes
      * @param smoothedRtt smoothed round-trip time in milliseconds, or {@code -1} until sampled

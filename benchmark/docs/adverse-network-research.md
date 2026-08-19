@@ -28,6 +28,14 @@ isolation. It also shows the opportunity clearly:
   second window and retries had stopped; measurement resets hid the exact
   transition time in the aggregate.
 
+The product-facing workload in scope is overwhelmingly RakNet reliable,
+ordered Minecraft traffic. Reliable goodput, ordered-hole recovery, queue
+growth, and retry amplification therefore drive the design and acceptance
+decision. The controller still charges unreliable datagrams to aggregate
+flight and pacing state so they cannot bypass congestion control, but this
+work does not prioritize an unreliable-traffic benchmark or a new
+deadline-aware unreliable API.
+
 ## What the standards establish
 
 [RFC 8085, UDP Usage Guidelines](https://www.rfc-editor.org/rfc/rfc8085.html)
@@ -95,23 +103,24 @@ batch by an explicit burst budget.
 Cloudflare reports in
 [New standards for a faster and more private Internet](https://blog.cloudflare.com/new-standards/)
 that BBRv3 reduced loss and retransmissions in its Oxy proxy experiments and
-describes experimentation before deployment. That is evidence to evaluate
-model-based controllers later; it is not evidence that selecting BBR fixes
+describes experimentation before deployment. That supports evaluating a
+model-based controller; it is not evidence that selecting BBR fixes
 incorrect in-flight accounting, timeout behavior, or queue ownership.
 
-The July 2026 IETF CCWG
-[BBRv3 working-group draft](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/)
-makes the poor-link tradeoff explicit. It reports that even 1% loss over a
+As of 2026-08-19, the current IETF CCWG document is the 6 July 2026
+[BBRv3 working-group draft-06](https://datatracker.ietf.org/doc/html/draft-ietf-ccwg-bbr-06).
+It is an active Internet-Draft targeting Experimental status, not an RFC. It
+makes the poor-link tradeoff explicit: even 1% loss over a
 100 ms path limits CUBIC to about 3 Mbps, then specifies a sender-side model
 using delivery rate, minimum RTT, and loss to control both pacing rate and
 maximum in-flight data. That is directly relevant to the active 3.5 Mbps goal
 at 5% loss: repairing RakNet's recovery and scheduler is necessary, but a
 Reno-style multiplicative decrease is unlikely to meet that target. The draft
 is also a roughly hundred-page state machine with transport integration
-requirements, not permission to ignore loss or pin a large minimum window.
-Before selecting or adapting it, RakNet needs trustworthy delivery-rate
-samples, application-limited marking, packet-timed rounds, and a real pacer;
-its fairness and queue-pressure behavior then need comparison against both
+requirements, not permission to ignore loss or pin a large minimum window. A
+RakNet adaptation therefore needs trustworthy delivery-rate samples,
+application-limited marking, packet-timed rounds, and a real pacer; its
+fairness and queue-pressure behavior then need comparison against both
 loss-based traffic and the genre transports below.
 
 ## Comparable implementations
@@ -208,68 +217,183 @@ negotiated protocol extension.
 
 ### 5. Change congestion algorithms only after invariants are observable
 
-Benchmark a two-packet versus larger initial/minimum window and proportional
-window reduction instead of immediately porting CUBIC or BBR. Cloudflare's
-death-spiral bug is a warning that a controller depends on the exact meaning
-and timing of send, acknowledgement, idle, and recovery callbacks.
+Retain the loss-based bounded controller as a direct control and keep its
+initial/minimum-window and proportional-reduction choices measurable. A model
+adaptation must not hide recovery regressions behind a higher window.
+Cloudflare's death-spiral bug is a warning that any controller depends on the
+exact meaning and timing of send, acknowledgement, idle, and recovery
+callbacks.
 
 ## Selected experimental implementation
 
-The first implementation follows options 1 and 2 above as an opt-in,
-sender-only recovery policy. `RakRecoveryMode.LEGACY` remains the default;
-applications and benchmarks must explicitly select `BOUNDED` through
-`RakChannelOption.RAK_RECOVERY_MODE`. The option changes no RakNet packet or
-handshake format, so a bounded sender remains wire-compatible with existing
-peers.
+There are now two opt-in sender policies beside the default
+`RakRecoveryMode.LEGACY`. `BOUNDED` retains the loss-based window while bounding
+NACK and PTO recovery. `MODEL_BASED` reuses those recovery invariants and adds
+an experimental delivery model and sender pacer. Applications select either
+through `RakChannelOption.RAK_RECOVERY_MODE`. Neither option changes a RakNet
+packet or handshake, so both remain wire-compatible with existing peers.
 
-The bounded policy deliberately makes a small set of recovery invariants true
-before attempting a different congestion controller:
+### Recovery foundation shared with `BOUNDED`
 
-- reliable outstanding bytes are tracked separately from the bytes carried by
-  physical attempts currently in flight;
-- original sends and ordinary recovery attempts share congestion-window
-  admission, including datagram framing overhead;
-- a NACK schedules one idempotent pending recovery entry instead of sending the
-  datagram immediately, and one 10 ms flush may send at most two recovery
-  datagrams and two MTUs;
-- every physical reliable send attempt receives an immutable loss deadline
-  based on the current retransmission timeout. A cached oldest-attempt anchor
-  makes ordinary sends, ticks, and unrelated acknowledgements O(1); rescanning
-  is needed only when that anchor is acknowledged, retransmitted, or restored
-  after a failed handoff;
-- acknowledgement progress resets probe backoff, but recomputes the next PTO
-  from the immutable deadlines of work that remains outstanding. An ACK for a
-  newer datagram therefore cannot continually postpone repair of an older
-  ordered hole;
-- a due PTO selects and declares only its single oldest attempt lost and sends
-  at most one probe. It never bulk-retires all outstanding physical attempts,
-  doubles after consecutive no-progress probes, is capped at eight seconds,
-  and adds non-negative jitter below 10% so a cohort does not remain perfectly
-  synchronized;
-- timeout selection is ephemeral rather than an entry in the NACK FIFO. If a
-  probe must be deferred, later NACK recovery and newly admitted traffic can
-  still proceed;
-- the base retransmission timeout starts at one second and is clamped to
-  500-2,000 ms as RTT evidence becomes available. Karn's rule excludes
-  retransmitted datagrams from RTT sampling;
-- one no-progress recovery epoch causes at most one congestion-window
-  reduction, and only one PTO probe may temporarily exceed the window; and
-- normal reliable `IMMEDIATE` traffic still uses normal window admission. The
-  terminal disconnect notification has one narrowly scoped handoff exception
-  because the channel closes immediately afterward and cannot create sustained
-  work.
+The model does not bypass the earlier safety work:
 
-Send-reason, attempt, acknowledgement-progress, congestion-window, physical
-flight, RTT, timeout, recovery-start, and recovery-close callbacks expose these
-decisions to bounded-cardinality metrics. Callback failures cannot bypass
-channel buffer cleanup, and close emits a terminal state followed by explicit
-per-session removal.
+- reliable outstanding bytes remain distinct from physical attempts in
+  flight; original sends and retransmissions share admission and accounting;
+- a NACK schedules one idempotent recovery item; a flush sends at most two
+  NACK retransmissions and two MTUs;
+- each reliable physical attempt retains an immutable loss deadline, so an ACK
+  for newer work cannot indefinitely rearm the deadline for an older ordered
+  hole;
+- a PTO selects at most one oldest attempt, consecutive no-progress PTOs back
+  off to at most eight seconds, and sub-10% timer jitter reduces cohort
+  synchronization; and
+- the one-probe window exception, retransmission rollback, queue ownership,
+  and terminal state reclamation remain bounded and observable.
 
-This is intentionally not a wholesale QUIC port. It does not add pacing,
-receiver flow control, packet-number spaces, acknowledgement delay, migration,
-wire-visible persistent-congestion signalling, deadline-aware unreliable
-queues, CUBIC, or BBR. Queue caps remain a separate backpressure guard rather
-than part of the recovery algorithm.
+These are recovery invariants, not evidence that the selected congestion model
+is effective.
+
+### Why a RakNet NACK needs a reordering window
+
+A RakNet receiver emits a NACK when it observes a sequence gap. Under variable
+delay, a later datagram can overtake an earlier one, so the gap proves only
+that the earlier datagram has not arrived *yet*. Treating every NACK as
+immediate physical loss converts ordinary jitter into spurious retransmission,
+false loss samples, repeated window reduction, and avoidable reliable traffic.
+
+`MODEL_BASED` therefore keeps the NACK as a prompt recovery hint but delays the
+loss declaration. The validation window is one quarter of filtered minimum
+RTT, clamped to 50-200 ms. The attempt becomes eligible no earlier than both
+`NACK time + window` and `attempt send time + minRTT + window`; a late ACK
+before that deadline cancels recovery and is recorded as resolved reordering.
+Before a model minRTT exists, the calculation uses the smoothed RTT estimate.
+Before either estimate exists, it uses a 50 ms window and a 200 ms RTT
+reference for the attempt-age leg, so the initial deadline is the later of
+`NACK time + 50 ms` and `attempt send time + 250 ms`.
+
+The one-quarter-minRTT starting point is borrowed from
+[RFC 8985 RACK](https://www.rfc-editor.org/rfc/rfc8985.html), which explicitly
+uses a bounded reordering window to reduce spurious loss detection. RakNet does
+not have TCP SACK/DSACK, so this prototype does **not** copy RACK's DSACK-driven
+adaptation or claim equivalent loss inference. The 50 ms floor is a deliberate
+starting guard against the observed case where a clean low-latency handshake
+was followed by a much more jittery path; real campaigns must calibrate the
+latency/retransmission tradeoff.
+
+### Delivery-rate, pacing, minRTT, and BDP model
+
+The implementation borrows the following ideas from
+[BBRv3 draft-06](https://datatracker.ietf.org/doc/html/draft-ietf-ccwg-bbr-06),
+but not its complete state machine:
+
+- **Delivery-rate samples.** Each physical attempt records delivered bytes and
+  delivery/send timestamps. On ACK, the sample divides newly delivered bytes
+  by the larger of the ACK-elapsed and send-elapsed intervals. Samples shorter
+  than minRTT are rejected. An ACK for retransmitted data is ambiguous and
+  contributes delivered bytes but not a new rate sample. Application-limited
+  samples cannot lower the bandwidth estimate, but may raise it.
+- **Packet-timed filtering.** A packet-timed round starts when an ACK covers
+  data sent after the previous round boundary. The controller keeps the
+  maximum delivery-rate sample from ten recent rounds. This is a small custom
+  filter, not BBRv3's two-`ProbeBW`-cycle max filter.
+- **minRTT and BDP.** Clean RTT samples maintain a minimum propagation-time
+  estimate. The target window is `2 * estimated bandwidth * minRTT`, with a
+  two-MTU floor and a 4 MiB implementation ceiling. Growth is limited by newly
+  acknowledged bytes. The initial window copies the RFC 9002 formula
+  `min(10*MDS, max(2*MDS, 14720))`; this does not import QUIC's wire protocol.
+- **Pacing.** A per-session token bucket gates ordinary/data reliable original
+  sends and retransmissions through the same budget. The terminal disconnect
+  notification retains the bounded policy's one-time handoff exception
+  because the channel closes immediately afterward. Before a delivery
+  estimate exists, the rate derives from the initial window and a 333 ms
+  assumed RTT. Startup uses a 2.77 pacing gain. The steady experiment cycles
+  once over eight rounds through gains 1.25, 0.75, then 1.0. Burst capacity is
+  `max(2*MTU, min(8*MTU, pacingRate*10ms + MTU))`. The 0.75 drain gain is
+  custom; BBR draft-06 specifies a 0.90 `ProbeDown` pacing gain. This is a
+  simplified capacity probe, not BBRv3 `Startup`, `Drain`, or full `ProbeBW`.
+- **Loss response.** Per-round loss above 20%, or above 2% together with
+  smoothed RTT at least 1.25 times minRTT, caps flight at 70% of the smaller of
+  the prior window and observed maximum flight. Three non-congestive rounds
+  release that cap gradually. These are experimental guardrails, not BBRv3's
+  loss-bound or ECN algorithms.
+
+RFC 9002 and the BBR draft both make pacing and in-flight volume separate
+controls: a BDP-sized window sent as one burst can still build a BDP-sized
+queue. Cloudflare's
+[UDP transmission study](https://blog.cloudflare.com/accelerating-udp-packet-transmission-for-quic/)
+likewise shows why CPU-efficient batching cannot be allowed to erase packet
+pacing. The current token bucket limits a Netty flush rather than using Linux
+`SO_TXTIME`; kernel offload and finer-grained pacing remain future options.
+
+Unreliable RakNet datagrams are charged to the same model and retain
+payload-free ACK/loss metadata until resolution. This closes an accounting
+bypass, but reliable ordered Minecraft traffic remains the evaluation focus.
+
+### Path-change guardrails
+
+A lower RTT sample may immediately improve minRTT. Raising minRTT is dangerous:
+a standing queue can look exactly like a new, longer propagation path, and
+accepting that queued RTT would inflate both BDP and the allowed queue. The
+prototype therefore applies narrower guardrails:
+
+- an aged minRTT can refresh normally only from flight at or below two MTUs;
+- an apparent upward step must meet the greater of four times the old minRTT
+  and the old minRTT plus 50 ms, and needs two stable observations from
+  distinct delivery progress and observation times;
+- the sender then drains to the two-MTU floor and accepts a higher minRTT only
+  after two stable low-flight samples, within four packet rounds; and
+- an inconclusive probe enters an eight-round cooldown. Moderate
+  delay-qualified loss response is suppressed during the bounded suspicion
+  interval and the active probe; the 20% hard-loss response remains active.
+
+This is inspired by BBR's requirement to obtain propagation-delay evidence at
+low flight, but it is not BBRv3 `ProbeRTT`, connection migration, or a general
+path-validation mechanism. Mobile handover and rapidly alternating routes are
+explicit campaign cases, not solved claims.
+
+### Persistent no-progress handling
+
+RFC 9002 establishes persistent congestion from an ACK-delimited lost period
+whose duration exceeds a multiple of PTO; it explicitly does not define it as
+a count of PTO expiries. RakNet does not expose QUIC's packet-number spaces or
+ACK evidence. This experiment therefore uses a conservative local surrogate:
+after two PTO probes have backed off without any ACK progress, the next due
+probe resets bandwidth state, pacing credit, and flight allowance to the
+two-MTU minimum. The first subsequent ACK clears the persistent flag and
+restarts model startup. This is intentionally documented as a RakNet heuristic,
+not RFC 9002 persistent-congestion conformance.
+
+### Observability and current status
+
+Existing recovery callbacks expose send reason, attempt, ACK progress,
+congestion window, physical flight, RTT, timeout, and lifecycle. Model sessions
+add filtered delivery rate, pacing rate, minRTT, recent round loss, packet
+round, startup, and persistent-congestion state, plus counts and delays for
+NACK hints, late-ACK reordering resolutions, and validated loss. Exporters must
+aggregate per-channel state into fixed cohorts rather than peer labels.
+
+Deterministic transport tests exercise rate sampling, pacing bounds,
+long-running random loss, reordering transitions, capacity step-up, idle
+restart, path-step rejection/acceptance, persistent no-progress, callback
+failure rollback, and buffer ownership. They validate invariants only. No
+external-qdisc A/B campaign has yet established `MODEL_BASED` throughput,
+fairness, amplification, queue bounds, CPU cost, handover recovery, or
+disappearance behavior. Benchmark-mode/provenance integration and repeated
+real campaigns are still required before any performance claim or default-mode
+change.
+
+### What was deliberately not implemented
+
+`MODEL_BASED` is deliberately not called BBR. It does not implement the BBRv3
+state machine, `Drain`, the complete `ProbeBW` phases, standard `ProbeRTT`, ACK
+aggregation compensation, ECN, loss-bound undo, policer handling, or the
+draft's full validation envelope. It also does not add QUIC acknowledgement
+delay, flow control, packet-number spaces, migration, cryptography, or
+wire-visible persistent-congestion signalling. It does not add RACK's
+SACK/DSACK machinery or adaptive reordering window. Queue caps and application
+backpressure remain separate from congestion control.
+
+### Why the bounded precursor was insufficient
 
 The first bounded prototype instead rearmed one connection-wide PTO from every
 new acknowledgement and allowed a deferred timeout to occupy the NACK FIFO.
@@ -304,21 +428,18 @@ receiver correctly waits forever for the older ordering index, which was never
 put on the wire and therefore cannot be recovered by NACK or PTO. The RakNet
 [reference implementation](https://github.com/facebookarchive/RakNet/blob/1a169895a900c9fc4841c556e16514182b75faf8/Source/ReliabilityLayer.cpp#L3880-L3903)
 instead derives the scheduling floor from the actual heap root and advances the
-selected priority on every nonempty enqueue. The next candidate must repair
-those semantics and keep benchmark probes outside the workload's ordered stream
-before recovery or congestion-control conclusions are drawn from another
-campaign.
+selected priority on every nonempty enqueue. That prerequisite was repaired
+before `MODEL_BASED` was added, and benchmark probes were moved outside the
+workload's ordered stream. New campaigns must preserve both controls before
+recovery or congestion-control conclusions are drawn.
 
-The benchmark requires the same launcher-recorded source revision and staged
-distribution manifest for both sides of the A/B comparison and records
-`legacy` or `bounded` in the goal manifest, campaign plan, case manifest, every
-server and receiver timeline record, CSV, JSON, and Markdown output. Every
-merged worker must report the same composite revision. The fail-closed analyzer
-treats recovery mode as the only intentional configuration difference and
-rejects missing, mixed, or mislabeled candidate evidence. Because the temporary
-jar stage is removed after execution, this is reconciliation within the
-root-owned launcher/evidence trust boundary rather than post-run cryptographic
-attestation of the executed classpath.
+The next benchmark revision must add `model_based` as a fail-closed mode in the
+launcher-recorded source revision, staged distribution manifest, campaign and
+case manifests, every server and receiver timeline, and CSV/JSON/Markdown
+analysis. Every merged worker must report the same composite revision and mode,
+and the analyzer must treat recovery mode as the only intentional A/B
+difference. Until that integration exists and the trusted launcher is
+reinstalled, model runs are development evidence only.
 
 ## What not to copy blindly from QUIC
 
