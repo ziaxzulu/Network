@@ -161,6 +161,14 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         return ++this.retransmissionCount;
     }
 
+    /** Restores the attempt counter when a retransmission cannot be handed to the channel. */
+    public void restoreRetransmissionCount(int retransmissionCount) {
+        if (retransmissionCount < 0 || retransmissionCount > this.retransmissionCount) {
+            throw new IllegalArgumentException("Invalid retransmission count rollback");
+        }
+        this.retransmissionCount = retransmissionCount;
+    }
+
     public long getSendOrdinal() {
         return this.sendOrdinal;
     }

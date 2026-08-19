@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.handler.codec.raknet.common;
 import org.cloudburstmc.netty.channel.raknet.RakSlidingWindow;
 import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 
+import java.util.Collection;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.LongSupplier;
 
@@ -30,6 +31,8 @@ final class RakBoundedRecovery {
     private final LongSupplier clock;
     private final LongSupplier jitterSource;
     private long nextProbeAtMillis = -1L;
+    private long probePacingUntilMillis = -1L;
+    private RakDatagramPacket probeAnchor;
     private int ptoBackoff;
     private boolean closed;
 
@@ -46,18 +49,31 @@ final class RakBoundedRecovery {
         return this.clock.getAsLong();
     }
 
-    void onReliableSend(RakSlidingWindow window) {
-        if (!this.closed && window.getUnackedBytes() > 0 && this.nextProbeAtMillis == -1L) {
-            this.arm(window);
+    void onReliableSend(RakSlidingWindow window, RakDatagramPacket datagram) {
+        if (this.closed) {
+            return;
         }
+        this.scheduleAttemptDeadline(window, datagram);
+        if (this.probeAnchor == null || isEarlier(datagram, this.probeAnchor)) {
+            this.probeAnchor = datagram;
+        }
+        this.updateProbeDeadline(window);
     }
 
-    void onNackRetransmission(RakSlidingWindow window) {
-        // A NACK is useful loss information but not forward ACK progress. Do not let a stream of NACKs
-        // keep moving the connection-wide PTO deadline; only arm if this is the first outstanding flight.
-        if (!this.closed && this.nextProbeAtMillis == -1L) {
-            this.arm(window);
+    void onNackRetransmission(RakSlidingWindow window, RakDatagramPacket datagram,
+                              Collection<RakDatagramPacket> outstanding) {
+        if (this.closed) {
+            return;
         }
+        // A NACK retransmission gets its own loss deadline. It does not move an older outstanding attempt's
+        // deadline or reset the global PTO backoff.
+        this.scheduleAttemptDeadline(window, datagram);
+        if (datagram == this.probeAnchor) {
+            this.selectProbeAnchor(outstanding);
+        } else if (this.probeAnchor == null || isEarlier(datagram, this.probeAnchor)) {
+            this.probeAnchor = datagram;
+        }
+        this.updateProbeDeadline(window);
     }
 
     boolean scheduleNack(RakDatagramPacket datagram) {
@@ -68,16 +84,20 @@ final class RakBoundedRecovery {
         return true;
     }
 
-    void onAcknowledgementProgress(RakSlidingWindow window) {
+    void onAcknowledgementProgress(RakSlidingWindow window, RakDatagramPacket acknowledged,
+                                   Collection<RakDatagramPacket> outstanding) {
         if (this.closed) {
             return;
         }
         this.ptoBackoff = 0;
-        if (window.getUnackedBytes() == 0) {
-            this.nextProbeAtMillis = -1L;
-        } else {
-            this.arm(window);
+        this.probePacingUntilMillis = -1L;
+        // Recompute from the immutable deadlines of the attempts that remain outstanding. An ACK for a later
+        // datagram must never turn an older attempt's deadline into now + RTO.
+        if (acknowledged == this.probeAnchor || this.probeAnchor == null
+                || !this.probeAnchor.isReliableOutstanding()) {
+            this.selectProbeAnchor(outstanding);
         }
+        this.updateProbeDeadline(window);
     }
 
     boolean isProbeDue(RakSlidingWindow window) {
@@ -85,27 +105,80 @@ final class RakBoundedRecovery {
                 && this.currentTimeMillis() >= this.nextProbeAtMillis;
     }
 
-    void onProbeSent(RakSlidingWindow window) {
+    RakDatagramPacket getProbeAnchor() {
+        return this.probeAnchor;
+    }
+
+    void onProbeSent(RakSlidingWindow window, RakDatagramPacket datagram,
+                     Collection<RakDatagramPacket> outstanding) {
         if (this.closed) {
             return;
         }
         if (this.ptoBackoff < 30) {
             this.ptoBackoff++;
         }
-        this.arm(window);
+        this.probePacingUntilMillis = this.scheduleAttemptDeadline(window, datagram);
+        this.selectProbeAnchor(outstanding);
+        this.updateProbeDeadline(window);
     }
 
-    void onProbeDeferred(RakSlidingWindow window) {
+    void onProbeDeferred(RakSlidingWindow window, Collection<RakDatagramPacket> outstanding) {
         if (!this.closed) {
-            this.arm(window);
+            this.probePacingUntilMillis = this.newDeadline(window);
+            if (this.probeAnchor == null || !this.probeAnchor.isReliableOutstanding()) {
+                this.selectProbeAnchor(outstanding);
+            }
+            this.updateProbeDeadline(window);
         }
     }
 
-    private void arm(RakSlidingWindow window) {
+    void refreshProbeDeadline(RakSlidingWindow window, Collection<RakDatagramPacket> outstanding) {
+        this.selectProbeAnchor(outstanding);
+        this.updateProbeDeadline(window);
+    }
+
+    private void selectProbeAnchor(Collection<RakDatagramPacket> outstanding) {
+        this.probeAnchor = null;
+        for (RakDatagramPacket datagram : outstanding) {
+            if (datagram.isReliableOutstanding()
+                    && (this.probeAnchor == null || isEarlier(datagram, this.probeAnchor))) {
+                this.probeAnchor = datagram;
+            }
+        }
+    }
+
+    private void updateProbeDeadline(RakSlidingWindow window) {
+        if (this.closed || window.getUnackedBytes() == 0) {
+            this.nextProbeAtMillis = -1L;
+            this.probePacingUntilMillis = -1L;
+            this.probeAnchor = null;
+            return;
+        }
+
+        if (this.probeAnchor == null) {
+            this.nextProbeAtMillis = -1L;
+            return;
+        }
+        this.nextProbeAtMillis = Math.max(this.probeAnchor.getNextSend(), this.probePacingUntilMillis);
+    }
+
+    private static boolean isEarlier(RakDatagramPacket first, RakDatagramPacket second) {
+        return first.getNextSend() < second.getNextSend()
+                || (first.getNextSend() == second.getNextSend()
+                && first.getSendOrdinal() < second.getSendOrdinal());
+    }
+
+    private long scheduleAttemptDeadline(RakSlidingWindow window, RakDatagramPacket datagram) {
+        long deadline = this.newDeadline(window);
+        datagram.setNextSend(deadline);
+        return deadline;
+    }
+
+    private long newDeadline(RakSlidingWindow window) {
         long rto = this.getEffectiveRtoMillis(window);
         long jitterRange = Math.max(1L, rto / 10L);
         long jitter = Math.floorMod(this.jitterSource.getAsLong(), jitterRange);
-        this.nextProbeAtMillis = this.currentTimeMillis() + rto + jitter;
+        return this.currentTimeMillis() + rto + jitter;
     }
 
     long getEffectiveRtoMillis(RakSlidingWindow window) {
@@ -127,6 +200,8 @@ final class RakBoundedRecovery {
     void close() {
         this.closed = true;
         this.nextProbeAtMillis = -1L;
+        this.probePacingUntilMillis = -1L;
+        this.probeAnchor = null;
         this.ptoBackoff = 0;
     }
 

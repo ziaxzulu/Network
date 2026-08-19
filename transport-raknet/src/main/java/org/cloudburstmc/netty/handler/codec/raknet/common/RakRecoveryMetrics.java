@@ -88,6 +88,17 @@ final class RakRecoveryMetrics {
         }
     }
 
+    SendState captureSendState() {
+        return new SendState(this.recoveryStartedAtMillis, this.lastStateReportAtMillis,
+                this.retransmittedDatagramsInFlight);
+    }
+
+    void restoreSendState(SendState state) {
+        this.recoveryStartedAtMillis = state.recoveryStartedAtMillis;
+        this.lastStateReportAtMillis = state.lastStateReportAtMillis;
+        this.retransmittedDatagramsInFlight = state.retransmittedDatagramsInFlight;
+    }
+
     void reportState(RakChannelMetrics metrics, RakSlidingWindow slidingWindow, long observedAtMillis) {
         this.reportState(metrics, slidingWindow, observedAtMillis, false);
     }
@@ -119,5 +130,18 @@ final class RakRecoveryMetrics {
                 slidingWindow.getRttDeviation(), slidingWindow.getRtoForRetransmission(),
                 this.retransmittedDatagramsInFlight, this.lastAckProgressAtMillis,
                 this.recoveryStartedAtMillis);
+    }
+
+    static final class SendState {
+        private final long recoveryStartedAtMillis;
+        private final long lastStateReportAtMillis;
+        private final int retransmittedDatagramsInFlight;
+
+        private SendState(long recoveryStartedAtMillis, long lastStateReportAtMillis,
+                          int retransmittedDatagramsInFlight) {
+            this.recoveryStartedAtMillis = recoveryStartedAtMillis;
+            this.lastStateReportAtMillis = lastStateReportAtMillis;
+            this.retransmittedDatagramsInFlight = retransmittedDatagramsInFlight;
+        }
     }
 }

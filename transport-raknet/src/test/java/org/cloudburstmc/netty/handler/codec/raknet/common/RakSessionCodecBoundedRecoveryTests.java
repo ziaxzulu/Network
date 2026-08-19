@@ -47,6 +47,9 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -83,6 +86,8 @@ public class RakSessionCodecBoundedRecoveryTests {
             harness.channel.flushOutbound();
             releaseOutbound(harness.channel, 1);
             Assertions.assertTrue(harness.pending.isEmpty(), "PTO promotes and sends one pending recovery");
+            Assertions.assertFalse(third.packet.isRetransmissionPending(),
+                    "the timeout-selected pending NACK is removed exactly once after handoff");
 
             int acknowledgedSequence = third.packet.getSequenceIndex();
             Assertions.assertSame(third.packet, harness.sent.remove(acknowledgedSequence));
@@ -106,40 +111,57 @@ public class RakSessionCodecBoundedRecoveryTests {
     }
 
     @Test
-    public void deferredPtoPromotionReturnsToNackAndDoesNotAdvanceBackoff() throws Exception {
+    public void laterAcknowledgementsCannotPostponeLostRetransmissionPto() throws Exception {
         AtomicLong clock = new AtomicLong();
         RecordingMetrics metrics = new RecordingMetrics();
         Harness harness = harness(clock, metrics);
-        TestDatagram occupyingProbe = datagram(1_100, 0);
-        TestDatagram pendingNack = datagram(100, 1);
+        TestDatagram first = datagram(100, 0);
+        TestDatagram second = datagram(100, 1);
+        TestDatagram third = datagram(100, 2);
+        TestDatagram later = datagram(100, 10);
         try {
-            harness.add(occupyingProbe.packet);
-            harness.window.onBoundedLoss(occupyingProbe.packet, 1L);
-            harness.window.onBoundedRetransmit(occupyingProbe.packet, true);
-
-            harness.add(pendingNack.packet);
+            harness.add(first.packet);
+            harness.add(second.packet);
+            harness.add(third.packet);
             harness.arm();
-            invokeNack(harness.codec, pendingNack.packet, 0L);
 
-            clock.set(1_000L);
-            Assertions.assertEquals(0, invokeRecovery(harness.codec, harness.context, 1_000L),
-                    "occupied probe exception defers PTO");
-            Assertions.assertEquals(0, harness.recovery.getPtoBackoff());
-
-            harness.sent.remove(occupyingProbe.packet.getSequenceIndex());
-            invokeAck(harness.codec, occupyingProbe.packet, 1_001L);
-            clock.set(1_001L);
-            Assertions.assertEquals(1, invokeRecovery(harness.codec, harness.context, 1_001L));
+            invokeNack(harness.codec, first.packet, 0L);
+            Assertions.assertEquals(1, invokeRecovery(harness.codec, harness.context, 0L));
             harness.channel.flushOutbound();
             releaseOutbound(harness.channel, 1);
+            Assertions.assertEquals(1_000L, first.packet.getNextSend());
 
-            Assertions.assertEquals(RakDatagramSendType.NACK_RETRANSMISSION, metrics.lastSendType,
-                    "ordinary drain must not retain an ephemeral PTO promotion");
-            Assertions.assertEquals(0, harness.recovery.getPtoBackoff());
+            clock.set(400L);
+            acknowledge(harness, second.packet, 400L);
+            clock.set(800L);
+            acknowledge(harness, third.packet, 800L);
+
+            harness.add(later.packet);
+            harness.schedule(later.packet);
+            clock.set(999L);
+            acknowledge(harness, later.packet, 999L);
+            Assertions.assertEquals(1_000L, harness.recovery.getNextProbeAtMillis(),
+                    "ACKs for later datagrams retain the lost retransmission's attempt deadline");
+            Assertions.assertEquals(0, invokeRecovery(harness.codec, harness.context, 999L));
+
+            clock.set(1_000L);
+            Assertions.assertEquals(1, invokeRecovery(harness.codec, harness.context, 1_000L));
+            harness.channel.flushOutbound();
+            releaseOutbound(harness.channel, 1);
+            Assertions.assertEquals(Arrays.asList(RakDatagramSendType.NACK_RETRANSMISSION,
+                    RakDatagramSendType.TIMEOUT_RETRANSMISSION), metrics.sendTypes);
+            Assertions.assertEquals(1, harness.recovery.getPtoBackoff());
+
+            acknowledge(harness, first.packet, 1_010L);
+            Assertions.assertEquals(0, first.payload.refCnt());
+            Assertions.assertEquals(0, harness.window.getUnackedBytes());
+            Assertions.assertEquals(-1L, harness.recovery.getNextProbeAtMillis());
         } finally {
             harness.close();
-            releaseIfNeeded(occupyingProbe.payload);
-            releaseIfNeeded(pendingNack.payload);
+            releaseIfNeeded(first.payload);
+            releaseIfNeeded(second.payload);
+            releaseIfNeeded(third.payload);
+            releaseIfNeeded(later.payload);
         }
     }
 
@@ -159,6 +181,9 @@ public class RakSessionCodecBoundedRecoveryTests {
             harness.add(datagram.packet);
             harness.arm();
             invokeNack(harness.codec, datagram.packet, 0L);
+            long oldSendTime = datagram.packet.getSendTime();
+            long oldDeadline = datagram.packet.getNextSend();
+            long oldOrdinal = datagram.packet.getSendOrdinal();
 
             InvocationTargetException failure = Assertions.assertThrows(InvocationTargetException.class,
                     () -> recoveryMethod().invoke(harness.codec, harness.context, 0L, MTU));
@@ -168,6 +193,14 @@ public class RakSessionCodecBoundedRecoveryTests {
             Assertions.assertTrue(datagram.packet.isRetransmissionPending());
             Assertions.assertEquals(0, harness.window.getBytesInFlight());
             Assertions.assertEquals(datagram.packet.getSize(), harness.window.getUnackedBytes());
+            Assertions.assertEquals(oldSendTime, datagram.packet.getSendTime());
+            Assertions.assertEquals(oldDeadline, datagram.packet.getNextSend());
+            Assertions.assertEquals(oldOrdinal, datagram.packet.getSendOrdinal());
+            Assertions.assertEquals(0, datagram.packet.getRetransmissionCount());
+            Object recoveryMetrics = get(harness.codec, "recoveryMetrics");
+            Assertions.assertEquals(0, get(recoveryMetrics, "retransmittedDatagramsInFlight"));
+            Assertions.assertEquals(-1L, get(recoveryMetrics, "recoveryStartedAtMillis"));
+            Assertions.assertEquals(-1L, get(recoveryMetrics, "lastStateReportAtMillis"));
             Assertions.assertEquals(1, datagram.packet.refCnt(), "failed send retains exactly the map-owned reference");
         } finally {
             harness.close();
@@ -176,39 +209,59 @@ public class RakSessionCodecBoundedRecoveryTests {
     }
 
     @Test
-    public void newlySelectedDeferredTimeoutRemainsGatedUntilRearmedPto() throws Exception {
+    public void deferredPtoDoesNotOccupyNackFifoOrBlockNewTraffic() throws Exception {
         AtomicLong clock = new AtomicLong();
-        Harness harness = harness(clock, null);
+        RecordingMetrics metrics = new RecordingMetrics();
+        Harness harness = harness(clock, metrics);
+        TestDatagram occupyingProbe = datagram(800, 0);
         TestDatagram timeoutCandidate = datagram(1_100, 0);
-        TestDatagram occupyingProbe = datagram(100, 1);
+        TestDatagram pendingNack = datagram(100, 2);
+        TestDatagram otherExpired = datagram(100, 20);
+        ByteBuf applicationPayload = Unpooled.buffer(50).writeByte(0x42).writeZero(49);
         try {
-            timeoutCandidate.packet.setSendTime(0L);
-            occupyingProbe.packet.setSendTime(1L);
-            harness.add(timeoutCandidate.packet);
             harness.add(occupyingProbe.packet);
-            harness.window.onBoundedLoss(occupyingProbe.packet, 1L);
-            harness.window.onBoundedRetransmit(occupyingProbe.packet, true);
+            timeoutCandidate.packet.setSequenceIndex(1);
+            timeoutCandidate.packet.setSendOrdinal(1L);
+            harness.add(timeoutCandidate.packet);
+            harness.add(pendingNack.packet);
+            harness.add(otherExpired.packet);
             harness.arm();
 
+            harness.window.onBoundedLoss(occupyingProbe.packet, 1L);
+            harness.window.onBoundedRetransmit(occupyingProbe.packet, true);
+            occupyingProbe.packet.setNextSend(2_000L);
+            harness.recovery.refreshProbeDeadline(harness.window, harness.sent.values());
+            invokeNack(harness.codec, pendingNack.packet, 0L);
+
+            ChannelPromise applicationPromise = harness.context.newPromise();
+            harness.codec.write(harness.context,
+                    new RakMessage(applicationPayload, RakReliability.RELIABLE, RakPriority.HIGH),
+                    applicationPromise);
+            Assertions.assertTrue(applicationPromise.isSuccess());
+
             clock.set(1_000L);
-            Assertions.assertEquals(0, invokeRecovery(harness.codec, harness.context, 1_000L));
-            Assertions.assertEquals(1, harness.pending.size(), "selected timeout remains queued after deferral");
-
-            harness.sent.remove(occupyingProbe.packet.getSequenceIndex());
-            invokeAck(harness.codec, occupyingProbe.packet, 1_000L);
-            clock.set(1_001L);
-            Assertions.assertEquals(0, invokeRecovery(harness.codec, harness.context, 1_001L),
-                    "timeout queue entry must not drain before the ACK-reset PTO deadline");
-
-            long rearmedPto = harness.recovery.getNextProbeAtMillis();
-            clock.set(rearmedPto);
-            Assertions.assertEquals(1, invokeRecovery(harness.codec, harness.context, rearmedPto));
+            invokeInternalFlush(harness.codec, harness.context);
             harness.channel.flushOutbound();
-            releaseOutbound(harness.channel, 1);
+            releaseOutbound(harness.channel, 2);
+
+            Assertions.assertEquals(Arrays.asList(RakDatagramSendType.NACK_RETRANSMISSION,
+                    RakDatagramSendType.ORIGINAL), metrics.sendTypes,
+                    "a deferred timeout leaves both the NACK scheduler and new-send admission live");
+            Assertions.assertTrue(harness.pending.isEmpty());
+            Assertions.assertFalse(timeoutCandidate.packet.isRetransmissionPending(),
+                    "timeout selection is ephemeral and never enters the NACK FIFO");
+            Assertions.assertFalse(timeoutCandidate.packet.isInFlight());
+            Assertions.assertTrue(otherExpired.packet.isInFlight(),
+                    "one due PTO declares only its selected oldest attempt lost");
+            Assertions.assertEquals(0, harness.recovery.getPtoBackoff());
+            Assertions.assertTrue(harness.recovery.getNextProbeAtMillis() > 1_000L);
         } finally {
             harness.close();
-            releaseIfNeeded(timeoutCandidate.payload);
             releaseIfNeeded(occupyingProbe.payload);
+            releaseIfNeeded(timeoutCandidate.payload);
+            releaseIfNeeded(pendingNack.payload);
+            releaseIfNeeded(otherExpired.payload);
+            releaseIfNeeded(applicationPayload);
         }
     }
 
@@ -344,6 +397,17 @@ public class RakSessionCodecBoundedRecoveryTests {
         method.invoke(codec, packet, time);
     }
 
+    private static void acknowledge(Harness harness, RakDatagramPacket packet, long time) throws Exception {
+        Assertions.assertSame(packet, harness.sent.remove(packet.getSequenceIndex()));
+        invokeAck(harness.codec, packet, time);
+    }
+
+    private static void invokeInternalFlush(RakSessionCodec codec, ChannelHandlerContext context) throws Exception {
+        Method method = RakSessionCodec.class.getDeclaredMethod("internalFlush", ChannelHandlerContext.class);
+        method.setAccessible(true);
+        method.invoke(codec, context);
+    }
+
     private static void set(Object target, String name, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
@@ -414,12 +478,12 @@ public class RakSessionCodecBoundedRecoveryTests {
     }
 
     private static final class RecordingMetrics implements RakChannelMetrics {
-        private RakDatagramSendType lastSendType;
+        private final List<RakDatagramSendType> sendTypes = new ArrayList<>();
 
         @Override
         public void rakDatagramSent(RakDatagramSendType sendType, int bytes, int retransmissionAttempt,
                                     int bytesInFlight) {
-            this.lastSendType = sendType;
+            this.sendTypes.add(sendType);
         }
     }
 
@@ -461,7 +525,13 @@ public class RakSessionCodecBoundedRecoveryTests {
         }
 
         private void arm() {
-            this.recovery.onReliableSend(this.window);
+            for (RakDatagramPacket packet : this.sent.values()) {
+                this.schedule(packet);
+            }
+        }
+
+        private void schedule(RakDatagramPacket packet) {
+            this.recovery.onReliableSend(this.window, packet);
         }
 
         private void closeCodec() throws Exception {

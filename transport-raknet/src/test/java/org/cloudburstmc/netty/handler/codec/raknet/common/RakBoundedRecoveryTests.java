@@ -22,6 +22,7 @@ import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class RakBoundedRecoveryTests {
@@ -32,45 +33,53 @@ public class RakBoundedRecoveryTests {
         RakBoundedRecovery recovery = new RakBoundedRecovery(clock::get, () -> 99L);
         RakSlidingWindow window = new RakSlidingWindow(1_200, RakRecoveryMode.BOUNDED);
         RakDatagramPacket datagram = RakDatagramPacket.newInstance();
+        RakDatagramPacket acknowledgedLaterDatagram = RakDatagramPacket.newInstance();
         try {
             window.onReliableSend(datagram);
-            recovery.onReliableSend(window);
+            recovery.onReliableSend(window, datagram);
             Assertions.assertEquals(1_099L, recovery.getNextProbeAtMillis());
 
             clock.set(500L);
             Assertions.assertTrue(recovery.scheduleNack(datagram));
             Assertions.assertFalse(recovery.scheduleNack(datagram), "duplicate NACK must be idempotent");
-            recovery.onNackRetransmission(window);
-            Assertions.assertEquals(1_099L, recovery.getNextProbeAtMillis(),
-                    "NACK traffic must not move the ACK-progress PTO deadline");
+            recovery.onNackRetransmission(window, datagram, Collections.singletonList(datagram));
+            Assertions.assertEquals(1_599L, recovery.getNextProbeAtMillis(),
+                    "a transmitted NACK recovery gets a fresh per-attempt loss deadline");
 
-            clock.set(1_098L);
+            clock.set(1_598L);
             Assertions.assertFalse(recovery.isProbeDue(window));
-            clock.set(1_099L);
+            clock.set(1_599L);
             Assertions.assertTrue(recovery.isProbeDue(window));
-            recovery.onProbeSent(window);
+            recovery.onProbeSent(window, datagram, Collections.singletonList(datagram));
             Assertions.assertEquals(1, recovery.getPtoBackoff());
-            Assertions.assertEquals(3_198L, recovery.getNextProbeAtMillis());
+            Assertions.assertEquals(3_698L, recovery.getNextProbeAtMillis());
+            clock.set(1_609L);
+            Assertions.assertFalse(recovery.isProbeDue(window),
+                    "a PTO handoff is paced by backed-off RTO rather than repeating on the next 10 ms tick");
 
-            clock.set(3_198L);
-            recovery.onProbeSent(window);
-            Assertions.assertEquals(7_297L, recovery.getNextProbeAtMillis());
-            clock.set(7_297L);
-            recovery.onProbeSent(window);
-            Assertions.assertEquals(15_396L, recovery.getNextProbeAtMillis());
+            clock.set(3_698L);
+            recovery.onProbeSent(window, datagram, Collections.singletonList(datagram));
+            Assertions.assertEquals(7_797L, recovery.getNextProbeAtMillis());
+            clock.set(7_797L);
+            recovery.onProbeSent(window, datagram, Collections.singletonList(datagram));
+            Assertions.assertEquals(15_896L, recovery.getNextProbeAtMillis());
             Assertions.assertEquals(RakBoundedRecovery.MAX_BACKED_OFF_RTO_MILLIS,
                     recovery.getEffectiveRtoMillis(window));
 
             clock.set(20_000L);
-            recovery.onAcknowledgementProgress(window);
+            recovery.onAcknowledgementProgress(window, acknowledgedLaterDatagram,
+                    Collections.singletonList(datagram));
             Assertions.assertEquals(0, recovery.getPtoBackoff());
-            Assertions.assertEquals(21_099L, recovery.getNextProbeAtMillis());
+            Assertions.assertEquals(15_896L, recovery.getNextProbeAtMillis(),
+                    "ACK progress for another datagram must not postpone this attempt's existing deadline");
+            Assertions.assertTrue(recovery.isProbeDue(window));
 
             recovery.close();
             Assertions.assertEquals(-1L, recovery.getNextProbeAtMillis());
             Assertions.assertFalse(recovery.isProbeDue(window));
         } finally {
             datagram.release();
+            acknowledgedLaterDatagram.release();
         }
     }
 
@@ -82,7 +91,7 @@ public class RakBoundedRecoveryTests {
         try {
             window.onReliableSend(datagram);
             RakBoundedRecovery recovery = new RakBoundedRecovery(clock::get, () -> Long.MIN_VALUE);
-            recovery.onReliableSend(window);
+            recovery.onReliableSend(window, datagram);
 
             long delay = recovery.getNextProbeAtMillis() - clock.get();
             Assertions.assertTrue(delay >= 1_000L);
