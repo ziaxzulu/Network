@@ -6,12 +6,13 @@ interface=""
 latency="0ms"
 jitter=""
 loss="0%"
+limit=""
 
 usage() {
   cat <<'USAGE'
 Usage:
-  raknet-netem.sh --interface eth0 --action dry-run --latency 50ms --jitter 5ms --loss 2%
-  raknet-netem.sh --interface eth0 --action apply --latency 100ms --loss 5%
+  raknet-netem.sh --interface eth0 --action dry-run --latency 50ms --jitter 5ms --loss 2% --limit 10000
+  raknet-netem.sh --interface eth0 --action apply --latency 100ms --loss 5% --limit 10000
   raknet-netem.sh --interface eth0 --action status
   raknet-netem.sh --interface eth0 --action clear
 
@@ -45,6 +46,10 @@ while [[ $# -gt 0 ]]; do
       loss="$2"
       shift 2
       ;;
+    --limit)
+      limit="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -62,6 +67,10 @@ if [[ -z "$interface" ]]; then
   usage >&2
   exit 2
 fi
+if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[0-9]+$ && "$limit" -gt 0 ]]; then
+  echo "--limit must be a positive packet count" >&2
+  exit 2
+fi
 
 build_apply_command() {
   local cmd=(tc qdisc replace dev "$interface" root netem)
@@ -73,6 +82,9 @@ build_apply_command() {
   fi
   if [[ -n "$loss" && "$loss" != "0" && "$loss" != "0%" ]]; then
     cmd+=(loss "$loss")
+  fi
+  if [[ -n "$limit" ]]; then
+    cmd+=(limit "$limit")
   fi
   printf '%q ' "${cmd[@]}"
   printf '\n'

@@ -14,6 +14,7 @@ iterations="3"
 start_delay="20s"
 start_offset="45s"
 netem_before_start="5s"
+netem_limit="10000"
 blackhole_after="5s"
 direction="server-to-client"
 packet_limit=""
@@ -22,7 +23,6 @@ max_queued_bytes=""
 workers=""
 reliability="reliable_ordered"
 campaign_run_user=""
-campaign_run_group=""
 
 usage() {
   cat <<'USAGE'
@@ -50,6 +50,7 @@ Options:
   --start-delay DURATION            Server connection wait. Default: 20s.
   --start-offset DURATION           Coordinated start offset per case. Default: 45s.
   --netem-before-start DURATION     Apply initial netem before start. Default: 5s.
+  --netem-limit N                   Netem queue limit in packets. Default: 10000.
   --blackhole-after DURATION        Apply external blackhole during measurement. Default: 5s.
   --direction server-to-client|client-to-server|both
                                     Shaped direction. Default: server-to-client.
@@ -130,6 +131,10 @@ while [[ $# -gt 0 ]]; do
       netem_before_start="$2"
       shift 2
       ;;
+    --netem-limit)
+      netem_limit="$2"
+      shift 2
+      ;;
     --blackhole-after)
       blackhole_after="$2"
       shift 2
@@ -185,6 +190,10 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required to plan and summarize the campaign" >&2
   exit 2
 fi
+if ! [[ "$netem_limit" =~ ^[0-9]+$ && "$netem_limit" -gt 0 ]]; then
+  echo "--netem-limit must be a positive integer" >&2
+  exit 2
+fi
 if [[ ! -x "$runner" ]]; then
   echo "Netns worker runner is missing or not executable: $runner" >&2
   exit 2
@@ -201,7 +210,6 @@ if "$execute"; then
       echo "Benchmark run user does not exist: $campaign_run_user" >&2
       exit 2
     fi
-    campaign_run_group="$(id -gn "$campaign_run_user")"
   fi
 fi
 
@@ -268,9 +276,6 @@ for requested_profile in "${requested_profiles[@]}"; do
 done
 
 mkdir -p "$output_root/cases"
-if "$execute" && [[ -n "$campaign_run_user" && "$campaign_run_user" != "root" ]]; then
-  chown "$campaign_run_user:$campaign_run_group" "$output_root" "$output_root/cases"
-fi
 
 campaign_plan="$output_root/campaign-plan.json"
 campaign_status="$output_root/campaign-status.jsonl"
@@ -295,6 +300,7 @@ jq -n \
   --arg startDelay "$start_delay" \
   --arg startOffset "$start_offset" \
   --arg netemBeforeStart "$netem_before_start" \
+  --argjson netemLimit "$netem_limit" \
   --arg blackholeAfter "$blackhole_after" \
   --arg direction "$direction" \
   --arg reliability "$reliability" \
@@ -315,18 +321,12 @@ jq -n \
       startDelay: $startDelay,
       startOffset: $startOffset,
       netemBeforeStart: $netemBeforeStart,
+      netemLimitPackets: $netemLimit,
       blackholeAfter: $blackholeAfter,
       direction: $direction,
       reliability: $reliability
     }
   }' >"$campaign_plan"
-
-cleanup_ownership() {
-  if "$execute" && [[ -n "$campaign_run_user" && "$campaign_run_user" != "root" && -d "$output_root" ]]; then
-    chown -R "$campaign_run_user:$campaign_run_group" "$output_root" >/dev/null 2>&1 || true
-  fi
-}
-trap cleanup_ownership EXIT
 
 optional_args=()
 if [[ -n "$packet_limit" ]]; then
@@ -372,6 +372,7 @@ for profile in "${normalized_profiles[@]}"; do
     --start-delay "$start_delay"
     --start-offset "$start_offset"
     --netem-before-start "$netem_before_start"
+    --netem-limit "$netem_limit"
     --blackhole-after "$blackhole_after"
     --latency "$latency"
     --jitter "$jitter"

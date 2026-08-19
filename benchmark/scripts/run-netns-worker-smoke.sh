@@ -23,6 +23,7 @@ port="19132"
 latency="0ms"
 jitter="0ms"
 loss="0%"
+netem_limit="10000"
 direction="server-to-client"
 packet_limit=""
 global_packet_limit=""
@@ -35,6 +36,7 @@ benchmark_run_group=""
 benchmark_run_home=""
 benchmark_java_home=""
 benchmark_git_revision=""
+benchmark_distribution_dir=""
 
 usage() {
   cat <<'USAGE'
@@ -72,6 +74,7 @@ Options:
   --latency DURATION                Netem latency for affected path. Default: 0ms.
   --jitter DURATION                 Netem jitter for affected path. Default: 0ms.
   --loss PCT                        Netem loss for affected path. Default: 0%.
+  --netem-limit N                   Netem queue limit in packets. Default: 10000.
   --direction server-to-client|client-to-server|both
                                     Which direction receives netem. Default: server-to-client.
   --packet-limit N                  Optional RakNet packet limit override.
@@ -178,6 +181,10 @@ while [[ $# -gt 0 ]]; do
       loss="$2"
       shift 2
       ;;
+    --netem-limit)
+      netem_limit="$2"
+      shift 2
+      ;;
     --direction)
       direction="$2"
       shift 2
@@ -220,6 +227,7 @@ done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+benchmark_distribution_dir="${BENCHMARK_DISTRIBUTION_DIR:-$repo_root/benchmark/build/install/benchmark}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
 if [[ -z "$output_root" ]]; then
@@ -311,6 +319,10 @@ for value_name in clients payload_size iterations port; do
     exit 2
   fi
 done
+if ! positive_int "$netem_limit"; then
+  echo "--netem-limit must be a positive integer" >&2
+  exit 2
+fi
 for value_name in per_client_mbps rate_mbps; do
   if ! non_negative_number "${!value_name}"; then
     echo "--${value_name//_/-} must be a non-negative number: ${!value_name}" >&2
@@ -418,17 +430,18 @@ if "$execute"; then
     benchmark_git_revision="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || true)"
   fi
   benchmark_git_revision="${benchmark_git_revision:-unknown}"
-  benchmark_lib_dir="$repo_root/benchmark/build/install/benchmark/lib"
+  if [[ "$benchmark_distribution_dir" != /* ]]; then
+    echo "BENCHMARK_DISTRIBUTION_DIR must be an absolute path" >&2
+    exit 2
+  fi
+  benchmark_lib_dir="$benchmark_distribution_dir/lib"
   if [[ ! -d "$benchmark_lib_dir" ]] || ! find "$benchmark_lib_dir" -maxdepth 1 -type f -name 'benchmark-*.jar' -print -quit | grep -q .; then
-    echo "Benchmark distribution is missing. Run ./gradlew --no-daemon :benchmark:installDist before --execute" >&2
+    echo "Benchmark distribution is missing at $benchmark_distribution_dir. Run ./gradlew --no-daemon :benchmark:installDist before --execute" >&2
     exit 2
   fi
 fi
 
 mkdir -p "$output_root/netem"
-if "$execute" && [[ -n "$benchmark_run_user" && "$benchmark_run_user" != "root" ]]; then
-  chown "$benchmark_run_user:$benchmark_run_group" "$output_root" "$output_root/netem"
-fi
 cd "$repo_root"
 
 if [[ -z "$namespace_prefix" ]]; then
@@ -475,6 +488,12 @@ report="$output_root/README.md"
 server_log="$output_root/server.log"
 healthy_log="$output_root/receiver-healthy.log"
 affected_log="$output_root/receiver-affected.log"
+
+mkdir -p "$server_out" "$healthy_out" "$affected_out" "$merged_out"
+if "$execute" && [[ -n "$benchmark_run_user" && "$benchmark_run_user" != "root" ]]; then
+  chown "$benchmark_run_user:$benchmark_run_group" \
+    "$server_out" "$healthy_out" "$affected_out" "$merged_out"
+fi
 
 start_at_ms=$((($(date +%s) * 1000) + $(duration_millis "$start_offset")))
 warmup_ms="$(duration_millis "$warmup")"
@@ -569,7 +588,9 @@ cat >"$manifest" <<EOF
   "latency": "$(json_escape "$latency")",
   "jitter": "$(json_escape "$jitter")",
   "loss": "$(json_escape "$loss")",
+  "netemLimitPackets": $netem_limit,
   "direction": "$(json_escape "$direction")",
+  "benchmarkDistribution": "$(json_escape "$benchmark_distribution_dir")",
   "startAtEpochMillis": $start_at_ms,
   "netemAtEpochMillis": $(if has_netem; then echo "$netem_at_ms"; else echo "null"; fi),
   "blackholeAtEpochMillis": $(if [[ "$case_type" == "blackhole" ]]; then echo "$blackhole_at_ms"; else echo "null"; fi),
@@ -598,6 +619,8 @@ cat >"$report" <<EOF
 - Start at epoch ms: \`$start_at_ms\`
 - Initial netem at epoch ms: \`$(if has_netem; then echo "$netem_at_ms"; else echo "not scheduled"; fi)\`
 - Direction: \`$direction\`
+- Netem queue limit: \`$netem_limit packets\`
+- Benchmark distribution: \`$benchmark_distribution_dir\`
 - Netem: latency \`$latency\`, jitter \`$jitter\`, loss \`$loss\`
 - Output root: \`$output_root\`
 
@@ -646,14 +669,6 @@ cleanup() {
       ip netns del "$ns" >/dev/null 2>&1 || true
     done
   fi
-  if "$execute" && [[ -n "$benchmark_run_user" && "$benchmark_run_user" != "root" ]]; then
-    local path
-    for path in "$manifest" "$report" "$server_log" "$healthy_log" "$affected_log" "$output_root/netem"; do
-      if [[ -e "$path" ]]; then
-        chown -R "$benchmark_run_user:$benchmark_run_group" "$path" >/dev/null 2>&1 || true
-      fi
-    done
-  fi
 }
 trap cleanup EXIT
 
@@ -696,7 +711,7 @@ capture_status() {
       echo "namespace=$ns"
       echo "interface=$iface"
       echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      ip netns exec "$ns" benchmark/scripts/raknet-netem.sh --interface "$iface" --action status
+      ip netns exec "$ns" "$script_dir/raknet-netem.sh" --interface "$iface" --action status
     } >"$file" 2>&1 || true
   else
     echo "Would capture qdisc status for $ns/$iface -> $file"
@@ -737,13 +752,14 @@ apply_netem_path() {
         echo "latency=$target_latency"
         echo "jitter=$target_jitter"
         echo "loss=$target_loss"
+        echo "limit=$netem_limit"
         echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        ip netns exec "$ns" benchmark/scripts/raknet-netem.sh --interface "$iface" --action apply --latency "$target_latency" --jitter "$target_jitter" --loss "$target_loss"
-        ip netns exec "$ns" benchmark/scripts/raknet-netem.sh --interface "$iface" --action status
+        ip netns exec "$ns" "$script_dir/raknet-netem.sh" --interface "$iface" --action apply --latency "$target_latency" --jitter "$target_jitter" --loss "$target_loss" --limit "$netem_limit"
+        ip netns exec "$ns" "$script_dir/raknet-netem.sh" --interface "$iface" --action status
       } >"$evidence" 2>&1
       cat "$evidence"
     else
-      echo "+ ip netns exec $ns benchmark/scripts/raknet-netem.sh --interface $iface --action apply --latency $target_latency --jitter $target_jitter --loss $target_loss"
+      echo "+ ip netns exec $ns $script_dir/raknet-netem.sh --interface $iface --action apply --latency $target_latency --jitter $target_jitter --loss $target_loss --limit $netem_limit"
       echo "  evidence: $evidence"
     fi
   done
@@ -914,7 +930,7 @@ if "$execute"; then
     fi
   done
 
-  merge_args=(benchmark/scripts/merge-worker-results.sh --server "$server_out/$run_id")
+  merge_args=("$script_dir/merge-worker-results.sh" --server "$server_out/$run_id")
   if [[ "$affected_clients" -gt 0 ]]; then
     merge_args+=(--receiver "$affected_out/$run_id-affected")
   fi
@@ -931,11 +947,13 @@ if "$execute"; then
       --external-impairment-latency-ms "$(duration_millis "$latency")"
       --external-impairment-jitter-ms "$(duration_millis "$jitter")"
       --external-impairment-loss-percent "${loss%\%}"
+      --external-netem-limit-packets "$netem_limit"
       --netem-evidence "$output_root/netem"
     )
   elif [[ "$case_type" == "blackhole" ]]; then
     merge_args+=(
       --external-blackhole-at-epoch-ms "$blackhole_at_ms"
+      --external-netem-limit-packets "$netem_limit"
       --netem-evidence "$output_root/netem"
     )
   fi
@@ -945,12 +963,12 @@ else
   echo
   echo "Merge command after execution:"
   if [[ "$affected_clients" -gt 0 ]]; then
-    merge_command="benchmark/scripts/merge-worker-results.sh --server $server_out/$run_id --receiver $affected_out/$run_id-affected --receiver $healthy_out/$run_id-healthy --out $merged_out --case $case_name --benchmark-name $benchmark_name"
+    merge_command="$script_dir/merge-worker-results.sh --server $server_out/$run_id --receiver $affected_out/$run_id-affected --receiver $healthy_out/$run_id-healthy --out $merged_out --case $case_name --benchmark-name $benchmark_name"
     if [[ "$case_type" == "blackhole" ]]; then
-      merge_command+=" --external-blackhole-at-epoch-ms $blackhole_at_ms --netem-evidence $output_root/netem"
+      merge_command+=" --external-blackhole-at-epoch-ms $blackhole_at_ms --external-netem-limit-packets $netem_limit --netem-evidence $output_root/netem"
     fi
     echo "$merge_command"
   else
-    echo "benchmark/scripts/merge-worker-results.sh --server $server_out/$run_id --receiver $healthy_out/$run_id-receiver --out $merged_out --case $case_name --benchmark-name $benchmark_name"
+    echo "$script_dir/merge-worker-results.sh --server $server_out/$run_id --receiver $healthy_out/$run_id-receiver --out $merged_out --case $case_name --benchmark-name $benchmark_name"
   fi
 fi

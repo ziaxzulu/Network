@@ -46,7 +46,7 @@ Two complete campaigns exercised `100` established clients at `5Mbps` each,
 with `90` healthy clients and `10` clients behind external `tc netem`. The six
 profiles were perfect, near-loss (`10ms/2ms/2%`), regional-loss
 (`50ms/5ms/2%`), poor (`100ms/10ms/5%`), severe (`200ms/20ms/10%`), and a
-timed 100% blackhole. All 36 measured windows completed.
+timed server-to-client 100% blackhole. All 36 measured windows completed.
 
 The main product result is strong client isolation: healthy-client p50 stayed
 between `4.975` and `5.056Mbps`, healthy Jain fairness stayed above `0.999936`,
@@ -54,9 +54,12 @@ and healthy send/deliver cost stayed near `1.02-1.03` under every impairment.
 Low single-digit loss remained serviceable. Poor links were degraded and
 variable, while severe links delivered almost nothing to affected clients and
 consumed `42-45Mbps` of undelivered affected-path work with roughly `22MB`
-reported maximum queue growth. This is good evidence that bad peers do not
-poison healthy peers, but it does not yet prove that retries, queues, and dead
-peers are bounded during a long disruption.
+maximum observed single-peer queue growth. The severe result is confounded by
+netem's implicit 1,000-packet limit. In the one-way blackhole, all ten affected
+peers were no longer open by the second window and affected retries stopped,
+but counter resets hid the exact transition time. This is good evidence that
+bad peers do not poison healthy peers and partial evidence of cleanup; it does
+not yet prove precise event-aligned or long-duration resource bounds.
 
 See [`../baselines/zulubox-netns-100c-20260819/RESULTS.md`](../baselines/zulubox-netns-100c-20260819/RESULTS.md)
 for the resilience scorecard, cross-campaign table, caveats, raw artifact paths,

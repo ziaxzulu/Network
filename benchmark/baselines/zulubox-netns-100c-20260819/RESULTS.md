@@ -5,7 +5,8 @@
 The library copes well with a minority of poor client connections in the most
 important shared-server sense: across two campaigns, 90 healthy clients stayed
 at roughly their 5 Mbps/client target with effectively perfect fairness while 10
-other clients experienced latency, jitter, loss, or a complete blackhole.
+other clients experienced latency, jitter, loss, or a server-to-client
+blackhole.
 
 That is strong evidence of client isolation. One bad cohort did not cause
 head-of-line collapse across the healthy cohort.
@@ -13,7 +14,8 @@ head-of-line collapse across the healthy cohort.
 The weaker result is resource handling for clients whose links have become
 effectively unusable. At 200 ms latency, 20 ms jitter, and 10% loss, affected
 clients received almost nothing while the server continued doing 42-45 Mbps of
-undelivered affected-path work and the reported queue grew to about 22 MB. A
+undelivered affected-path work and the maximum observed single-peer queue grew
+to about 22 MB. A
 well-behaved reliable transport is expected to isolate those clients, which this
 library does, but it should also bound or shed persistently unproductive work.
 The short run did not establish that second property.
@@ -38,6 +40,12 @@ These are real kernel network-path measurements, not the benchmark's in-JVM
 loss simulator. They are more representative than loopback, but they do not
 measure physical-switch, NIC, or Internet path behavior.
 
+The severe qdisc used netem's implicit `limit 1000`. At 50 Mbps of affected
+offered load and roughly 200 ms delay, that limit is below the approximate
+bandwidth-delay product, so the severe result combines configured 10% random
+loss with deterministic qdisc overflow. Treat its exact throughput as a stress
+observation, not a clean 10%-loss measurement.
+
 ## Resilience scorecard
 
 The expectations below are engineering judgments for a server-side reliable
@@ -50,14 +58,14 @@ industry standard.
 | Ordinary lossy-link service | Low single-digit loss and tens of milliseconds of latency should remain usable | **Strong:** 10 ms/2 ms/2% and 50 ms/5 ms/2% delivered the target workload, although the regional profile had a repeatable transition transient |
 | Poor-link degradation | 100 ms/10 ms/5% should degrade the affected clients without harming others | **Mixed:** healthy clients were unaffected, but affected p50 varied from 1.77 to 3.99 Mbps and four peers disconnected in each campaign |
 | Severe-link containment | 200 ms/20 ms/10% may be unusable, but damage should remain local | **Strong isolation:** healthy service held. **Weak efficiency:** affected delivery was about 0.002-0.003 Mbps/client while affected undelivered work was 42-45 Mbps |
-| Complete-disruption containment | A disappeared 10% cohort should not stall active peers | **Strong over 30 seconds:** healthy delivery held near 0.4495 Gbps and the result repeated closely |
-| Resource bounds and cleanup | Retries and queues for persistently bad peers should be capped or the peers should be evicted | **Not established:** severe queues reached about 22 MB without disconnects; blackholed peers were not disconnected during the measured interval |
+| One-way blackhole containment | A failed outbound path for 10% of peers should not stall active peers | **Strong:** healthy delivery held near 0.4495 Gbps and the result repeated closely |
+| Resource bounds and cleanup | Retries and queues for persistently bad peers should be capped or the peers should be evicted | **Partial:** all ten blackholed peers were no longer open by the second window and affected retries fell to zero, but the harness did not timestamp the transition; severe single-peer queues reached about 22 MB |
 
 ## Cross-campaign results
 
 Values are shown as `campaign 1 / campaign 2`.
 
-| Profile | Delivered Gbps | Healthy p50 Mbps/client | Affected p50 Mbps/client | Affected undelivered Mbps | Max queue MB | Disconnects |
+| Profile | Delivered Gbps | Healthy p50 Mbps/client | Affected p50 Mbps/client | Affected undelivered Mbps | Max peer queue MB | Reported disconnect events |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | perfect | 0.4991 / 0.4993 | 4.991 / 4.993 | n/a | 0 / 0 | 0.030 / 0.018 | 0 / 0 |
 | near-loss, 10ms/2ms/2% | 0.4983 / 0.5127 | 4.984 / 5.056 | 4.977 / 5.758 | 8.72 / 2.21 | 0.022 / 3.583 | 0 / 0 |
@@ -67,7 +75,11 @@ Values are shown as `campaign 1 / campaign 2`.
 | blackhole, 100% loss after warmup | 0.4575105 / 0.4575106 | 4.995 / 4.995 | 0.798 / 0.800 | 9.60 / 9.26 | 3.218 / 3.214 | 0 / 0 |
 
 The blackhole affected-client throughput is data delivered before the timed
-blackhole, not evidence of service after 100% loss.
+blackhole, not evidence of service after 100% loss. The zero reported
+disconnect-event count is also misleading: in both campaigns, open/active peers
+dropped from 100 to 90 and `disconnectedStatePeers` reached 10 before the second
+window. Measurement counters were reset across that boundary, so the aggregate
+lost the event while preserving the final state.
 
 ## Main findings
 
@@ -84,10 +96,13 @@ blackhole, not evidence of service after 100% loss.
    looks more like a threshold region than a stable operating point.
 5. Severe connections do not poison healthy peers, but they are very
    inefficient. The affected send/deliver byte ratio was roughly 1,600-2,090,
-   and queues reached about 22 MB while useful delivery approached zero.
+   and the maximum single-peer queue reached about 22 MB while useful delivery
+   approached zero. Netem's 1,000-packet limit confounds the exact loss rate.
 6. Blackhole containment is repeatable. Healthy delivery stayed near 0.4495
-   Gbps while the server recorded roughly 1,094-1,145 stale datagrams/second.
-   A longer hold is required to assess timeout and reclamation behavior.
+   Gbps. The first window recorded roughly 3,281-3,434 stale datagrams/second;
+   subsequent windows recorded no affected traffic, and all ten peers had
+   transitioned out of open/active state. Event-aligned telemetry is required
+   to measure the exact quench and reclamation time.
 
 ## Stability and interpretation
 
@@ -138,15 +153,16 @@ retained for repeatability context.
 
 ## Next tests that answer the product question
 
-1. Hold severe and blackhole profiles for 10-30 minutes to determine whether
-   the default 64 MiB per-session queue cap and peer timeouts actually bound
-   memory/send work and reclaim dead peers.
+1. Add event-aligned samples around impairment onset, peer state transition,
+   and retry quiescence; the existing aggregate hides boundary events.
 2. Sweep smaller per-session queue caps and compare affected-peer cleanup
    against healthy throughput and fairness.
-3. Separate impairment transition windows from steady-state windows so mobile
-   handover/recovery and sustained poor-signal behavior have distinct results.
+3. Separate one-way failure, short bidirectional mobile handover, and permanent
+   bidirectional disappearance, then hold severe/disappearance profiles long
+   enough to establish resource bounds.
 4. Repeat with 25% and 50% impaired cohorts to find the isolation limit.
-5. Repeat on separate hosts across a physical switch or a validated,
+5. Set an explicit netem packet limit above the path bandwidth-delay product,
+   then repeat on separate hosts across a physical switch or a validated,
    high-performance eBPF switch before making production capacity claims.
 6. Add burst/reorder/duplicate and changing-profile scenarios to represent
    Wi-Fi contention, mobile handover, and route changes more realistically.

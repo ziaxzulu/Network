@@ -4,11 +4,11 @@
   "capturedAt": "2026-08-18T23:54:47Z/2026-08-19T00:14:17Z",
   "qualification": "development-reference",
   "baselineOfRecord": false,
-  "baselinePurpose": "Compare RakNet resilience, healthy-client isolation, and retry pressure when 10 percent of clients have residential/mobile-like impairment or disappear.",
+  "baselinePurpose": "Compare RakNet resilience, healthy-client isolation, and retry pressure when 10 percent of clients have residential/mobile-like impairment or a server-to-client path blackhole.",
   "notBaselineOfRecordReasons": [
     "single-host Linux namespace and veth topology rather than separate physical hosts and a physical switch",
     "every aggregate row exceeded the current p99-spread stability threshold",
-    "the 30-second measured interval does not establish long-duration queue bounds or dead-peer cleanup"
+    "the aggregate does not establish event-aligned cleanup timing or long-duration queue bounds"
   ],
   "snapshot": {
     "gitRevision": "3ba49e9188ff+netns-14c4123c2ace",
@@ -45,8 +45,8 @@
     {"name": "near-loss", "latencyMillis": 10, "jitterMillis": 2, "lossPercent": 2},
     {"name": "regional-loss", "latencyMillis": 50, "jitterMillis": 5, "lossPercent": 2},
     {"name": "poor", "latencyMillis": 100, "jitterMillis": 10, "lossPercent": 5},
-    {"name": "severe", "latencyMillis": 200, "jitterMillis": 20, "lossPercent": 10},
-    {"name": "blackhole", "lossPercentAfterWarmup": 100, "blackholeAfterMeasurementStartSeconds": 5}
+    {"name": "severe", "latencyMillis": 200, "jitterMillis": 20, "lossPercent": 10, "netemLimitPackets": 1000},
+    {"name": "blackhole", "direction": "server-to-client", "lossPercentAfterWarmup": 100, "blackholeAfterMeasurementStartSeconds": 5}
   ],
   "campaigns": [
     {

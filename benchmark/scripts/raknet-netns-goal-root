@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+set -euo pipefail
+unset BASH_ENV ENV CDPATH GLOBIGNORE
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
+
+if [[ "$#" -ne 0 ]]; then
+  echo "This privileged goal launcher does not accept arguments" >&2
+  exit 64
+fi
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "This launcher must run as root" >&2
+  exit 77
+fi
+
+install_root="/usr/local/libexec/raknet-netns-benchmark"
+candidate_repo="/home/zulu/development/ziax/Network"
+candidate_distribution="$candidate_repo/benchmark/build/install/benchmark"
+campaign="$install_root/benchmark/scripts/run-netns-pilot-campaign.sh"
+state_root="/var/lib/raknet-netns-benchmark"
+runs_root="$state_root/runs"
+staging_root="$state_root/staging"
+mode_file="$state_root/goal-mode"
+benchmark_user="rakbench"
+result_owner="zulu"
+result_group="zulu"
+campaign_timeout="45m"
+
+require_trusted_path() {
+  local path="$1"
+  local owner mode
+  if [[ ! -e "$path" ]]; then
+    echo "Trusted launcher path is missing: $path" >&2
+    exit 69
+  fi
+  owner="$(stat -c %U "$path")"
+  mode="$(stat -c %a "$path")"
+  if [[ "$owner" != "root" || $((8#$mode & 8#022)) -ne 0 ]]; then
+    echo "Trusted launcher path must be root-owned and not group/world writable: $path" >&2
+    exit 77
+  fi
+}
+
+if [[ ! -x "$campaign" ]]; then
+  echo "Installed campaign runner is missing: $campaign" >&2
+  exit 69
+fi
+if ! id "$benchmark_user" >/dev/null 2>&1; then
+  echo "Locked benchmark user does not exist: $benchmark_user" >&2
+  exit 69
+fi
+if ! id "$result_owner" >/dev/null 2>&1; then
+  echo "Result owner does not exist: $result_owner" >&2
+  exit 69
+fi
+for tool in flock timeout runuser git find sort xargs sha256sum jq cp ip getent; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "Required launcher tool is missing: $tool" >&2
+    exit 69
+  fi
+done
+launcher_path="$(readlink -f "$0")"
+require_trusted_path "$launcher_path"
+require_trusted_path "$install_root"
+require_trusted_path "$install_root/benchmark"
+require_trusted_path "$install_root/benchmark/scripts"
+require_trusted_path "$campaign"
+require_trusted_path "$install_root/benchmark/scripts/run-netns-worker-smoke.sh"
+require_trusted_path "$install_root/benchmark/scripts/merge-worker-results.sh"
+require_trusted_path "$install_root/benchmark/scripts/raknet-netem.sh"
+require_trusted_path "$state_root"
+if [[ ! -f "$mode_file" || -L "$mode_file" ]]; then
+  echo "Goal mode file must be a regular non-symlink file: $mode_file" >&2
+  exit 69
+fi
+if [[ "$(stat -c %U:%G "$mode_file")" != "$result_owner:$result_group" ]]; then
+  echo "Goal mode file must be owned by $result_owner:$result_group" >&2
+  exit 69
+fi
+if [[ "$(stat -c %a "$mode_file")" != "644" || "$(stat -c %s "$mode_file")" -gt 32 ]]; then
+  echo "Goal mode file must be mode 0644 and no larger than 32 bytes" >&2
+  exit 69
+fi
+if ! runuser --user "$result_owner" -- test -d "$candidate_distribution/lib"; then
+  echo "Candidate benchmark distribution is missing: $candidate_distribution" >&2
+  echo "Run ./gradlew --no-daemon :benchmark:installDist as $result_owner first" >&2
+  exit 69
+fi
+
+mode="$(<"$mode_file")"
+case "$mode" in
+  pilot|long-hold|cap-sweep|cohort-sweep|all)
+    ;;
+  *)
+    echo "Unsupported goal mode in $mode_file" >&2
+    exit 64
+    ;;
+esac
+
+install -d -o root -g root -m 0755 "$runs_root"
+install -d -o root -g root -m 0755 "$staging_root"
+exec 9>"$state_root/goal.lock"
+if ! flock -n 9; then
+  echo "Another autonomous RakNet goal campaign is already running" >&2
+  exit 75
+fi
+
+run_root=""
+staged_distribution=""
+cleanup_namespaces() {
+  local manifest namespace
+  if [[ -z "$run_root" || "$run_root" != "$runs_root"/netns-goal-* || ! -d "$run_root" ]]; then
+    return
+  fi
+  while IFS= read -r manifest; do
+    while IFS= read -r namespace; do
+      if [[ "$namespace" =~ ^rbp[0-9]+-[0-9]+-(srv|healthy|affected)$ ]]; then
+        ip netns del "$namespace" >/dev/null 2>&1 || true
+      fi
+    done < <(jq -r '.namespaces[]? // empty' "$manifest" 2>/dev/null || true)
+  done < <(find "$run_root" -type f -name manifest.json -print 2>/dev/null)
+}
+
+finish() {
+  local status="$?"
+  trap - EXIT
+  cleanup_namespaces
+  if [[ -n "$staged_distribution" && "$staged_distribution" == "$staging_root"/candidate-* ]]; then
+    rm -rf --one-file-system "$staged_distribution"
+  fi
+  if [[ -n "$run_root" && "$run_root" == "$runs_root"/netns-goal-* && -d "$run_root" ]]; then
+    chmod 0755 "$run_root" >/dev/null 2>&1 || true
+    echo "Goal result root: $run_root"
+  fi
+  exit "$status"
+}
+trap finish EXIT
+
+run_root="$(mktemp -d "$runs_root/netns-goal-$mode-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
+chmod 0711 "$run_root"
+staged_distribution="$(mktemp -d "$staging_root/candidate-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
+chown "$result_owner:$result_group" "$staged_distribution"
+chmod 0700 "$staged_distribution"
+install -d -o "$result_owner" -g "$result_group" -m 0700 "$staged_distribution/lib"
+
+invalid_source_entry="$(find -P "$candidate_distribution/lib" -mindepth 1 -maxdepth 1 \
+  \( ! -type f -o ! -name '*.jar' \) -print -quit)"
+if [[ -n "$invalid_source_entry" ]]; then
+  echo "Candidate lib must contain only top-level regular jar files" >&2
+  exit 69
+fi
+source_jars=()
+mapfile -d '' source_jars < <(find -P "$candidate_distribution/lib" -mindepth 1 -maxdepth 1 \
+  -type f -name '*.jar' -print0)
+if [[ "${#source_jars[@]}" -eq 0 ]]; then
+  echo "Candidate distribution contains no jar files" >&2
+  exit 69
+fi
+if ! timeout --signal=TERM --kill-after=5s 60s \
+  runuser --user "$result_owner" -- \
+  cp -P --no-preserve=mode,ownership,timestamps -- \
+    "${source_jars[@]}" "$staged_distribution/lib/"; then
+  echo "Unable to stage the candidate distribution as $result_owner" >&2
+  exit 69
+fi
+chown -R -h root:root "$staged_distribution"
+find "$staged_distribution" -type d -exec chmod 0555 {} +
+find "$staged_distribution" -type f -exec chmod 0444 {} +
+if find -P "$staged_distribution/lib" -mindepth 1 -maxdepth 1 \
+  \( ! -type f -o ! -name '*.jar' \) -print -quit | grep -q .; then
+  echo "Candidate staging retained a non-regular or non-jar entry" >&2
+  exit 77
+fi
+if ! find "$staged_distribution/lib" -maxdepth 1 -type f -name 'benchmark-*.jar' -print -quit | grep -q .; then
+  echo "Candidate benchmark jar is missing from the staged distribution" >&2
+  exit 69
+fi
+
+candidate_revision="$(runuser --user "$result_owner" -- env -i \
+  HOME="$(getent passwd "$result_owner" | cut -d: -f6)" \
+  PATH=/usr/local/bin:/usr/bin:/bin \
+  git -C "$candidate_repo" rev-parse --short=12 HEAD 2>/dev/null || true)"
+candidate_revision="${candidate_revision:-unknown}"
+(
+  cd "$staged_distribution/lib"
+  find . -maxdepth 1 -type f -name '*.jar' -printf '%f\0' \
+    | sort -z \
+    | xargs -0 sha256sum
+) >"$run_root/distribution.sha256"
+distribution_hash="$(sha256sum "$run_root/distribution.sha256" | cut -c1-12)"
+candidate_revision="$candidate_revision+dist-$distribution_hash"
+
+cd "$install_root"
+
+jq -n \
+  --arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg mode "$mode" \
+  --arg candidateRevision "$candidate_revision" \
+  --arg candidateSource "$candidate_distribution" \
+  --arg benchmarkUser "$benchmark_user" \
+  --arg resultOwner "$result_owner" \
+  '{
+    kind: "raknet-netns-autonomous-goal",
+    generatedAt: $generatedAt,
+    mode: $mode,
+    candidateRevision: $candidateRevision,
+    candidateSource: $candidateSource,
+    benchmarkUser: $benchmarkUser,
+    resultOwner: $resultOwner
+  }' >"$run_root/goal-manifest.json"
+
+run_campaign() {
+  local name="$1"
+  shift
+  timeout --signal=TERM --kill-after=30s "$campaign_timeout" \
+    env -i \
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+      BENCHMARK_RUN_USER="$benchmark_user" \
+      BENCHMARK_DISTRIBUTION_DIR="$staged_distribution" \
+      BENCHMARK_GIT_REVISION="$candidate_revision" \
+      "$campaign" \
+      --execute \
+      --out "$run_root/$name" \
+      --clients 100 \
+      --payload-size 512 \
+      --per-client-mbps 5 \
+      --start-delay 20s \
+      --start-offset 45s \
+      --netem-before-start 5s \
+      --blackhole-after 5s \
+      --direction server-to-client \
+      --reliability reliable_ordered \
+      "$@"
+}
+
+run_pilot() {
+  run_campaign pilot \
+    --profiles perfect,near-loss,regional-loss,poor,severe,blackhole \
+    --affected-clients 10 \
+    --warmup 5s \
+    --duration 10s \
+    --iterations 3
+  run_campaign pilot-disappearance \
+    --profiles blackhole \
+    --affected-clients 10 \
+    --warmup 5s \
+    --duration 30s \
+    --iterations 1 \
+    --direction both
+}
+
+run_long_hold() {
+  run_campaign long-hold-severe \
+    --profiles severe \
+    --affected-clients 10 \
+    --warmup 10s \
+    --duration 300s \
+    --iterations 1
+  run_campaign long-hold-disappearance \
+    --profiles blackhole \
+    --affected-clients 10 \
+    --warmup 10s \
+    --duration 300s \
+    --iterations 1 \
+    --direction both
+}
+
+run_cap_sweep() {
+  local cap
+  for cap in 1048576 4194304 8388608; do
+    run_campaign "cap-$cap" \
+      --profiles poor,severe \
+      --affected-clients 10 \
+      --warmup 5s \
+      --duration 30s \
+      --iterations 2 \
+      --max-queued-bytes "$cap"
+    run_campaign "cap-$cap-disappearance" \
+      --profiles blackhole \
+      --affected-clients 10 \
+      --warmup 5s \
+      --duration 30s \
+      --iterations 2 \
+      --max-queued-bytes "$cap" \
+      --direction both
+  done
+}
+
+run_cohort_sweep() {
+  local affected
+  for affected in 25 50; do
+    run_campaign "affected-$affected" \
+      --profiles poor,severe \
+      --affected-clients "$affected" \
+      --warmup 5s \
+      --duration 30s \
+      --iterations 2
+    run_campaign "affected-$affected-disappearance" \
+      --profiles blackhole \
+      --affected-clients "$affected" \
+      --warmup 5s \
+      --duration 30s \
+      --iterations 2 \
+      --direction both
+  done
+}
+
+case "$mode" in
+  pilot)
+    run_pilot
+    ;;
+  long-hold)
+    run_long_hold
+    ;;
+  cap-sweep)
+    run_cap_sweep
+    ;;
+  cohort-sweep)
+    run_cohort_sweep
+    ;;
+  all)
+    run_pilot
+    run_long_hold
+    run_cap_sweep
+    run_cohort_sweep
+    ;;
+esac

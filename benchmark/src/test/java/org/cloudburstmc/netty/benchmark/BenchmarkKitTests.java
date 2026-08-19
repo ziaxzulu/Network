@@ -361,6 +361,27 @@ public class BenchmarkKitTests {
     }
 
     @Test
+    public void testNetemShellDryRunAddsExplicitQueueLimit() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash",
+                root.resolve("benchmark/scripts/raknet-netem.sh").toString(),
+                "--interface", "eth0",
+                "--action", "dry-run",
+                "--latency", "200ms",
+                "--jitter", "20ms",
+                "--loss", "10%",
+                "--limit", "10000"
+        );
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        Assertions.assertEquals(
+                "tc qdisc replace dev eth0 root netem delay 200ms 20ms loss 10% limit 10000",
+                result.output.trim());
+    }
+
+    @Test
     public void testPilotBaselineMatrixDryRunProducesRepresentativeManifest() throws Exception {
         assumeShellTooling();
         Path root = repoRoot();
@@ -2420,6 +2441,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(result.output.contains("Dry-run only"));
         Assertions.assertTrue(result.output.contains("raknet-netem.sh --interface srvi --action apply"));
         Assertions.assertTrue(result.output.contains("raknet-netem.sh --interface rcvi --action apply"));
+        Assertions.assertTrue(result.output.contains("--limit 10000"));
 
         JsonNode manifest = JSON.readTree(Files.readString(output.resolve("manifest.json"), StandardCharsets.UTF_8));
         Assertions.assertEquals("raknet-netns-worker-smoke", manifest.path("kind").asText());
@@ -2431,6 +2453,9 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("5ms", manifest.path("jitter").asText());
         Assertions.assertEquals("2%", manifest.path("loss").asText());
         Assertions.assertEquals("both", manifest.path("direction").asText());
+        Assertions.assertEquals(10_000, manifest.path("netemLimitPackets").asInt());
+        Assertions.assertEquals(root.resolve("benchmark/build/install/benchmark").toString(),
+                manifest.path("benchmarkDistribution").asText());
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--clients 10"));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--clients 2"));
@@ -2477,12 +2502,46 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(8, manifest.path("healthyClients").asInt());
         Assertions.assertEquals(2, manifest.path("affectedClients").asInt());
         Assertions.assertEquals("server-to-client", manifest.path("direction").asText());
+        Assertions.assertEquals(10_000, manifest.path("netemLimitPackets").asInt());
         Assertions.assertTrue(manifest.path("blackholeAtEpochMillis").asLong()
                 > manifest.path("startAtEpochMillis").asLong());
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--impaired-clients 2"));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--impaired-clients 2"));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--clients 2"));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
+    }
+
+    @Test
+    public void testAutonomousNetnsGoalLauncherIsConstrained() throws Exception {
+        Path root = repoRoot();
+        String launcher = Files.readString(root.resolve("benchmark/scripts/raknet-netns-goal-root"),
+                StandardCharsets.UTF_8);
+        Assertions.assertTrue(launcher.contains("This privileged goal launcher does not accept arguments"));
+        Assertions.assertTrue(launcher.contains("pilot|long-hold|cap-sweep|cohort-sweep|all"));
+        Assertions.assertTrue(launcher.contains("require_trusted_path \"$launcher_path\""));
+        Assertions.assertTrue(launcher.contains("flock -n 9"));
+        Assertions.assertTrue(launcher.contains("timeout --signal=TERM --kill-after=30s"));
+        Assertions.assertTrue(launcher.contains("benchmark_user=\"rakbench\""));
+        Assertions.assertTrue(launcher.contains("BENCHMARK_RUN_USER=\"$benchmark_user\""));
+        Assertions.assertTrue(launcher.contains("--direction both"));
+        Assertions.assertTrue(launcher.contains("cp -P --no-preserve=mode,ownership,timestamps"));
+        Assertions.assertTrue(launcher.contains("must contain only top-level regular jar files"));
+        Assertions.assertTrue(launcher.contains("-printf '%f\\0'"));
+        Assertions.assertFalse(launcher.contains("cp -LR"));
+        Assertions.assertFalse(launcher.contains("eval "));
+
+        String worker = Files.readString(root.resolve("benchmark/scripts/run-netns-worker-smoke.sh"),
+                StandardCharsets.UTF_8);
+        Assertions.assertTrue(worker.contains(
+                "mkdir -p \"$server_out\" \"$healthy_out\" \"$affected_out\" \"$merged_out\""));
+        Assertions.assertTrue(worker.contains("merge_args=(\"$script_dir/merge-worker-results.sh\""));
+
+        String installer = Files.readString(root.resolve("benchmark/scripts/install-raknet-netns-goal"),
+                StandardCharsets.UTF_8);
+        Assertions.assertTrue(installer.contains("This installer does not accept arguments"));
+        Assertions.assertTrue(installer.contains("--shell /usr/sbin/nologin"));
+        Assertions.assertTrue(installer.contains("launcher_target=\"/usr/local/sbin/raknet-netns-pilot\""));
+        Assertions.assertFalse(installer.contains("/etc/sudoers"));
     }
 
     @Test
@@ -2537,6 +2596,7 @@ public class BenchmarkKitTests {
                 "--external-impairment-latency-ms", "100",
                 "--external-impairment-jitter-ms", "10",
                 "--external-impairment-loss-percent", "5",
+                "--external-netem-limit-packets", "10000",
                 "--netem-evidence", evidence.toString()
         );
 
@@ -2545,18 +2605,23 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8));
         Assertions.assertEquals("100ms/10ms/5%", summary.path("aggregate").path("impairmentProfile").asText());
         Assertions.assertTrue(summary.path("aggregate").path("externalImpairment").asBoolean());
+        Assertions.assertEquals(10_000,
+                summary.path("aggregate").path("externalNetemLimitPackets").asInt());
         Assertions.assertEquals(evidence.toString(), summary.path("aggregate").path("netemEvidenceDir").asText());
         Assertions.assertEquals(100, summary.path("externalImpairment").path("latencyMillis").asInt());
         Assertions.assertEquals(10, summary.path("externalImpairment").path("jitterMillis").asInt());
         Assertions.assertEquals(5.0D, summary.path("externalImpairment").path("lossPercent").asDouble(), 0.001D);
+        Assertions.assertEquals(10_000,
+                summary.path("externalImpairment").path("limitPackets").asInt());
 
         String report = Files.readString(merged.resolve("README.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(report.contains("Impairment: `100ms/10ms/5%` (external qdisc: `true`)"));
+        Assertions.assertTrue(report.contains("Netem queue limit: `10000 packets`"));
         Assertions.assertTrue(report.contains("Netem evidence: `" + evidence + "`"));
         String csv = Files.readString(merged.resolve("lab-summary.csv"), StandardCharsets.UTF_8);
         Assertions.assertTrue(csv.lines().findFirst().orElseThrow().contains(
-                "impairment_profile,external_impairment,netem_evidence_dir"));
-        Assertions.assertTrue(csv.contains("\"100ms/10ms/5%\",true,\"" + evidence + "\""));
+                "impairment_profile,external_impairment,netem_limit_packets,netem_evidence_dir"));
+        Assertions.assertTrue(csv.contains("\"100ms/10ms/5%\",true,10000,\"" + evidence + "\""));
 
         Path blackholeMerged = output.resolve("blackhole-merged");
         ProcessResult blackholeResult = runProcess(root, Duration.ofSeconds(10),
@@ -2568,6 +2633,7 @@ public class BenchmarkKitTests {
                 "--case", "external-blackhole",
                 "--benchmark-name", "disappearing-clients",
                 "--external-blackhole-at-epoch-ms", "1234567890",
+                "--external-netem-limit-packets", "10000",
                 "--netem-evidence", evidence.toString()
         );
         Assertions.assertEquals(0, blackholeResult.exitCode, blackholeResult.output);
@@ -2582,6 +2648,8 @@ public class BenchmarkKitTests {
                 blackholeSummary.path("aggregate").path("impairmentProfile").asText());
         Assertions.assertTrue(blackholeSummary.path("aggregate").path("externalImpairment").asBoolean());
         Assertions.assertTrue(blackholeSummary.path("aggregate").path("externalBlackhole").asBoolean());
+        Assertions.assertEquals(10_000,
+                blackholeSummary.path("externalImpairment").path("limitPackets").asInt());
     }
 
     @Test
@@ -2616,6 +2684,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("poor", plan.path("profiles").get(3).path("profile").asText());
         Assertions.assertEquals("severe", plan.path("profiles").get(4).path("profile").asText());
         Assertions.assertEquals("blackhole", plan.path("profiles").get(5).path("profile").asText());
+        Assertions.assertEquals(10_000, plan.path("parameters").path("netemLimitPackets").asInt());
         Assertions.assertTrue(Files.exists(output.resolve("cases/01-perfect/manifest.json")));
         Assertions.assertTrue(Files.exists(output.resolve("cases/06-blackhole/manifest.json")));
 
