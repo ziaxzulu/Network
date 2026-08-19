@@ -186,6 +186,67 @@ window reduction instead of immediately porting CUBIC or BBR. Cloudflare's
 death-spiral bug is a warning that a controller depends on the exact meaning
 and timing of send, acknowledgement, idle, and recovery callbacks.
 
+## Selected experimental implementation
+
+The first implementation follows options 1 and 2 above as an opt-in,
+sender-only recovery policy. `RakRecoveryMode.LEGACY` remains the default;
+applications and benchmarks must explicitly select `BOUNDED` through
+`RakChannelOption.RAK_RECOVERY_MODE`. The option changes no RakNet packet or
+handshake format, so a bounded sender remains wire-compatible with existing
+peers.
+
+The bounded policy deliberately makes a small set of recovery invariants true
+before attempting a different congestion controller:
+
+- reliable outstanding bytes are tracked separately from the bytes carried by
+  physical attempts currently in flight;
+- original sends and ordinary recovery attempts share congestion-window
+  admission, including datagram framing overhead;
+- a NACK schedules one idempotent pending recovery entry instead of sending the
+  datagram immediately, and one 10 ms flush may send at most two recovery
+  datagrams and two MTUs;
+- one connection-wide PTO is based on acknowledgement progress. It sends at
+  most one probe, doubles after consecutive no-progress probes, is capped at
+  eight seconds, and adds non-negative jitter below 10% so a cohort does not
+  remain perfectly synchronized;
+- the base retransmission timeout starts at one second and is clamped to
+  500-2,000 ms as RTT evidence becomes available. Karn's rule excludes
+  retransmitted datagrams from RTT sampling;
+- one no-progress recovery epoch causes at most one congestion-window
+  reduction, and only one PTO probe may temporarily exceed the window; and
+- normal reliable `IMMEDIATE` traffic still uses normal window admission. The
+  terminal disconnect notification has one narrowly scoped handoff exception
+  because the channel closes immediately afterward and cannot create sustained
+  work.
+
+Send-reason, attempt, acknowledgement-progress, congestion-window, physical
+flight, RTT, timeout, recovery-start, and recovery-close callbacks expose these
+decisions to bounded-cardinality metrics. Callback failures cannot bypass
+channel buffer cleanup, and close emits a terminal state followed by explicit
+per-session removal.
+
+This is intentionally not a wholesale QUIC port. It does not add pacing,
+receiver flow control, packet-number spaces, acknowledgement delay, migration,
+wire-visible persistent-congestion signalling, deadline-aware unreliable
+queues, CUBIC, or BBR. Queue caps remain a separate backpressure guard rather
+than part of the recovery algorithm.
+
+The minimal FIFO scheduler also has a known first-version tradeoff: a deferred
+timeout entry at the head can delay a later NACK until the rearmed PTO. After
+fresh acknowledgement progress that delay is bounded by the 500-2,000 ms base
+timeout plus jitter; during a blackhole it follows the intentional exponential
+backoff up to eight seconds. Avoiding the head-of-line interaction cleanly
+would require eligible-entry scanning or separate NACK/PTO queues, so it is
+left observable for the transition and long-hold campaigns rather than hidden
+inside a larger unvalidated scheduler rewrite.
+
+The benchmark uses the same integrated distribution for both sides of the A/B
+comparison and records `legacy` or `bounded` in the goal manifest, campaign
+plan, case manifest, every server and receiver timeline record, CSV, JSON, and
+Markdown output. The fail-closed analyzer treats recovery mode as the only
+intentional configuration difference and rejects missing, mixed, or mislabeled
+evidence.
+
 ## What not to copy blindly from QUIC
 
 - QUIC corrects RTT using peer-reported acknowledgement delay. RakNet cannot
