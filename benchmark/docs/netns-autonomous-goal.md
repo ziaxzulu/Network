@@ -93,6 +93,23 @@ snapshots. Transition runs also record the independently scheduled blackhole and
 path-restoration epochs. This preserves pre-failure retry, queue, direct-memory,
 CPU, recovery, and peer-lifecycle evidence even when a worker does not reach its
 final summary.
+Server workers also record aggregate and maximum event-loop pending tasks plus
+non-blocking scheduling-lag probes. At most one probe is outstanding per event
+loop, so a stalled loop cannot make the diagnostic build an unbounded task
+backlog; unsupported executors and not-yet-completed probes are explicitly
+reported as unavailable.
+
+Every JVM receives the same resource-safety policy. The defaults abort a case
+above `402653184` aggregate queued bytes (384 MiB) or `805306368` direct-memory
+bytes (768 MiB). These are evidence-preservation limits, not performance gates:
+the completed bounded pilot peaked at about 278 MiB queue and 285 MiB direct
+memory, while the failed legacy disappearance trajectory reached 483 MiB queue
+and the 1 GiB direct-memory ceiling. The direct threshold retains 256 MiB of
+headroom before that observed hard OOM. An abort does not throttle or change
+the offered workload; it flushes a structured `resource-safety-abort` event,
+writes a partial server summary, exits non-zero, and leaves `case-status.json`
+pointing at the diagnostic timeline. The campaign records the same failure kind
+and never merges or accepts the case as successful.
 External transition timing includes the same probe-derived warmup drain used by
 the workers, so `--blackhole-after` is relative to measurement rather than the
 end of warmup.

@@ -105,6 +105,12 @@ public final class BenchmarkResultWriter {
             writer.write("- Packet limit: `" + optionalLimit(result.config().packetLimit()) + "`\n");
             writer.write("- Global packet limit: `" + optionalLimit(result.config().globalPacketLimit()) + "`\n");
             writer.write("- Max queued bytes cap: `" + optionalLimit(result.config().maxQueuedBytes()) + "`\n");
+            writer.write("- Resource safety aggregate queue threshold: `"
+                    + result.config().resourceSafetyMaxAggregateQueuedBytes() + "`\n");
+            writer.write("- Resource safety direct-memory threshold: `"
+                    + result.config().resourceSafetyMaxDirectMemoryUsedBytes() + "`\n");
+            writer.write("- Resource safety status: `"
+                    + (result.resourceSafetyAbort() == null ? "completed-no-abort" : "aborted") + "`\n");
             writer.write("- Impairment: `" + impairmentSummary(result.config()) + "`\n");
             writer.write("- Start at epoch ms: `" + startAt(result.config()) + "`\n");
             writer.write("- Measurement window semantics: `" + result.config().measurementWindowSemantics() + "`\n");
@@ -928,6 +934,10 @@ public final class BenchmarkResultWriter {
             Integer packetLimit,
             Integer globalPacketLimit,
             Integer configuredMaxQueuedBytes,
+            long resourceSafetyMaxAggregateQueuedBytes,
+            long resourceSafetyMaxDirectMemoryUsedBytes,
+            String resourceSafetyStatus,
+            BenchmarkTimeline.ResourceSafetyAbort resourceSafetyAbort,
             long impairmentLatencyMillis,
             long impairmentJitterMillis,
             double impairmentLossPercent,
@@ -974,6 +984,10 @@ public final class BenchmarkResultWriter {
                     config.packetLimit() > 0 ? config.packetLimit() : null,
                     config.globalPacketLimit() > 0 ? config.globalPacketLimit() : null,
                     config.maxQueuedBytes() > 0 ? config.maxQueuedBytes() : null,
+                    config.resourceSafetyMaxAggregateQueuedBytes(),
+                    config.resourceSafetyMaxDirectMemoryUsedBytes(),
+                    result.resourceSafetyAbort() == null ? "completed-no-abort" : "aborted",
+                    result.resourceSafetyAbort(),
                     config.impairmentLatencyMillis(),
                     config.impairmentJitterMillis(),
                     config.impairmentLossPercent(),

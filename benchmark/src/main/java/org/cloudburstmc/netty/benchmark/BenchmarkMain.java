@@ -31,9 +31,16 @@ public final class BenchmarkMain {
             return;
         }
 
-        BenchmarkRunResult result = new RakNetBenchmarkRunner().run(config);
-        File directory = new BenchmarkResultWriter().write(result);
-        System.out.println("Benchmark artifacts written to " + directory.getAbsolutePath());
+        try {
+            BenchmarkRunResult result = new RakNetBenchmarkRunner().run(config);
+            File directory = new BenchmarkResultWriter().write(result);
+            System.out.println("Benchmark artifacts written to " + directory.getAbsolutePath());
+        } catch (BenchmarkResourceSafetyException aborted) {
+            File directory = new BenchmarkResultWriter().write(aborted.result());
+            System.err.println("Benchmark aborted by the resource safety watchdog; diagnostic artifacts written to "
+                    + directory.getAbsolutePath());
+            throw aborted;
+        }
     }
 
     private static void printUsage() {
@@ -61,6 +68,8 @@ public final class BenchmarkMain {
         System.out.println("  --external-impairment-at-epoch-ms <epoch-ms> --external-blackhole-at-epoch-ms <epoch-ms>");
         System.out.println("  --external-recovery-at-epoch-ms <epoch-ms>");
         System.out.println("  --timeline-sample-interval 200ms (allowed range 100ms..250ms)");
+        System.out.println("  --resource-safety-max-aggregate-queued-bytes 402653184");
+        System.out.println("  --resource-safety-max-direct-memory-used-bytes 805306368");
         System.out.println("  --disappear-mode close|stop-reading|blackhole");
         System.out.println("  --out build/benchmark-results --run-id my-run");
     }

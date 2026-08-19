@@ -30,13 +30,9 @@ PRESSURE_FIELDS = (
     "currentBytesInFlightAtTPlus10AbovePreEvent",
 )
 REDUCTION_FIELDS = (
-    "nackRetransmittedDatagramsDelta",
-    "nackRetransmittedBytesDelta",
-    "timeoutRetransmittedDatagramsDelta",
-    "timeoutRetransmittedBytesDelta",
-    "nackRetransmittedDatagramsPerSecond",
-    "timeoutRetransmittedDatagramsPerSecond",
-    "unacknowledgedTransportBytesAtTPlus10AbovePreEvent",
+    "retransmittedDatagramsDelta",
+    "retransmittedBytesDelta",
+    "retransmittedDatagramsPerSecond",
 )
 QUEUE_FIELDS = (
     "maximumCurrentBytes",
@@ -44,6 +40,9 @@ QUEUE_FIELDS = (
 )
 FULL_CAMPAIGN_PROFILES = ("perfect", "near-loss", "regional-loss", "poor", "severe", "blackhole")
 RECOVERY_MODES = ("legacy", "bounded")
+DEFAULT_MAX_PEER_QUEUE_BYTES = 8 * 1024 * 1024
+DEFAULT_MAX_HEALTHY_QUEUE_BYTES_PER_CLIENT = 1024 * 1024
+DEFAULT_MAX_AFFECTED_QUEUE_BYTES_PER_CLIENT = 8 * 1024 * 1024
 MAX_TIMELINE_SAMPLE_GAP_MILLIS = 500
 QDISC_SAMPLE_TOLERANCE_MILLIS = 1500
 COUNTERS = (
@@ -209,11 +208,13 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
             "iterations", "probeInterval", "startDelay", "startOffset", "netemBeforeStart",
             "netemLimitPackets", "blackholeAfter", "blackholeDuration", "direction", "reliability",
             "recoveryMode", "packetLimit", "globalPacketLimit", "maxQueuedBytes", "workers",
+            "resourceSafetyMaxAggregateQueuedBytes", "resourceSafetyMaxDirectMemoryUsedBytes",
         )
         missing_parameters = [field for field in required_parameters if field not in parameters]
         if missing_parameters:
             raise AnalysisError(f"campaign plan parameters are incomplete: {missing_parameters}")
         planned_recovery_mode = require_recovery_mode(parameters, "campaign plan parameters")
+        planned_resource_safety = require_resource_safety(parameters, "campaign plan parameters")
         for field in ("packetLimit", "globalPacketLimit", "maxQueuedBytes", "workers"):
             require_optional_positive_int(parameters, field, "campaign plan parameters")
         if summary.get("kind") != "raknet-netns-pilot-summary" or summary.get("executed") is not True \
@@ -286,6 +287,12 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
                 "globalPacketLimit": manifest.get("globalPacketLimit"),
                 "maxQueuedBytes": manifest.get("maxQueuedBytes"),
                 "workers": manifest.get("workers"),
+                "resourceSafetyMaxAggregateQueuedBytes": manifest.get(
+                    "resourceSafetyMaxAggregateQueuedBytes"
+                ),
+                "resourceSafetyMaxDirectMemoryUsedBytes": manifest.get(
+                    "resourceSafetyMaxDirectMemoryUsedBytes"
+                ),
             }
             for field, actual in reconciled.items():
                 expected = parameters.get(field)
@@ -312,6 +319,7 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
             "fullCampaign": plan_profiles == list(FULL_CAMPAIGN_PROFILES),
             "executionIdentity": identity,
             "recoveryMode": planned_recovery_mode,
+            "resourceSafety": planned_resource_safety,
             "experimentConfiguration": configuration,
             "experimentConfigurationKey": json.dumps(configuration, sort_keys=True, separators=(",", ":")),
             "plan": str(campaign_root / "campaign-plan.json"),
@@ -361,9 +369,36 @@ def require_optional_positive_int(container: dict[str, Any], field: str, context
     return value
 
 
+def require_resource_safety(container: dict[str, Any], context: str) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for field in (
+        "resourceSafetyMaxAggregateQueuedBytes",
+        "resourceSafetyMaxDirectMemoryUsedBytes",
+    ):
+        value = container.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise AnalysisError(f"{context}.{field} must be a positive integer")
+        result[field] = value
+    return result
+
+
+def validate_resource_safety_policy(row: dict[str, Any], expected: dict[str, int],
+                                    enforcement_status: str, context: str) -> None:
+    policy = row.get("resourceSafetyPolicy")
+    if not isinstance(policy, dict):
+        raise AnalysisError(f"{context}.resourceSafetyPolicy must be an object")
+    if policy.get("maxAggregateQueuedBytes") != expected["resourceSafetyMaxAggregateQueuedBytes"]:
+        raise AnalysisError(f"{context} aggregate queue safety threshold disagrees with manifest")
+    if policy.get("maxDirectMemoryUsedBytes") != expected["resourceSafetyMaxDirectMemoryUsedBytes"]:
+        raise AnalysisError(f"{context} direct-memory safety threshold disagrees with manifest")
+    if policy.get("enforcementStatus") != enforcement_status:
+        raise AnalysisError(f"{context}.resourceSafetyPolicy.enforcementStatus must be {enforcement_status}")
+
+
 def validate_role_timeline(path: Path, manifest: dict[str, Any], expected_run_id: str) -> dict[str, Any]:
     rows = read_jsonl(path)
     expected_recovery_mode = require_recovery_mode(manifest, "manifest")
+    expected_resource_safety = require_resource_safety(manifest, "manifest")
     sequences: list[int] = []
     for index, row in enumerate(rows):
         context = f"receiver timeline record {index + 1}"
@@ -382,6 +417,9 @@ def validate_role_timeline(path: Path, manifest: dict[str, Any], expected_run_id
         actual_recovery_mode = require_recovery_mode(row, context)
         if actual_recovery_mode != expected_recovery_mode:
             raise AnalysisError(f"receiver timeline recoveryMode does not match manifest: {path}")
+        validate_resource_safety_policy(
+            row, expected_resource_safety, "not-applicable-receiver-worker", context
+        )
     if sequences != sorted(sequences) or len(sequences) != len(set(sequences)):
         raise AnalysisError(f"receiver timeline sequences are not strictly increasing: {path}")
     return {
@@ -389,15 +427,18 @@ def validate_role_timeline(path: Path, manifest: dict[str, Any], expected_run_id
         "recordCount": len(rows),
         "runId": expected_run_id,
         "recoveryMode": expected_recovery_mode,
+        "resourceSafety": expected_resource_safety,
     }
 
 
 def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows = read_jsonl(path)
     expected_recovery_mode = require_recovery_mode(manifest, "manifest")
+    expected_resource_safety = require_resource_safety(manifest, "manifest")
     sequences: list[int] = []
     samples: list[dict[str, Any]] = []
     run_ids: set[str] = set()
+    safety_aborts: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         if row.get("schemaVersion") != SCHEMA_VERSION:
             raise AnalysisError(f"unsupported timeline schema at {path} record {index + 1}")
@@ -408,11 +449,19 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
         actual_recovery_mode = require_recovery_mode(row, f"timeline record {index + 1}")
         if actual_recovery_mode != expected_recovery_mode:
             raise AnalysisError(f"timeline recoveryMode does not match manifest: {path}")
+        validate_resource_safety_policy(
+            row, expected_resource_safety, "enforced", f"timeline record {index + 1}"
+        )
         if isinstance(row.get("runId"), str):
             run_ids.add(row["runId"])
         record_type = row.get("recordType")
         if record_type == "event":
             require_number(row, "epochMillis", f"timeline event {index + 1}")
+            if row.get("eventName") == "resource-safety-abort":
+                abort = row.get("resourceSafetyAbort")
+                if not isinstance(abort, dict):
+                    raise AnalysisError(f"resource-safety-abort event lacks structured details: {path}")
+                safety_aborts.append(abort)
         elif record_type == "sample":
             samples.append(row)
         else:
@@ -432,6 +481,7 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
     cpu_load_available = False
     rss_available = False
     cpu_time_available = False
+    event_loop_available = False
     for index, sample in enumerate(samples):
         context = f"timeline sample {index + 1}"
         if sample.get("role") != "server":
@@ -477,6 +527,24 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
         cpu_load_available = cpu_load_available or finite_number(runtime.get("processCpuLoad"))
         rss_available = rss_available or finite_number(runtime.get("residentSetSizeBytes"))
         cpu_time_available = cpu_time_available or finite_number(runtime.get("processCpuTimeNanos"))
+        event_loops = runtime.get("sharedEventLoops")
+        if event_loops is not None:
+            if not isinstance(event_loops, dict):
+                raise AnalysisError(f"{context}.runtime.sharedEventLoops must be null or an object")
+            status = event_loops.get("status")
+            if status == "available":
+                for field in ("eventLoopCount", "totalPendingTasks", "maxPendingTasks",
+                              "completedSchedulingProbes", "outstandingSchedulingProbes"):
+                    require_number(event_loops, field, f"{context}.runtime.sharedEventLoops")
+                for field in ("latestMaxSchedulingLagMillis", "maxSchedulingLagMillis"):
+                    value = event_loops.get(field)
+                    if value is not None and (not finite_number(value) or value < 0):
+                        raise AnalysisError(
+                            f"{context}.runtime.sharedEventLoops.{field} must be null or non-negative"
+                        )
+                event_loop_available = True
+            elif not isinstance(status, str) or not status.startswith("unavailable-"):
+                raise AnalysisError(f"{context}.runtime.sharedEventLoops.status is invalid")
 
     expected_run_id = manifest.get("runId")
     if isinstance(expected_run_id, str) and run_ids != {expected_run_id}:
@@ -518,6 +586,10 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
         "processCpuLoad": "available",
         "processCpuTime": "available",
         "residentSetSize": "available",
+        "sharedEventLoops": "available" if event_loop_available else "unavailable",
+        "resourceSafety": expected_resource_safety,
+        "resourceSafetyAbort": safety_aborts[0] if len(safety_aborts) == 1 else None,
+        "resourceSafetyAbortCount": len(safety_aborts),
     }
 
 
@@ -1019,6 +1091,18 @@ def event_metrics(
             0, affected(t_plus_10)["currentBytesInFlight"] - pre_affected["currentBytesInFlight"]
         ),
     }
+    pressure["retransmittedDatagramsDelta"] = (
+        pressure["nackRetransmittedDatagramsDelta"]
+        + pressure["timeoutRetransmittedDatagramsDelta"]
+    )
+    pressure["retransmittedBytesDelta"] = (
+        pressure["nackRetransmittedBytesDelta"]
+        + pressure["timeoutRetransmittedBytesDelta"]
+    )
+    pressure["retransmittedDatagramsPerSecond"] = (
+        pressure["nackRetransmittedDatagramsPerSecond"]
+        + pressure["timeoutRetransmittedDatagramsPerSecond"]
+    )
     pressure["unacknowledgedTransportBytesAtTPlus10AbovePreEvent"] = pressure[
         "currentBytesInFlightAtTPlus10AbovePreEvent"
     ]
@@ -1141,6 +1225,12 @@ def shape_key(case: dict[str, Any], *, perfect_reference: bool = False) -> str:
         "globalPacketLimit": manifest.get("globalPacketLimit"),
         "maxQueuedBytes": manifest.get("maxQueuedBytes"),
         "workers": manifest.get("workers"),
+        "resourceSafetyMaxAggregateQueuedBytes": manifest.get(
+            "resourceSafetyMaxAggregateQueuedBytes"
+        ),
+        "resourceSafetyMaxDirectMemoryUsedBytes": manifest.get(
+            "resourceSafetyMaxDirectMemoryUsedBytes"
+        ),
         "measuredIterations": aggregate.get("measuredIterations"),
         "elapsedMillis": aggregate.get("elapsedMillis"),
         "targetClientMbps": aggregate.get("targetClientMbps"),
@@ -1187,6 +1277,7 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
             raise AnalysisError(f"manifest is not an executed netns worker case: {manifest_path}")
         result["manifest"] = manifest
         result["recoveryMode"] = require_recovery_mode(manifest, "manifest")
+        result["resourceSafety"] = require_resource_safety(manifest, "manifest")
         for field in ("packetLimit", "globalPacketLimit", "maxQueuedBytes", "workers"):
             require_optional_positive_int(manifest, field, "manifest")
         run_id = manifest.get("runId")
@@ -1203,6 +1294,11 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
         samples, timeline_availability = parse_timeline(timeline_path, manifest)
         result["artifacts"] = {"manifest": str(manifest_path), "timeline": str(timeline_path)}
         result["dataAvailability"]["timeline"] = {"status": "available", **timeline_availability}
+        result["resourceSafetyAbort"] = timeline_availability["resourceSafetyAbort"]
+        if timeline_availability["resourceSafetyAbortCount"] > 1:
+            raise AnalysisError("server timeline contains multiple resource-safety-abort events")
+        if result["resourceSafetyAbort"] is not None:
+            raise AnalysisError("benchmark was terminated by the resource safety watchdog")
         receiver_timeline_availability: dict[str, Any] = {}
         receiver_roles = (
             ("healthy", "receiver-healthy", int(healthy_clients),
@@ -1247,6 +1343,11 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
                 raise AnalysisError(
                     f"merged aggregate {aggregate_field} does not match manifest {manifest_field}"
                 )
+        for field in ("resourceSafetyMaxAggregateQueuedBytes", "resourceSafetyMaxDirectMemoryUsedBytes"):
+            if aggregate.get(field) != manifest.get(field):
+                raise AnalysisError(f"merged aggregate {field} does not match manifest")
+        if aggregate.get("resourceSafetyStatus") != "completed-no-abort":
+            raise AnalysisError("merged aggregate does not prove completion without resource safety abort")
         events = [event for label in EVENT_LABELS if (event := parse_apply_event(case_root, manifest, label))]
         event_labels = {event["label"] for event in events}
         configured_impairment = any(
@@ -1296,6 +1397,18 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
             "processCpuTimeNanos": maximum_available(
                 sample["runtime"].get("processCpuTimeNanos") for sample in samples
             ),
+            "sharedEventLoopTotalPendingTasks": maximum_available(
+                (sample["runtime"].get("sharedEventLoops") or {}).get("totalPendingTasks")
+                for sample in samples
+            ),
+            "sharedEventLoopMaxPendingTasks": maximum_available(
+                (sample["runtime"].get("sharedEventLoops") or {}).get("maxPendingTasks")
+                for sample in samples
+            ),
+            "sharedEventLoopSchedulingLagMillis": maximum_available(
+                (sample["runtime"].get("sharedEventLoops") or {}).get("maxSchedulingLagMillis")
+                for sample in samples
+            ),
         }
         result["finalAffected"] = samples[-1]["affected"]
         result["affectedQueueMaxima"] = {
@@ -1304,6 +1417,20 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
                 sample["affected"]["sampledQueuedBytesHighWater"] for sample in samples
             ),
             "maxPeerQueuedBytes": max(sample["affected"]["maxPeerQueuedBytes"] for sample in samples),
+        }
+        result["healthyQueueMaxima"] = {
+            "currentQueuedBytes": max(sample["healthy"]["currentQueuedBytes"] for sample in samples),
+            "sampledQueuedBytesHighWater": max(
+                sample["healthy"]["sampledQueuedBytesHighWater"] for sample in samples
+            ),
+            "maxPeerQueuedBytes": max(sample["healthy"]["maxPeerQueuedBytes"] for sample in samples),
+        }
+        result["allQueueMaxima"] = {
+            "currentQueuedBytes": max(sample["all"]["currentQueuedBytes"] for sample in samples),
+            "sampledQueuedBytesHighWater": max(
+                sample["all"]["sampledQueuedBytesHighWater"] for sample in samples
+            ),
+            "maxPeerQueuedBytes": max(sample["all"]["maxPeerQueuedBytes"] for sample in samples),
         }
         result["configurationKey"] = shape_key(result)
         result["perfectReferenceKey"] = shape_key(result, perfect_reference=True)
@@ -1372,12 +1499,48 @@ def absolute_gates(cases: list[dict[str, Any]], args: argparse.Namespace) -> lis
         send_deliver = aggregate["healthySentToDeliveredBytesRatio"]
         gates.append(gate("healthy-send-deliver", scope, send_deliver, "<=", args.healthy_send_deliver,
                           send_deliver <= args.healthy_send_deliver))
-        observed_queue = max(
+        peer_queue = case["allQueueMaxima"]["maxPeerQueuedBytes"]
+        gates.append(gate("observed-max-peer-queue-bytes", scope, peer_queue, "<=", args.max_peer_queue,
+                          peer_queue <= args.max_peer_queue))
+        affected_queue = max(
             case["affectedQueueMaxima"]["currentQueuedBytes"],
             case["affectedQueueMaxima"]["sampledQueuedBytesHighWater"],
         )
-        gates.append(gate("observed-max-queue-bytes", scope, observed_queue, "<=", args.max_queue,
-                          observed_queue <= args.max_queue))
+        affected_limit = int(case["manifest"]["affectedClients"]) * args.max_affected_queue_per_client
+        gates.append(gate("affected-cohort-queue-bytes", scope, affected_queue, "<=", affected_limit,
+                          affected_queue <= affected_limit))
+        healthy_queue = max(
+            case["healthyQueueMaxima"]["currentQueuedBytes"],
+            case["healthyQueueMaxima"]["sampledQueuedBytesHighWater"],
+        )
+        healthy_limit = int(case["manifest"]["healthyClients"]) * args.max_healthy_queue_per_client
+        gates.append(gate("healthy-collateral-queue-bytes", scope, healthy_queue, "<=", healthy_limit,
+                          healthy_queue <= healthy_limit))
+        all_queue = max(
+            case["allQueueMaxima"]["currentQueuedBytes"],
+            case["allQueueMaxima"]["sampledQueuedBytesHighWater"],
+        )
+        configured_queue_safety = case["resourceSafety"]["resourceSafetyMaxAggregateQueuedBytes"]
+        gates.append(gate("resource-safety-aggregate-queue-bytes", scope, all_queue, "<=",
+                          configured_queue_safety, all_queue <= configured_queue_safety))
+        direct_memory = maximum_available((
+            case["runtimeMaxima"]["directBufferPoolMemoryUsedBytes"],
+            case["runtimeMaxima"]["nettyPooledDirectMemoryUsedBytes"],
+        ))
+        configured_direct_safety = case["resourceSafety"]["resourceSafetyMaxDirectMemoryUsedBytes"]
+        gates.append(gate("resource-safety-direct-memory-bytes", scope, direct_memory, "<=",
+                          configured_direct_safety,
+                          direct_memory is not None and direct_memory <= configured_direct_safety))
+        for event in case.get("externalEvents", []):
+            gates.append({
+                "id": "affected-bytes-in-flight-at-t-plus-10",
+                "scope": f"{scope}:{event['label']}",
+                "status": "informational",
+                "actual": event["pressure"].get("unacknowledgedTransportBytesAtTPlus10AbovePreEvent"),
+                "operator": None,
+                "threshold": None,
+                "reason": "ACK-evidence semantics make lower bytes-in-flight an invalid universal recovery target",
+            })
     poor = [case for case in valid if case.get("profile") == "poor"]
     for case in poor:
         scope = case["caseId"]
@@ -1451,7 +1614,8 @@ def reduction(baseline: float, candidate: float) -> tuple[str, float | None]:
 
 def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]],
                   baseline_campaigns: list[dict[str, Any]], candidate_campaigns: list[dict[str, Any]],
-                  minimum: float, max_queue: int, minimum_campaigns: int) -> dict[str, Any]:
+                  minimum: float, max_affected_queue_per_client: int,
+                  minimum_campaigns: int) -> dict[str, Any]:
     invalid_baseline = [
         case["caseRoot"] for case in baseline
         if case["status"] != "pass" or case.get("campaignValidationStatus") != "pass"
@@ -1484,6 +1648,25 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
                 row["reason"] = "event missing from one side"
                 event_rows.append(row)
                 continue
+            row["sendTypeDiagnostics"] = {
+                "baseline": {
+                    field: base_events[label]["pressure"].get(field)
+                    for field in (
+                        "nackRetransmittedDatagramsDelta", "nackRetransmittedBytesDelta",
+                        "nackRetransmittedDatagramsPerSecond", "timeoutRetransmittedDatagramsDelta",
+                        "timeoutRetransmittedBytesDelta", "timeoutRetransmittedDatagramsPerSecond",
+                    )
+                },
+                "candidate": {
+                    field: cand_events[label]["pressure"].get(field)
+                    for field in (
+                        "nackRetransmittedDatagramsDelta", "nackRetransmittedBytesDelta",
+                        "nackRetransmittedDatagramsPerSecond", "timeoutRetransmittedDatagramsDelta",
+                        "timeoutRetransmittedBytesDelta", "timeoutRetransmittedDatagramsPerSecond",
+                    )
+                },
+                "status": "informational-send-type-classification",
+            }
             for field in REDUCTION_FIELDS:
                 base_value = base_events[label]["pressure"].get(field)
                 cand_value = cand_events[label]["pressure"].get(field)
@@ -1528,6 +1711,8 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
             for field in QUEUE_FIELDS:
                 baseline_value = base_events[label]["affectedQueue"].get(field)
                 candidate_value = cand_events[label]["affectedQueue"].get(field)
+                affected_clients = int(cand_map[key]["manifest"]["affectedClients"])
+                max_queue = affected_clients * max_affected_queue_per_client
                 status = "pass" if finite_number(candidate_value) and candidate_value <= max_queue else "fail"
                 _reduction_status, reduction_percent = (
                     reduction(float(baseline_value), float(candidate_value))
@@ -1686,6 +1871,25 @@ def markdown(report: dict[str, Any]) -> str:
         actual = json.dumps(row.get("actual"), sort_keys=True)
         target = f"{row.get('operator', '')} {json.dumps(row.get('threshold'), sort_keys=True)}".strip()
         lines.append(f"| {row['status']} | {row['id']} | {row.get('scope', '')} | {actual} | {target} |")
+    lines.extend(["", "## Resource safety and event-loop diagnostics", "",
+                  "| Case | Safety thresholds queue/direct | Abort | Event-loop availability | Max pending total/per-loop | Max scheduling lag ms |",
+                  "| --- | ---: | --- | --- | ---: | ---: |"])
+    for case in report["cases"]:
+        policy = case.get("resourceSafety") or {}
+        abort = case.get("resourceSafetyAbort")
+        availability = (case.get("dataAvailability", {}).get("timeline") or {}).get(
+            "sharedEventLoops", "unavailable"
+        )
+        runtime = case.get("runtimeMaxima") or {}
+        lines.append(
+            f"| {case.get('caseRoot')} | "
+            f"{policy.get('resourceSafetyMaxAggregateQueuedBytes')} / "
+            f"{policy.get('resourceSafetyMaxDirectMemoryUsedBytes')} | "
+            f"{json.dumps(abort, sort_keys=True) if abort is not None else 'none'} | "
+            f"{availability} | {runtime.get('sharedEventLoopTotalPendingTasks')} / "
+            f"{runtime.get('sharedEventLoopMaxPendingTasks')} | "
+            f"{runtime.get('sharedEventLoopSchedulingLagMillis')} |"
+        )
     lines.extend(["", "## Event windows", "",
                   "| Case | Event | NACK delta/rate | Timeout delta/rate | Queue max / T+10 | Recovery / disconnect / reclaim ms | CPU max | Direct-memory max |",
                   "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"])
@@ -1776,7 +1980,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--poor-affected-p50", type=float, default=3.5)
     parser.add_argument("--poor-disconnects", type=int, default=1)
     parser.add_argument("--poor-send-deliver", type=float, default=2.0)
-    parser.add_argument("--max-queue", type=int, default=8 * 1024 * 1024)
+    parser.add_argument("--max-peer-queue", type=int, default=DEFAULT_MAX_PEER_QUEUE_BYTES)
+    parser.add_argument("--max-affected-queue-per-client", type=int,
+                        default=DEFAULT_MAX_AFFECTED_QUEUE_BYTES_PER_CLIENT)
+    parser.add_argument("--max-healthy-queue-per-client", type=int,
+                        default=DEFAULT_MAX_HEALTHY_QUEUE_BYTES_PER_CLIENT)
     parser.add_argument("--recovery-ack", type=int, default=2000)
     parser.add_argument("--peer-reclamation", type=int, default=30_000)
     parser.add_argument("--apply-early", type=int, default=250)
@@ -1793,7 +2001,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         value = getattr(args, name)
         if not finite_number(value) or value < 0:
             parser.error(f"--{name.replace('_', '-')} must be a non-negative finite number")
-    for name in ("poor_disconnects", "max_queue", "recovery_ack", "peer_reclamation",
+    for name in ("poor_disconnects", "max_peer_queue", "max_affected_queue_per_client",
+                 "max_healthy_queue_per_client", "recovery_ack", "peer_reclamation",
                  "apply_early", "apply_late", "minimum_complete_campaigns"):
         if getattr(args, name) < 0:
             parser.error(f"--{name.replace('_', '-')} must be non-negative")
@@ -1808,7 +2017,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "healthy_send_deliver": 1.10,
         "poor_disconnects": 1,
         "poor_send_deliver": 2.0,
-        "max_queue": 8 * 1024 * 1024,
+        "max_peer_queue": DEFAULT_MAX_PEER_QUEUE_BYTES,
+        "max_affected_queue_per_client": DEFAULT_MAX_AFFECTED_QUEUE_BYTES_PER_CLIENT,
+        "max_healthy_queue_per_client": DEFAULT_MAX_HEALTHY_QUEUE_BYTES_PER_CLIENT,
         "recovery_ack": 2000,
         "peer_reclamation": 30_000,
         "apply_early": 250,
@@ -1862,7 +2073,8 @@ def main(argv: list[str]) -> int:
         ]
         comparison = compare_cases(
             baseline, candidate, baseline_campaigns, candidate_campaigns,
-            args.minimum_pressure_reduction_percent, args.max_queue, args.minimum_complete_campaigns
+            args.minimum_pressure_reduction_percent, args.max_affected_queue_per_client,
+            args.minimum_complete_campaigns
         )
         campaigns = [dict(campaign, side="baseline") for campaign in baseline_campaigns] + [
             dict(campaign, side="candidate") for campaign in candidate_campaigns
@@ -1884,7 +2096,10 @@ def main(argv: list[str]) -> int:
             "actual": {f"{row['matchKey']}:{row['event']}:{row['name']}": row["candidate"]
                        for row in comparison["queueComponents"]},
             "operator": "<=",
-            "threshold": args.max_queue,
+            "threshold": {
+                "bytesPerAffectedClient": args.max_affected_queue_per_client,
+                "scaledPerCase": True,
+            },
             "reason": None,
         }, {
             "id": "complete-six-profile-campaigns",
@@ -1943,7 +2158,9 @@ def main(argv: list[str]) -> int:
             "poorAffectedP50Mbps": args.poor_affected_p50,
             "poorAffectedSendDeliver": args.poor_send_deliver,
             "poorAffectedDisconnects": args.poor_disconnects,
-            "maxObservedQueueBytes": args.max_queue,
+            "maxPeerQueueBytes": args.max_peer_queue,
+            "maxAffectedQueueBytesPerClient": args.max_affected_queue_per_client,
+            "maxHealthyQueueBytesPerClient": args.max_healthy_queue_per_client,
             "recoveryAckProgressMillis": args.recovery_ack,
             "irrecoverablePeerReclamationMillis": args.peer_reclamation,
             "externalApplyEarlyMillis": args.apply_early,

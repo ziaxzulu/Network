@@ -53,7 +53,9 @@ public final class BenchmarkTimeline {
             Long coordinatedStartRelativeMillis,
             Long externalImpairmentRelativeMillis,
             Long externalBlackholeRelativeMillis,
-            Long externalRecoveryRelativeMillis
+            Long externalRecoveryRelativeMillis,
+            ResourceSafetyPolicy resourceSafetyPolicy,
+            ResourceSafetyAbort resourceSafetyAbort
     ) implements Record {
     }
 
@@ -79,6 +81,7 @@ public final class BenchmarkTimeline {
             Long externalBlackholeRelativeMillis,
             Long externalRecoveryAtEpochMillis,
             Long externalRecoveryRelativeMillis,
+            ResourceSafetyPolicy resourceSafetyPolicy,
             MetricAvailability metricAvailability,
             RuntimeMetrics runtime,
             Cohort all,
@@ -109,7 +112,41 @@ public final class BenchmarkTimeline {
             Long residentSetSizeBytes,
             Long processCpuTimeNanos,
             Double processCpuLoad,
+            EventLoopMetrics sharedEventLoops,
             List<String> unavailableFields
+    ) {
+    }
+
+    public record EventLoopMetrics(
+            String status,
+            int eventLoopCount,
+            Long totalPendingTasks,
+            Long maxPendingTasks,
+            Long completedSchedulingProbes,
+            Integer outstandingSchedulingProbes,
+            Double latestMaxSchedulingLagMillis,
+            Double maxSchedulingLagMillis
+    ) {
+    }
+
+    public record ResourceSafetyPolicy(
+            long maxAggregateQueuedBytes,
+            long maxDirectMemoryUsedBytes,
+            String enforcementStatus
+    ) {
+    }
+
+    public record ResourceSafetyAbort(
+            List<String> reasons,
+            long maxAggregateQueuedBytes,
+            long maxDirectMemoryUsedBytes,
+            long observedAggregateQueuedBytes,
+            long observedHealthyQueuedBytes,
+            long observedAffectedQueuedBytes,
+            Long observedDirectMemoryUsedBytes,
+            String observedDirectMemoryMetric,
+            long observedAtEpochMillis,
+            long observedAtMonotonicElapsedMillis
     ) {
     }
 

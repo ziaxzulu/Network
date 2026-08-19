@@ -35,6 +35,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
     private final boolean benchmarkManagedBlackholeCounters;
     private final String benchmarkManagedBlackholeCounterStatus;
     private final ScheduledExecutorService executor;
+    private final BenchmarkEventLoopDiagnostics eventLoopDiagnostics;
 
     private String phase = "initializing";
     private Integer measurementWindow;
@@ -58,6 +59,15 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                               int configuredAffectedPeers,
                               Supplier<List<PeerStats.TimelineSnapshot>> snapshots,
                               Capabilities capabilities, boolean automaticSampling) {
+        this(result, caseName, configuredPeers, configuredAffectedPeers, snapshots, capabilities,
+                automaticSampling, null);
+    }
+
+    BenchmarkTimelineRecorder(BenchmarkRunResult result, String caseName, int configuredPeers,
+                              int configuredAffectedPeers,
+                              Supplier<List<PeerStats.TimelineSnapshot>> snapshots,
+                              Capabilities capabilities, boolean automaticSampling,
+                              BenchmarkEventLoopDiagnostics eventLoopDiagnostics) {
         this.result = result;
         this.config = result.config();
         this.caseName = caseName;
@@ -65,6 +75,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
         this.configuredAffectedPeers = Math.min(configuredPeers, Math.max(0, configuredAffectedPeers));
         this.snapshots = snapshots;
         this.capabilities = capabilities;
+        this.eventLoopDiagnostics = eventLoopDiagnostics;
         if (config.externalBlackholeAtEpochMillis() > 0L) {
             this.benchmarkManagedBlackholeCounterStatus = "unavailable-for-external-qdisc";
         } else if (config.disappearingClients() <= 0) {
@@ -139,6 +150,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
         this.healthyBytesInFlightHighWater = Math.max(this.healthyBytesInFlightHighWater, healthy.currentBytesInFlight);
         this.affectedBytesInFlightHighWater = Math.max(this.affectedBytesInFlightHighWater, affected.currentBytesInFlight);
 
+        BenchmarkTimeline.RuntimeMetrics runtime = BenchmarkRuntimeMetrics.capture(this.eventLoopDiagnostics);
         BenchmarkTimeline.Sample sample = new BenchmarkTimeline.Sample(
                 BenchmarkTimeline.SCHEMA_VERSION,
                 "sample",
@@ -161,8 +173,9 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                 relativeMillis(epochMillis, this.config.externalBlackholeAtEpochMillis()),
                 configuredEpoch(this.config.externalRecoveryAtEpochMillis()),
                 relativeMillis(epochMillis, this.config.externalRecoveryAtEpochMillis()),
+                resourceSafetyPolicy(),
                 this.capabilities.availability(this.benchmarkManagedBlackholeCounterStatus),
-                BenchmarkRuntimeMetrics.capture(),
+                runtime,
                 all.toSnapshot(this.capabilities, this.benchmarkManagedBlackholeCounters,
                         this.allQueueHighWater, this.allBytesInFlightHighWater),
                 healthy.toSnapshot(this.capabilities, this.benchmarkManagedBlackholeCounters,
@@ -171,7 +184,63 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                         this.affectedQueueHighWater, this.affectedBytesInFlightHighWater)
         );
         this.result.addTimelineRecord(sample);
+        evaluateResourceSafety(sample);
         return sample;
+    }
+
+    void throwIfResourceSafetyAborted() {
+        this.result.throwIfResourceSafetyAborted();
+    }
+
+    private void evaluateResourceSafety(BenchmarkTimeline.Sample sample) {
+        if (!this.capabilities.transport || this.result.resourceSafetyAbort() != null) {
+            return;
+        }
+        List<String> reasons = new ArrayList<>();
+        long queuedBytes = sample.all().currentQueuedBytes();
+        if (queuedBytes > this.config.resourceSafetyMaxAggregateQueuedBytes()) {
+            reasons.add("aggregate-queued-bytes-exceeded");
+        }
+
+        Long bufferPool = sample.runtime().directBufferPoolMemoryUsedBytes();
+        Long nettyPooled = sample.runtime().nettyPooledDirectMemoryUsedBytes();
+        Long directMemory = null;
+        String directMetric = null;
+        if (bufferPool != null && (nettyPooled == null || bufferPool >= nettyPooled)) {
+            directMemory = bufferPool;
+            directMetric = "runtime.directBufferPoolMemoryUsedBytes";
+        } else if (nettyPooled != null) {
+            directMemory = nettyPooled;
+            directMetric = "runtime.nettyPooledDirectMemoryUsedBytes";
+        }
+        if (directMemory == null) {
+            reasons.add("direct-memory-metric-unavailable");
+        } else if (directMemory > this.config.resourceSafetyMaxDirectMemoryUsedBytes()) {
+            reasons.add("direct-memory-used-bytes-exceeded");
+        }
+        if (reasons.isEmpty()) {
+            return;
+        }
+
+        BenchmarkTimeline.ResourceSafetyAbort abort = new BenchmarkTimeline.ResourceSafetyAbort(
+                List.copyOf(reasons),
+                this.config.resourceSafetyMaxAggregateQueuedBytes(),
+                this.config.resourceSafetyMaxDirectMemoryUsedBytes(),
+                queuedBytes,
+                sample.healthy().currentQueuedBytes(),
+                sample.affected().currentQueuedBytes(),
+                directMemory,
+                directMetric,
+                sample.epochMillis(),
+                sample.monotonicElapsedMillis()
+        );
+        if (this.result.recordResourceSafetyAbort(abort)) {
+            addActualEvent("resource-safety-abort", "benchmark-resource-watchdog",
+                    sample.epochMillis(),
+                    this.result.timelineOriginNanos()
+                            + TimeUnit.MILLISECONDS.toNanos(sample.monotonicElapsedMillis()),
+                    abort);
+        }
     }
 
     private void safeCapture() {
@@ -209,11 +278,18 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                 relativeMillis(eventEpochMillis, this.config.startAtEpochMillis()),
                 relativeMillis(eventEpochMillis, this.config.externalImpairmentAtEpochMillis()),
                 relativeMillis(eventEpochMillis, this.config.externalBlackholeAtEpochMillis()),
-                relativeMillis(eventEpochMillis, this.config.externalRecoveryAtEpochMillis())
+                relativeMillis(eventEpochMillis, this.config.externalRecoveryAtEpochMillis()),
+                resourceSafetyPolicy(),
+                null
         ));
     }
 
     private void addActualEvent(String eventName, String source, long epochMillis, long monotonicNanos) {
+        addActualEvent(eventName, source, epochMillis, monotonicNanos, null);
+    }
+
+    private void addActualEvent(String eventName, String source, long epochMillis, long monotonicNanos,
+                                BenchmarkTimeline.ResourceSafetyAbort resourceSafetyAbort) {
         this.result.addTimelineRecord(new BenchmarkTimeline.Event(
                 BenchmarkTimeline.SCHEMA_VERSION,
                 "event",
@@ -233,8 +309,18 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                 relativeMillis(epochMillis, this.config.startAtEpochMillis()),
                 relativeMillis(epochMillis, this.config.externalImpairmentAtEpochMillis()),
                 relativeMillis(epochMillis, this.config.externalBlackholeAtEpochMillis()),
-                relativeMillis(epochMillis, this.config.externalRecoveryAtEpochMillis())
+                relativeMillis(epochMillis, this.config.externalRecoveryAtEpochMillis()),
+                resourceSafetyPolicy(),
+                resourceSafetyAbort
         ));
+    }
+
+    private BenchmarkTimeline.ResourceSafetyPolicy resourceSafetyPolicy() {
+        return new BenchmarkTimeline.ResourceSafetyPolicy(
+                this.config.resourceSafetyMaxAggregateQueuedBytes(),
+                this.config.resourceSafetyMaxDirectMemoryUsedBytes(),
+                this.capabilities.transport ? "enforced" : "not-applicable-receiver-worker"
+        );
     }
 
     private long monotonicElapsedMillis(long monotonicNanos) {

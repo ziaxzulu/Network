@@ -65,6 +65,10 @@ public class ResilienceResultAnalyzerTests {
                 caseResult.path("dataAvailability").path("qdiscTimeseries").path("status").asText());
         Assertions.assertEquals("unavailable-on-server-worker",
                 caseResult.path("dataAvailability").path("timeline").path("serverUsefulDelivery").asText());
+        Assertions.assertEquals("available",
+                caseResult.path("dataAvailability").path("timeline").path("sharedEventLoops").asText());
+        Assertions.assertEquals(1.25D,
+                caseResult.path("runtimeMaxima").path("sharedEventLoopSchedulingLagMillis").asDouble());
         JsonNode blackhole = event(caseResult, "external-blackhole");
         Assertions.assertEquals(110,
                 blackhole.path("pressure").path("nackRetransmittedDatagramsDelta").asInt());
@@ -82,6 +86,12 @@ public class ResilienceResultAnalyzerTests {
                         .path("queueAndInFlightReclaimedMillis").asInt());
         Assertions.assertTrue(Files.readString(output.resolve("resilience-analysis.md"), StandardCharsets.UTF_8)
                 .contains("unavailable-on-server-worker"));
+        Assertions.assertEquals(16_777_216L,
+                findGate(report, "affected-cohort-queue-bytes").path("threshold").asLong());
+        Assertions.assertEquals(8_388_608L,
+                findGate(report, "healthy-collateral-queue-bytes").path("threshold").asLong());
+        Assertions.assertEquals("pass", findGate(report, "resource-safety-direct-memory-bytes")
+                .path("status").asText());
     }
 
     @Test
@@ -154,13 +164,21 @@ public class ResilienceResultAnalyzerTests {
         Assertions.assertTrue(comparable.stream().allMatch(component ->
                 component.path("reductionPercent").asDouble() >= 90.0D));
         Assertions.assertTrue(comparable.stream().map(component -> component.path("name").asText())
+                .anyMatch(name -> name.contains("retransmittedDatagramsDelta")));
+        Assertions.assertFalse(comparable.stream().map(component -> component.path("name").asText())
                 .anyMatch(name -> name.contains("nackRetransmittedDatagramsDelta")));
-        Assertions.assertTrue(comparable.stream().map(component -> component.path("name").asText())
-                .anyMatch(name -> name.contains("timeoutRetransmittedDatagramsDelta")));
+        Assertions.assertTrue(passingReport.path("comparison").path("events").get(0)
+                .path("sendTypeDiagnostics").path("status").asText()
+                .equals("informational-send-type-classification"));
         Assertions.assertTrue(comparable.stream().map(component -> component.path("name").asText())
                 .anyMatch(name -> name.startsWith("initial-netem.")));
         Assertions.assertTrue(comparable.stream().map(component -> component.path("name").asText())
                 .anyMatch(name -> name.startsWith("external-blackhole.")));
+        Assertions.assertFalse(passingReport.path("comparison").path("components")
+                .findValuesAsText("name").stream()
+                .anyMatch(name -> name.contains("unacknowledgedTransportBytesAtTPlus10")));
+        Assertions.assertTrue(passingReport.path("gates").findValuesAsText("id")
+                .contains("affected-bytes-in-flight-at-t-plus-10"));
         Assertions.assertTrue(passingReport.path("comparison").path("queueComponents")
                 .findValuesAsText("name").contains("maximumCurrentBytes"));
 
@@ -175,6 +193,33 @@ public class ResilienceResultAnalyzerTests {
         Assertions.assertEquals("fail", failingReport.path("comparison").path("status").asText());
         Assertions.assertTrue(failingReport.path("comparison").path("components").findValuesAsText("status")
                 .contains("fail"));
+    }
+
+    @Test
+    public void sendTypeReclassificationDoesNotOverrideTotalRetryReduction() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-subtype-baseline");
+        buildFullCampaignSet(baseline);
+        Path candidate = Files.createTempDirectory("raknet-resilience-subtype-candidate");
+        buildFullCampaignSet(candidate, "bounded");
+        scaleCandidatePressure(candidate, 20);
+        forceTimeoutSubtype(baseline, false);
+        forceTimeoutSubtype(candidate, true);
+        Path output = Files.createTempDirectory("raknet-resilience-subtype-report");
+
+        ProcessResult result = compare(baseline, candidate, output);
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        JsonNode report = readReport(output);
+        Assertions.assertEquals("pass", report.path("comparison").path("gateStatus")
+                .path("pressureReduction").asText());
+        JsonNode diagnostics = report.path("comparison").path("events").get(0)
+                .path("sendTypeDiagnostics");
+        Assertions.assertEquals(0,
+                diagnostics.path("baseline").path("timeoutRetransmittedDatagramsDelta").asInt());
+        Assertions.assertTrue(
+                diagnostics.path("candidate").path("timeoutRetransmittedDatagramsDelta").asInt() > 0);
+        Assertions.assertEquals("informational-send-type-classification",
+                diagnostics.path("status").asText());
     }
 
     @Test
@@ -195,6 +240,61 @@ public class ResilienceResultAnalyzerTests {
                 .path("dataAvailability").path("analysis").path("status").asText());
         Assertions.assertTrue(report.path("cases").get(0).path("issues").get(0).asText()
                 .contains("expected exactly one server timeline.jsonl"));
+    }
+
+    @Test
+    public void resourceSafetyAbortFailsButPreservesPartialDiagnostics() throws Exception {
+        Path aborted = Files.createTempDirectory("raknet-resilience-safety-abort");
+        copyDenseFixture(fixture, aborted);
+        Path timeline = aborted.resolve("cases/01-blackhole/server/netns-blackhole-10c/timeline.jsonl");
+        List<String> rows = Files.readAllLines(timeline, StandardCharsets.UTF_8);
+        ObjectNode event = (ObjectNode) JSON.readTree(rows.get(0));
+        event.put("recordType", "event");
+        event.put("eventName", "resource-safety-abort");
+        event.put("eventSource", "benchmark-resource-watchdog");
+        ObjectNode detail = event.putObject("resourceSafetyAbort");
+        detail.putArray("reasons").add("aggregate-queued-bytes-exceeded");
+        detail.put("maxAggregateQueuedBytes", 402_653_184L);
+        detail.put("maxDirectMemoryUsedBytes", 805_306_368L);
+        detail.put("observedAggregateQueuedBytes", 402_653_185L);
+        detail.put("observedHealthyQueuedBytes", 400_000_000L);
+        detail.put("observedAffectedQueuedBytes", 2_653_185L);
+        detail.put("observedDirectMemoryUsedBytes", 700_000_000L);
+        detail.put("observedDirectMemoryMetric", "runtime.directBufferPoolMemoryUsedBytes");
+        detail.put("observedAtEpochMillis", event.path("epochMillis").asLong());
+        detail.put("observedAtMonotonicElapsedMillis", event.path("monotonicElapsedMillis").asLong());
+        rows.set(0, JSON.writeValueAsString(event));
+        Files.writeString(timeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+        Path output = Files.createTempDirectory("raknet-resilience-safety-abort-report");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "python3", analyzer.toString(), "--root", aborted.toString(), "--out", output.toString());
+
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        JsonNode caseResult = readReport(output).path("cases").get(0);
+        Assertions.assertEquals("fail", caseResult.path("status").asText());
+        Assertions.assertEquals(402_653_185L,
+                caseResult.path("resourceSafetyAbort").path("observedAggregateQueuedBytes").asLong());
+        Assertions.assertTrue(caseResult.path("issues").toString()
+                .contains("terminated by the resource safety watchdog"));
+    }
+
+    @Test
+    public void resourceSafetyThresholdMismatchFailsClosed() throws Exception {
+        Path mismatched = Files.createTempDirectory("raknet-resilience-safety-mismatch");
+        copyDenseFixture(fixture, mismatched);
+        Path manifestPath = mismatched.resolve("cases/01-blackhole/manifest.json");
+        ObjectNode manifest = (ObjectNode) JSON.readTree(Files.readString(manifestPath));
+        manifest.put("resourceSafetyMaxAggregateQueuedBytes", 402_653_185L);
+        Files.writeString(manifestPath, JSON.writeValueAsString(manifest) + "\n", StandardCharsets.UTF_8);
+        Path output = Files.createTempDirectory("raknet-resilience-safety-mismatch-report");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "python3", analyzer.toString(), "--root", mismatched.toString(), "--out", output.toString());
+
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        Assertions.assertTrue(readReport(output).path("cases").toString()
+                .contains("aggregate queue safety threshold disagrees with manifest"));
     }
 
     @Test
@@ -331,6 +431,7 @@ public class ResilienceResultAnalyzerTests {
     public void sparseEventWindowsAndMissingWindowRuntimeMetricsFailClosed() throws Exception {
         Path sparse = Files.createTempDirectory("raknet-resilience-sparse");
         copyTree(fixture, sparse);
+        addResourceSafetyPolicies(sparse);
         Path sparseOutput = Files.createTempDirectory("raknet-resilience-sparse-report");
         ProcessResult sparseResult = runProcess(root, Duration.ofSeconds(10), "python3", analyzer.toString(),
                 "--root", sparse.toString(), "--out", sparseOutput.toString());
@@ -663,6 +764,28 @@ public class ResilienceResultAnalyzerTests {
         }
     }
 
+    private static void forceTimeoutSubtype(Path campaigns, boolean positiveAfterEvent) throws Exception {
+        try (var paths = Files.walk(campaigns)) {
+            for (Path timeline : paths.filter(path -> path.getFileName().toString().equals("timeline.jsonl"))
+                    .filter(path -> path.toString().contains("/server/"))
+                    .toList()) {
+                List<String> rewritten = new ArrayList<>();
+                for (String line : Files.readAllLines(timeline, StandardCharsets.UTF_8)) {
+                    ObjectNode row = (ObjectNode) JSON.readTree(line);
+                    if (row.path("affected").isObject()) {
+                        ObjectNode cohort = (ObjectNode) row.path("affected");
+                        boolean afterEvent = row.path("epochMillis").asLong() > 102_000L;
+                        long datagrams = positiveAfterEvent && afterEvent ? 1L : 0L;
+                        cohort.put("timeoutRetransmittedDatagrams", datagrams);
+                        cohort.put("timeoutRetransmittedBytes", datagrams * 64L);
+                    }
+                    rewritten.add(JSON.writeValueAsString(row));
+                }
+                Files.writeString(timeline, String.join("\n", rewritten) + "\n", StandardCharsets.UTF_8);
+            }
+        }
+    }
+
     private static void removeSevereInitialNetem(Path campaigns) throws Exception {
         try (var paths = Files.walk(campaigns)) {
             for (Path caseRoot : paths.filter(path -> path.getFileName().toString().equals("05-severe"))
@@ -747,6 +870,8 @@ public class ResilienceResultAnalyzerTests {
             parameters.putNull("globalPacketLimit");
             parameters.putNull("maxQueuedBytes");
             parameters.putNull("workers");
+            parameters.put("resourceSafetyMaxAggregateQueuedBytes", 402_653_184);
+            parameters.put("resourceSafetyMaxDirectMemoryUsedBytes", 805_306_368);
             Files.writeString(campaign.resolve("campaign-plan.json"),
                     JSON.writerWithDefaultPrettyPrinter().writeValueAsString(plan) + "\n", StandardCharsets.UTF_8);
             ObjectNode summary = JSON.createObjectNode();
@@ -1116,10 +1241,69 @@ public class ResilienceResultAnalyzerTests {
         }
     }
 
+    private static void addResourceSafetyPolicies(Path root) throws Exception {
+        try (var paths = Files.walk(root)) {
+            for (Path timeline : paths.filter(path -> path.getFileName().toString().equals("timeline.jsonl"))
+                    .toList()) {
+                List<String> rewritten = new ArrayList<>();
+                for (String line : Files.readAllLines(timeline, StandardCharsets.UTF_8)) {
+                    ObjectNode row = (ObjectNode) JSON.readTree(line);
+                    ObjectNode policy = row.putObject("resourceSafetyPolicy");
+                    policy.put("maxAggregateQueuedBytes", 402_653_184);
+                    policy.put("maxDirectMemoryUsedBytes", 805_306_368);
+                    policy.put("enforcementStatus", "server".equals(row.path("role").asText())
+                            ? "enforced" : "not-applicable-receiver-worker");
+                    rewritten.add(JSON.writeValueAsString(row));
+                }
+                Files.writeString(timeline, String.join("\n", rewritten) + "\n", StandardCharsets.UTF_8);
+            }
+        }
+    }
+
     private static void densifyTimeline(Path timeline) throws Exception {
         List<ObjectNode> originals = new ArrayList<>();
         for (String line : Files.readAllLines(timeline, StandardCharsets.UTF_8)) {
-            originals.add((ObjectNode) JSON.readTree(line));
+            ObjectNode row = (ObjectNode) JSON.readTree(line);
+            ObjectNode policy = row.putObject("resourceSafetyPolicy");
+            policy.put("maxAggregateQueuedBytes", 402_653_184);
+            policy.put("maxDirectMemoryUsedBytes", 805_306_368);
+            boolean server = "server".equals(row.path("role").asText());
+            policy.put("enforcementStatus", server ? "enforced" : "not-applicable-receiver-worker");
+            if (server && "sample".equals(row.path("recordType").asText())) {
+                ObjectNode affected = (ObjectNode) row.path("affected");
+                if (!row.has("healthy")) {
+                    ObjectNode healthy = affected.deepCopy();
+                    healthy.put("name", "healthy");
+                    healthy.put("configuredPeers", 8);
+                    healthy.put("observedPeers", 8);
+                    healthy.put("openPeers", 8);
+                    healthy.put("activePeers", 8);
+                    healthy.put("disconnectedPeers", 0);
+                    healthy.put("currentQueuedBytes", 0);
+                    healthy.put("sampledQueuedBytesHighWater", 0);
+                    healthy.put("maxPeerQueuedBytes", 0);
+                    row.set("healthy", healthy);
+                }
+                if (!row.has("all")) {
+                    ObjectNode all = affected.deepCopy();
+                    all.put("name", "all");
+                    all.put("configuredPeers", 10);
+                    all.put("observedPeers", 10);
+                    all.put("openPeers", 10);
+                    all.put("activePeers", 10);
+                    row.set("all", all);
+                }
+                ObjectNode eventLoops = ((ObjectNode) row.path("runtime")).putObject("sharedEventLoops");
+                eventLoops.put("status", "available");
+                eventLoops.put("eventLoopCount", 2);
+                eventLoops.put("totalPendingTasks", 3);
+                eventLoops.put("maxPendingTasks", 2);
+                eventLoops.put("completedSchedulingProbes", 4);
+                eventLoops.put("outstandingSchedulingProbes", 0);
+                eventLoops.put("latestMaxSchedulingLagMillis", 0.5D);
+                eventLoops.put("maxSchedulingLagMillis", 1.25D);
+            }
+            originals.add(row);
         }
         originals.sort(Comparator.comparingLong(row -> row.path("epochMillis").asLong()));
         long first = originals.get(0).path("epochMillis").asLong();

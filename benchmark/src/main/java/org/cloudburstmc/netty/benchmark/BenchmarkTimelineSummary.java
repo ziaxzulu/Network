@@ -33,6 +33,10 @@ final class BenchmarkTimelineSummary {
     private Long maxNettyPooledDirectMemoryUsedBytes;
     private Long maxResidentSetSizeBytes;
     private Double maxProcessCpuLoad;
+    private Long maxSharedEventLoopTotalPendingTasks;
+    private Long maxSharedEventLoopPendingTasks;
+    private Double maxSharedEventLoopSchedulingLagMillis;
+    private boolean sharedEventLoopTelemetryAvailable;
     private BenchmarkTimeline.Sample lastSample;
 
     synchronized void accept(BenchmarkTimeline.Record record) {
@@ -60,6 +64,16 @@ final class BenchmarkTimelineSummary {
         this.maxResidentSetSizeBytes = maximum(
                 this.maxResidentSetSizeBytes, sample.runtime().residentSetSizeBytes());
         this.maxProcessCpuLoad = maximum(this.maxProcessCpuLoad, sample.runtime().processCpuLoad());
+        BenchmarkTimeline.EventLoopMetrics eventLoops = sample.runtime().sharedEventLoops();
+        if (eventLoops != null && "available".equals(eventLoops.status())) {
+            this.sharedEventLoopTelemetryAvailable = true;
+            this.maxSharedEventLoopTotalPendingTasks = maximum(
+                    this.maxSharedEventLoopTotalPendingTasks, eventLoops.totalPendingTasks());
+            this.maxSharedEventLoopPendingTasks = maximum(
+                    this.maxSharedEventLoopPendingTasks, eventLoops.maxPendingTasks());
+            this.maxSharedEventLoopSchedulingLagMillis = maximum(
+                    this.maxSharedEventLoopSchedulingLagMillis, eventLoops.maxSchedulingLagMillis());
+        }
         if (this.lastSample == null || sample.sequence() > this.lastSample.sequence()) {
             this.lastSample = sample;
         }
@@ -80,6 +94,10 @@ final class BenchmarkTimelineSummary {
                 this.maxNettyPooledDirectMemoryUsedBytes,
                 this.maxResidentSetSizeBytes,
                 this.maxProcessCpuLoad,
+                this.sharedEventLoopTelemetryAvailable ? "available" : "unavailable",
+                this.maxSharedEventLoopTotalPendingTasks,
+                this.maxSharedEventLoopPendingTasks,
+                this.maxSharedEventLoopSchedulingLagMillis,
                 this.lastSample == null ? null : this.lastSample.all(),
                 this.lastSample == null ? null : this.lastSample.healthy(),
                 this.lastSample == null ? null : this.lastSample.affected()
@@ -118,6 +136,10 @@ final class BenchmarkTimelineSummary {
             Long maxNettyPooledDirectMemoryUsedBytes,
             Long maxResidentSetSizeBytes,
             Double maxProcessCpuLoad,
+            String sharedEventLoopTelemetry,
+            Long maxSharedEventLoopTotalPendingTasks,
+            Long maxSharedEventLoopPendingTasks,
+            Double maxSharedEventLoopSchedulingLagMillis,
             BenchmarkTimeline.Cohort finalAll,
             BenchmarkTimeline.Cohort finalHealthy,
             BenchmarkTimeline.Cohort finalAffected

@@ -18,15 +18,20 @@ package org.cloudburstmc.netty.benchmark;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.netty.channel.nio.NioEventLoopGroup;
 import org.cloudburstmc.netty.channel.raknet.config.RakDatagramSendType;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class BenchmarkTimelineTests {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -237,6 +242,157 @@ public class BenchmarkTimelineTests {
         Assertions.assertThrows(IllegalArgumentException.class, () -> BenchmarkConfig.parse(new String[]{
                 "baseline-bandwidth", "--timeline-sample-interval", "251ms"
         }));
+    }
+
+    @Test
+    public void testResourceSafetyAbortIsStructuredFlushedAndNonPassing() throws Exception {
+        Path output = Files.createTempDirectory("raknet-resource-safety-test");
+        BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
+                "server-worker",
+                "--role", "server",
+                "--clients", "1",
+                "--resource-safety-max-aggregate-queued-bytes", "100",
+                "--resource-safety-max-direct-memory-used-bytes", "9223372036854775807",
+                "--out", output.toString(),
+                "--run-id", "resource-safety-unit"
+        });
+        BenchmarkRunResult result = new BenchmarkRunResult(config, EnvironmentInfo.capture());
+        PeerStats peer = peer(0, false, 200L);
+        result.openTimelineStream();
+        try {
+            BenchmarkTimelineRecorder recorder = new BenchmarkTimelineRecorder(
+                    result,
+                    "resource-safety-case",
+                    1,
+                    0,
+                    () -> List.of(peer.timelineSnapshot(true, true)),
+                    BenchmarkTimelineRecorder.Capabilities.SERVER,
+                    false
+            );
+
+            recorder.captureAt(1_000_500L, result.timelineOriginNanos() + 500_000_000L);
+
+            BenchmarkResourceSafetyException aborted = Assertions.assertThrows(
+                    BenchmarkResourceSafetyException.class, recorder::throwIfResourceSafetyAborted);
+            Assertions.assertSame(result, aborted.result());
+            Path timeline = result.outputDirectory().toPath().resolve("timeline.jsonl");
+            List<String> rows = Files.readAllLines(timeline, StandardCharsets.UTF_8);
+            Assertions.assertEquals(2, rows.size());
+            JsonNode event = JSON.readTree(rows.get(1));
+            Assertions.assertEquals("resource-safety-abort", event.path("eventName").asText());
+            Assertions.assertEquals("benchmark-resource-watchdog", event.path("eventSource").asText());
+            Assertions.assertEquals(200L,
+                    event.path("resourceSafetyAbort").path("observedAggregateQueuedBytes").asLong());
+            Assertions.assertEquals("aggregate-queued-bytes-exceeded",
+                    event.path("resourceSafetyAbort").path("reasons").get(0).asText());
+        } finally {
+            result.closeTimelineStream();
+        }
+
+        Path directory = new BenchmarkResultWriter().write(result).toPath();
+        JsonNode summary = JSON.readTree(Files.readString(directory.resolve("summary.json")));
+        Assertions.assertEquals("aborted", summary.path("resourceSafetyStatus").asText());
+        Assertions.assertEquals(100L, summary.path("resourceSafetyMaxAggregateQueuedBytes").asLong());
+        Assertions.assertEquals(200L,
+                summary.path("resourceSafetyAbort").path("observedAggregateQueuedBytes").asLong());
+        Assertions.assertTrue(summary.path("iterations").isEmpty());
+    }
+
+    @Test
+    public void testFinalCloseSampleResourceAbortCannotReturnSuccessfulResult() {
+        BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
+                "server-worker",
+                "--role", "server",
+                "--clients", "1",
+                "--resource-safety-max-aggregate-queued-bytes", "100",
+                "--resource-safety-max-direct-memory-used-bytes", "9223372036854775807"
+        });
+        BenchmarkRunResult result = new BenchmarkRunResult(config, EnvironmentInfo.capture());
+        PeerStats safe = peer(0, false, 0L);
+        PeerStats unsafe = peer(0, false, 200L);
+        AtomicInteger captures = new AtomicInteger();
+        BenchmarkTimelineRecorder recorder = new BenchmarkTimelineRecorder(
+                result,
+                "final-sample-safety-case",
+                1,
+                0,
+                () -> List.of((captures.getAndIncrement() == 0 ? safe : unsafe)
+                        .timelineSnapshot(true, true)),
+                BenchmarkTimelineRecorder.Capabilities.SERVER,
+                false
+        );
+
+        recorder.start();
+        Assertions.assertNull(result.resourceSafetyAbort());
+        recorder.close();
+
+        BenchmarkResourceSafetyException aborted = Assertions.assertThrows(
+                BenchmarkResourceSafetyException.class,
+                () -> RakNetBenchmarkRunner.requireSuccessfulResult(result));
+        Assertions.assertSame(result, aborted.result());
+        Assertions.assertEquals(200L, result.resourceSafetyAbort().observedAggregateQueuedBytes());
+    }
+
+    @Test
+    public void testHotPathResourceSafetyReadDoesNotTakeTimelineWriterMonitor() throws Exception {
+        Assertions.assertFalse(Modifier.isSynchronized(BenchmarkRunResult.class
+                .getDeclaredMethod("throwIfResourceSafetyAborted").getModifiers()));
+        Assertions.assertFalse(Modifier.isSynchronized(BenchmarkRunResult.class
+                .getDeclaredMethod("resourceSafetyAbort").getModifiers()));
+        Assertions.assertFalse(Modifier.isSynchronized(BenchmarkRunResult.class
+                .getDeclaredMethod("recordResourceSafetyAbort", BenchmarkTimeline.ResourceSafetyAbort.class)
+                .getModifiers()));
+    }
+
+    @Test
+    public void testResourceSafetyDefaultsAndPositiveValidation() {
+        BenchmarkConfig defaults = BenchmarkConfig.parse(new String[]{"baseline-bandwidth"});
+        Assertions.assertEquals(402_653_184L, defaults.resourceSafetyMaxAggregateQueuedBytes());
+        Assertions.assertEquals(805_306_368L, defaults.resourceSafetyMaxDirectMemoryUsedBytes());
+        Assertions.assertThrows(IllegalArgumentException.class, () -> BenchmarkConfig.parse(new String[]{
+                "baseline-bandwidth", "--resource-safety-max-aggregate-queued-bytes", "0"
+        }));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> BenchmarkConfig.parse(new String[]{
+                "baseline-bandwidth", "--resource-safety-max-direct-memory-used-bytes", "-1"
+        }));
+    }
+
+    @Test
+    public void testEventLoopDiagnosticsBoundOutstandingProbeAndMeasureLag() throws Exception {
+        NioEventLoopGroup group = new NioEventLoopGroup(1);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            group.next().execute(() -> {
+                entered.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            Assertions.assertTrue(entered.await(5, TimeUnit.SECONDS));
+            BenchmarkEventLoopDiagnostics diagnostics = new BenchmarkEventLoopDiagnostics(group);
+
+            BenchmarkTimeline.EventLoopMetrics first = diagnostics.capture();
+            BenchmarkTimeline.EventLoopMetrics blocked = diagnostics.capture();
+
+            Assertions.assertEquals("available", first.status());
+            Assertions.assertEquals(1, first.eventLoopCount());
+            Assertions.assertEquals(1, blocked.outstandingSchedulingProbes());
+            Assertions.assertTrue(blocked.totalPendingTasks() >= 1L);
+            release.countDown();
+            group.next().submit(() -> { }).syncUninterruptibly();
+
+            BenchmarkTimeline.EventLoopMetrics completed = diagnostics.capture();
+            Assertions.assertEquals(1L, completed.completedSchedulingProbes());
+            Assertions.assertEquals(0, completed.outstandingSchedulingProbes());
+            Assertions.assertNotNull(completed.latestMaxSchedulingLagMillis());
+            Assertions.assertTrue(completed.latestMaxSchedulingLagMillis() >= 0.0D);
+        } finally {
+            release.countDown();
+            group.shutdownGracefully().syncUninterruptibly();
+        }
     }
 
     @Test

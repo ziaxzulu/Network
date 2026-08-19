@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class BenchmarkRunResult {
     private static final ObjectMapper TIMELINE_JSON = new ObjectMapper();
@@ -47,6 +48,8 @@ public final class BenchmarkRunResult {
     private final long timelineOriginNanos;
     private BufferedWriter timelineWriter;
     private boolean timelineStreamOpened;
+    private final AtomicReference<BenchmarkTimeline.ResourceSafetyAbort> resourceSafetyAbort =
+            new AtomicReference<>();
 
     public BenchmarkRunResult(BenchmarkConfig config, EnvironmentInfo environment) {
         this(config, environment, System.currentTimeMillis(), System.nanoTime());
@@ -107,6 +110,21 @@ public final class BenchmarkRunResult {
 
     synchronized boolean timelineWasStreamed() {
         return this.timelineStreamOpened;
+    }
+
+    boolean recordResourceSafetyAbort(BenchmarkTimeline.ResourceSafetyAbort abort) {
+        return this.resourceSafetyAbort.compareAndSet(null, abort);
+    }
+
+    BenchmarkTimeline.ResourceSafetyAbort resourceSafetyAbort() {
+        return this.resourceSafetyAbort.get();
+    }
+
+    void throwIfResourceSafetyAborted() {
+        BenchmarkTimeline.ResourceSafetyAbort abort = this.resourceSafetyAbort.get();
+        if (abort != null) {
+            throw new BenchmarkResourceSafetyException(this, abort);
+        }
     }
 
     long nextTimelineSequence() {

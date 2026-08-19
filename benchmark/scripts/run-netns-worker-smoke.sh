@@ -33,6 +33,8 @@ max_queued_bytes=""
 workers=""
 reliability="reliable_ordered"
 recovery_mode="legacy"
+resource_safety_max_aggregate_queued_bytes="402653184"
+resource_safety_max_direct_memory_used_bytes="805306368"
 namespace_prefix=""
 benchmark_run_user=""
 benchmark_run_group=""
@@ -88,11 +90,16 @@ Options:
   --workers N                       Optional benchmark worker count.
   --reliability MODE                Reliability mode. Default: reliable_ordered.
   --recovery-mode legacy|bounded    RakNet recovery algorithm. Default: legacy.
+  --resource-safety-max-aggregate-queued-bytes N
+                                    Fail if cohort queue exceeds N. Default: 402653184 (384 MiB).
+  --resource-safety-max-direct-memory-used-bytes N
+                                    Fail if direct memory exceeds N. Default: 805306368 (768 MiB).
   --namespace-prefix NAME           Prefix for created network namespaces.
   --help                            Show this help.
 
 Outputs:
   manifest.json                     Run plan and namespace topology.
+  case-status.json                  Machine-readable planned/completed/failed status and abort artifact.
   README.md                         Operator notes and command summary.
   server.log / receiver-*.log       Worker output when --execute is used.
   netem/*.txt                       qdisc apply/status evidence with millisecond apply bounds.
@@ -226,6 +233,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --recovery-mode)
       recovery_mode="$2"
+      shift 2
+      ;;
+    --resource-safety-max-aggregate-queued-bytes)
+      resource_safety_max_aggregate_queued_bytes="$2"
+      shift 2
+      ;;
+    --resource-safety-max-direct-memory-used-bytes)
+      resource_safety_max_direct_memory_used_bytes="$2"
       shift 2
       ;;
     --namespace-prefix)
@@ -373,6 +388,14 @@ if [[ -n "$workers" ]] && ! positive_int "$workers"; then
   echo "--workers must be a positive integer" >&2
   exit 2
 fi
+if ! positive_int "$resource_safety_max_aggregate_queued_bytes"; then
+  echo "--resource-safety-max-aggregate-queued-bytes must be a positive integer" >&2
+  exit 2
+fi
+if ! positive_int "$resource_safety_max_direct_memory_used_bytes"; then
+  echo "--resource-safety-max-direct-memory-used-bytes must be a positive integer" >&2
+  exit 2
+fi
 
 if [[ "$case_type" == "fairness" || "$case_type" == "blackhole" ]]; then
   if [[ -z "$affected_clients" ]]; then
@@ -452,7 +475,7 @@ if "$execute"; then
       exit 2
     fi
   fi
-  for tool in ip tc jq; do
+  for tool in ip tc jq setsid; do
     if ! command -v "$tool" >/dev/null 2>&1; then
       echo "$tool is required for --execute" >&2
       exit 2
@@ -535,6 +558,7 @@ healthy_out="$output_root/receiver-healthy"
 affected_out="$output_root/receiver-affected"
 merged_out="$output_root/merged"
 manifest="$output_root/manifest.json"
+case_status="$output_root/case-status.json"
 report="$output_root/README.md"
 server_log="$output_root/server.log"
 healthy_log="$output_root/receiver-healthy.log"
@@ -565,6 +589,8 @@ common_worker_args=(
   --payload-size "$payload_size"
   --reliability "$reliability"
   --recovery-mode "$recovery_mode"
+  --resource-safety-max-aggregate-queued-bytes "$resource_safety_max_aggregate_queued_bytes"
+  --resource-safety-max-direct-memory-used-bytes "$resource_safety_max_direct_memory_used_bytes"
 )
 if has_netem; then
   common_worker_args+=(--external-impairment-at-epoch-ms "$netem_at_ms")
@@ -661,6 +687,8 @@ cat >"$manifest" <<EOF
   "globalPacketLimit": $(if [[ -n "$global_packet_limit" ]]; then echo "$global_packet_limit"; else echo "null"; fi),
   "maxQueuedBytes": $(if [[ -n "$max_queued_bytes" ]]; then echo "$max_queued_bytes"; else echo "null"; fi),
   "workers": $(if [[ -n "$workers" ]]; then echo "$workers"; else echo "null"; fi),
+  "resourceSafetyMaxAggregateQueuedBytes": $resource_safety_max_aggregate_queued_bytes,
+  "resourceSafetyMaxDirectMemoryUsedBytes": $resource_safety_max_direct_memory_used_bytes,
   "benchmarkDistribution": "$(json_escape "$benchmark_distribution_dir")",
   "startAtEpochMillis": $start_at_ms,
   "probeIntervalMillis": $probe_interval_ms,
@@ -698,6 +726,8 @@ cat >"$report" <<EOF
 - External recovery at epoch ms: \`$(if [[ "$recovery_at_ms" -gt 0 ]]; then echo "$recovery_at_ms"; else echo "not scheduled"; fi)\`
 - Direction: \`$direction\`
 - Recovery mode: \`$recovery_mode\`
+- Resource safety aggregate queue threshold: \`$resource_safety_max_aggregate_queued_bytes bytes\`
+- Resource safety direct-memory threshold: \`$resource_safety_max_direct_memory_used_bytes bytes\`
 - Netem queue limit: \`$netem_limit packets\`
 - Benchmark distribution: \`$benchmark_distribution_dir\`
 - Netem: latency \`$latency\`, jitter \`$jitter\`, loss \`$loss\`
@@ -716,6 +746,29 @@ affected receiver: $affected_receiver_args
 \`\`\`
 
 EOF
+
+write_case_status() {
+  local status="$1"
+  local failure_kind="${2:-}"
+  local diagnostic_artifact="${3:-}"
+  jq -n \
+    --arg kind "raknet-netns-worker-case-status" \
+    --arg status "$status" \
+    --arg failureKind "$failure_kind" \
+    --arg diagnosticArtifact "$diagnostic_artifact" \
+    --arg manifest "$manifest" \
+    --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      kind: $kind,
+      status: $status,
+      failureKind: (if $failureKind == "" then null else $failureKind end),
+      diagnosticArtifact: (if $diagnosticArtifact == "" then null else $diagnosticArtifact end),
+      manifest: $manifest,
+      updatedAt: $updatedAt
+    }' >"$case_status"
+}
+
+write_case_status "$(if "$execute"; then echo running; else echo planned; fi)"
 
 log_command() {
   printf '+ '
@@ -737,14 +790,137 @@ qdisc_sampler_required=false
 qdisc_sampler_targets=()
 namespaces_created=()
 
-cleanup() {
-  local pid
-  for pid in "${worker_pids[@]:-}" "${helper_pids[@]:-}" "${sampler_pids[@]:-}"; do
+# BEGIN benchmark child supervision
+worker_stop_grace_seconds=5
+
+stop_pid_bounded() {
+  local pid="$1"
+  local grace_seconds="${2:-5}"
+  local process_group="${3:-false}"
+  local signal_target="$pid"
+  if "$process_group"; then
+    signal_target="-$pid"
+  fi
+  stopped_pid_was_running=false
+  stopped_pid_escalated=false
+  stopped_pid_status=127
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    stopped_pid_was_running=true
+  fi
+  if { "$process_group" && kill -0 -- "$signal_target" >/dev/null 2>&1; } \
+      || { ! "$process_group" && "$stopped_pid_was_running"; }; then
+    kill -TERM -- "$signal_target" >/dev/null 2>&1 || true
+    local deadline=$((SECONDS + grace_seconds))
+    while kill -0 -- "$signal_target" >/dev/null 2>&1 && [[ "$SECONDS" -lt "$deadline" ]]; do
+      sleep 0.05
+    done
+    if kill -0 -- "$signal_target" >/dev/null 2>&1; then
+      stopped_pid_escalated=true
+      kill -KILL -- "$signal_target" >/dev/null 2>&1 || true
+    fi
+  fi
+  if wait "$pid" >/dev/null 2>&1; then
+    stopped_pid_status=0
+  else
+    stopped_pid_status=$?
+  fi
+}
+
+terminate_and_reap_process_groups() {
+  local pid any_running
+  worker_termination_escalated=false
+  for pid in "$@"; do
     [[ -z "$pid" ]] && continue
-    if kill -0 "$pid" >/dev/null 2>&1; then
-      kill "$pid" >/dev/null 2>&1 || true
+    if kill -0 -- "-$pid" >/dev/null 2>&1; then
+      kill -TERM -- "-$pid" >/dev/null 2>&1 || true
     fi
   done
+  local deadline=$((SECONDS + worker_stop_grace_seconds))
+  while [[ "$SECONDS" -lt "$deadline" ]]; do
+    any_running=false
+    for pid in "$@"; do
+      if [[ -n "$pid" ]] && kill -0 -- "-$pid" >/dev/null 2>&1; then
+        any_running=true
+        break
+      fi
+    done
+    if ! "$any_running"; then
+      break
+    fi
+    sleep 0.05
+  done
+  for pid in "$@"; do
+    [[ -z "$pid" ]] && continue
+    if kill -0 -- "-$pid" >/dev/null 2>&1; then
+      worker_termination_escalated=true
+      kill -KILL -- "-$pid" >/dev/null 2>&1 || true
+    fi
+  done
+  for pid in "$@"; do
+    [[ -z "$pid" ]] && continue
+    wait "$pid" >/dev/null 2>&1 || true
+  done
+}
+
+wait_for_workers() {
+  local -a pending=("${worker_pids[@]}")
+  local completed_pid status pid
+  while [[ "${#pending[@]}" -gt 0 ]]; do
+    completed_pid=""
+    if wait -n -p completed_pid "${pending[@]}"; then
+      status=0
+    else
+      status=$?
+    fi
+    if [[ -z "$completed_pid" ]]; then
+      terminate_and_reap_process_groups "${pending[@]}"
+      worker_pids=()
+      return 1
+    fi
+    local -a remaining=()
+    for pid in "${pending[@]}"; do
+      if [[ "$pid" != "$completed_pid" ]]; then
+        remaining+=("$pid")
+      fi
+    done
+    terminate_and_reap_process_groups "$completed_pid"
+    pending=("${remaining[@]}")
+    worker_pids=("${pending[@]}")
+    if [[ "$status" -ne 0 ]]; then
+      terminate_and_reap_process_groups "${pending[@]}"
+      worker_pids=()
+      return 1
+    fi
+  done
+  worker_pids=()
+}
+
+wait_for_helpers() {
+  local pid status
+  while [[ "${#helper_pids[@]}" -gt 0 ]]; do
+    pid="${helper_pids[0]}"
+    if wait "$pid"; then
+      status=0
+    else
+      status=$?
+    fi
+    terminate_and_reap_process_groups "$pid"
+    helper_pids=("${helper_pids[@]:1}")
+    if [[ "$status" -ne 0 ]]; then
+      terminate_and_reap_process_groups "${helper_pids[@]}"
+      helper_pids=()
+      return 1
+    fi
+  done
+}
+# END benchmark child supervision
+
+cleanup() {
+  terminate_and_reap_process_groups \
+    "${worker_pids[@]:-}" "${helper_pids[@]:-}" "${sampler_pids[@]:-}"
+  worker_pids=()
+  helper_pids=()
+  sampler_pids=()
   if "$execute" && ! "$keep_netns"; then
     local ns
     for ns in "${namespaces_created[@]:-}"; do
@@ -857,6 +1033,32 @@ apply_netem_path() {
   done
 }
 
+qdisc_sampler_loop() {
+  while true; do
+    local target ns iface qdisc_json error
+    for target in "$@"; do
+      ns="${target%%:*}"
+      iface="${target##*:}"
+      error=""
+      if ! qdisc_json="$(ip netns exec "$ns" tc -s -j qdisc show dev "$iface" 2>&1)"; then
+        error="$qdisc_json"
+        qdisc_json='[]'
+      elif [[ -z "$qdisc_json" ]]; then
+        qdisc_json='[]'
+      fi
+      jq -cn \
+        --argjson epochMillis "$(date +%s%3N)" \
+        --arg namespace "$ns" \
+        --arg interface "$iface" \
+        --arg error "$error" \
+        --argjson qdisc "$qdisc_json" \
+        '{epochMillis: $epochMillis, namespace: $namespace, interface: $interface,
+          qdisc: $qdisc} + (if $error == "" then {} else {error: $error} end)'
+    done
+    sleep 1
+  done
+}
+
 start_qdisc_sampler() {
   if ! "$execute" || { ! has_netem && [[ "$case_type" != "blackhole" ]]; }; then
     return
@@ -870,51 +1072,27 @@ start_qdisc_sampler() {
   if [[ "$direction" == "client-to-server" || "$direction" == "both" ]]; then
     qdisc_sampler_targets+=("$affected_ns:$receiver_affected_iface")
   fi
-  (
-    while true; do
-      local target ns iface qdisc_json error
-      for target in "${qdisc_sampler_targets[@]}"; do
-        ns="${target%%:*}"
-        iface="${target##*:}"
-        error=""
-        if ! qdisc_json="$(ip netns exec "$ns" tc -s -j qdisc show dev "$iface" 2>&1)"; then
-          error="$qdisc_json"
-          qdisc_json='[]'
-        elif [[ -z "$qdisc_json" ]]; then
-          qdisc_json='[]'
-        fi
-        jq -cn \
-          --argjson epochMillis "$(date +%s%3N)" \
-          --arg namespace "$ns" \
-          --arg interface "$iface" \
-          --arg error "$error" \
-          --argjson qdisc "$qdisc_json" \
-          '{epochMillis: $epochMillis, namespace: $namespace, interface: $interface,
-            qdisc: $qdisc} + (if $error == "" then {} else {error: $error} end)'
-      done
-      sleep 1
-    done
-  ) >>"$output" &
+  local sampler_program=$'set -euo pipefail\n'
+  sampler_program+="$(declare -f qdisc_sampler_loop)"
+  sampler_program+=$'\nqdisc_sampler_loop "$@"\n'
+  setsid bash -c "$sampler_program" -- "${qdisc_sampler_targets[@]}" >>"$output" &
   sampler_pids+=("$!")
 }
 
 stop_qdisc_samplers() {
-  local pid status was_running
+  local pid status was_running escalated
   local failed=0
   for pid in "${sampler_pids[@]:-}"; do
     [[ -z "$pid" ]] && continue
-    was_running=false
-    if kill -0 "$pid" >/dev/null 2>&1; then
-      was_running=true
-      kill "$pid" >/dev/null 2>&1 || true
-    fi
-    if wait "$pid" >/dev/null 2>&1; then
-      status=0
-    else
-      status=$?
-    fi
+    stop_pid_bounded "$pid" 5 true
+    was_running="$stopped_pid_was_running"
+    escalated="$stopped_pid_escalated"
+    status="$stopped_pid_status"
     if ! "$was_running"; then
       echo "Qdisc sampler exited unexpectedly before benchmark completion (status $status)" >&2
+      failed=1
+    elif "$escalated"; then
+      echo "Qdisc sampler ignored TERM and required KILL" >&2
       failed=1
     elif [[ "$status" -ne 0 && "$status" -ne 143 ]]; then
       echo "Qdisc sampler could not be stopped cleanly (status $status)" >&2
@@ -950,6 +1128,26 @@ sleep_until_epoch_ms() {
   done
 }
 
+start_netem_helper() {
+  local target_epoch_ms="$1"
+  local label="$2"
+  local action="$3"
+  local helper_program=$'set -euo pipefail\n'
+  helper_program+="$(declare -f has_netem)"
+  helper_program+=$'\n'
+  helper_program+="$(declare -f sleep_until_epoch_ms)"
+  helper_program+=$'\n'
+  helper_program+="$(declare -f apply_netem_path)"
+  helper_program+=$'\nsleep_until_epoch_ms "$1"\napply_netem_path "$2" "$3"\n'
+  setsid env \
+    latency="$latency" jitter="$jitter" loss="$loss" direction="$direction" \
+    server_ns="$server_ns" server_affected_iface="$server_affected_iface" \
+    affected_ns="$affected_ns" receiver_affected_iface="$receiver_affected_iface" \
+    output_root="$output_root" netem_limit="$netem_limit" script_dir="$script_dir" execute=true \
+    bash -c "$helper_program" -- "$target_epoch_ms" "$label" "$action" &
+  helper_pids+=("$!")
+}
+
 run_worker_bg() {
   local ns="$1"
   local log_file="$2"
@@ -979,10 +1177,13 @@ run_worker_bg() {
     args="$(join_args "$@")"
     worker_command+=(./gradlew --no-daemon :benchmark:raknetBenchmark "-PbenchmarkArgs=$args")
   fi
-  log_command "${worker_command[@]}"
   if "$execute"; then
-    "${worker_command[@]}" >"$log_file" 2>&1 &
+    local launch_command=(setsid "${worker_command[@]}")
+    log_command "${launch_command[@]}"
+    "${launch_command[@]}" >"$log_file" 2>&1 &
     worker_pids+=("$!")
+  else
+    log_command "${worker_command[@]}"
   fi
 }
 
@@ -1037,11 +1238,7 @@ start_qdisc_sampler
 if has_netem; then
   echo "Initial netem scheduled at epoch ms $netem_at_ms, after connection establishment and before coordinated start"
   if "$execute"; then
-    (
-      sleep_until_epoch_ms "$netem_at_ms"
-      apply_netem_path "initial-netem" "apply"
-    ) &
-    helper_pids+=("$!")
+    start_netem_helper "$netem_at_ms" "initial-netem" "apply"
   else
     echo "+ sleep until $netem_at_ms; apply latency $latency jitter $jitter loss $loss to $direction affected path"
     apply_netem_path "initial-netem" "apply"
@@ -1051,11 +1248,7 @@ fi
 if [[ "$case_type" == "blackhole" ]]; then
   echo "External blackhole scheduled at epoch ms $blackhole_at_ms"
   if "$execute"; then
-    (
-      sleep_until_epoch_ms "$blackhole_at_ms"
-      apply_netem_path "external-blackhole" "blackhole"
-    ) &
-    helper_pids+=("$!")
+    start_netem_helper "$blackhole_at_ms" "external-blackhole" "blackhole"
   else
     echo "+ sleep until $blackhole_at_ms; apply 100% loss to $direction affected path"
   fi
@@ -1064,11 +1257,7 @@ fi
 if [[ "$recovery_at_ms" -gt 0 ]]; then
   echo "External path recovery scheduled at epoch ms $recovery_at_ms"
   if "$execute"; then
-    (
-      sleep_until_epoch_ms "$recovery_at_ms"
-      apply_netem_path "external-recovery" "restore"
-    ) &
-    helper_pids+=("$!")
+    start_netem_helper "$recovery_at_ms" "external-recovery" "restore"
   else
     echo "+ sleep until $recovery_at_ms; restore prior path conditions on $direction affected path"
     apply_netem_path "external-recovery" "restore"
@@ -1091,29 +1280,34 @@ fi
 
 if "$execute"; then
   failed=0
-  for pid in "${worker_pids[@]}"; do
-    if ! wait "$pid"; then
-      failed=1
-    fi
-  done
+  if ! wait_for_workers; then
+    failed=1
+    terminate_and_reap_process_groups "${helper_pids[@]}"
+    helper_pids=()
+  fi
   if ! stop_qdisc_samplers; then
     failed=1
   fi
   if [[ "$failed" -ne 0 ]]; then
-    for pid in "${helper_pids[@]}"; do
-      if kill -0 "$pid" >/dev/null 2>&1; then
-        kill "$pid" >/dev/null 2>&1 || true
-      fi
-    done
+    terminate_and_reap_process_groups "${helper_pids[@]}"
+    helper_pids=()
+    failure_kind="worker-failure"
+    diagnostic_artifact=""
+    server_summary="$server_out/$run_id/summary.json"
+    if [[ -s "$server_summary" ]] \
+        && [[ "$(jq -r '.resourceSafetyStatus // empty' "$server_summary" 2>/dev/null)" == "aborted" ]]; then
+      failure_kind="resource-safety-abort"
+      diagnostic_artifact="$server_out/$run_id/timeline.jsonl"
+    fi
+    write_case_status "failed" "$failure_kind" "$diagnostic_artifact"
     echo "One or more netns workers or required qdisc evidence collectors failed. See $output_root" >&2
     exit 1
   fi
-  for pid in "${helper_pids[@]}"; do
-    if ! wait "$pid"; then
-      echo "A netns helper process failed. See netem evidence under $output_root/netem" >&2
-      exit 1
-    fi
-  done
+  if ! wait_for_helpers; then
+    write_case_status "failed" "netns-helper-failure" "$output_root/netem"
+    echo "A netns helper process failed. See netem evidence under $output_root/netem" >&2
+    exit 1
+  fi
 
   merge_args=("$script_dir/merge-worker-results.sh" --server "$server_out/$run_id")
   if [[ "$affected_clients" -gt 0 ]]; then
@@ -1143,7 +1337,11 @@ if "$execute"; then
   if has_netem || [[ "$case_type" == "blackhole" ]]; then
     merge_args+=(--external-netem-limit-packets "$netem_limit" --netem-evidence "$output_root/netem")
   fi
-  run_benchmark_command "${merge_args[@]}"
+  if ! run_benchmark_command "${merge_args[@]}"; then
+    write_case_status "failed" "merge-failure" "$merged_out"
+    exit 1
+  fi
+  write_case_status "completed"
   echo "Merged artifact: $merged_out"
 else
   echo

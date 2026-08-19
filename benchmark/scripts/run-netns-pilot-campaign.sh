@@ -25,6 +25,8 @@ max_queued_bytes=""
 workers=""
 reliability="reliable_ordered"
 recovery_mode="legacy"
+resource_safety_max_aggregate_queued_bytes="402653184"
+resource_safety_max_direct_memory_used_bytes="805306368"
 campaign_run_user=""
 
 usage() {
@@ -65,6 +67,10 @@ Options:
   --workers N                       Optional benchmark worker count.
   --reliability MODE                Reliability mode. Default: reliable_ordered.
   --recovery-mode legacy|bounded    RakNet recovery algorithm. Default: legacy.
+  --resource-safety-max-aggregate-queued-bytes N
+                                    Fail if cohort queue exceeds N. Default: 402653184 (384 MiB).
+  --resource-safety-max-direct-memory-used-bytes N
+                                    Fail if direct memory exceeds N. Default: 805306368 (768 MiB).
   --help                            Show this help.
 
 Profiles:
@@ -181,6 +187,14 @@ while [[ $# -gt 0 ]]; do
       recovery_mode="$2"
       shift 2
       ;;
+    --resource-safety-max-aggregate-queued-bytes)
+      resource_safety_max_aggregate_queued_bytes="$2"
+      shift 2
+      ;;
+    --resource-safety-max-direct-memory-used-bytes)
+      resource_safety_max_direct_memory_used_bytes="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -216,6 +230,12 @@ for optional_name in packet_limit global_packet_limit max_queued_bytes workers; 
   if [[ -n "${!optional_name}" ]] \
       && ! [[ "${!optional_name}" =~ ^[0-9]+$ && "${!optional_name}" -gt 0 ]]; then
     echo "--${optional_name//_/-} must be a positive integer" >&2
+    exit 2
+  fi
+done
+for safety_name in resource_safety_max_aggregate_queued_bytes resource_safety_max_direct_memory_used_bytes; do
+  if ! [[ "${!safety_name}" =~ ^[0-9]+$ && "${!safety_name}" -gt 0 ]]; then
+    echo "--${safety_name//_/-} must be a positive integer" >&2
     exit 2
   fi
 done
@@ -352,6 +372,8 @@ jq -n \
   --arg globalPacketLimit "$global_packet_limit" \
   --arg maxQueuedBytes "$max_queued_bytes" \
   --arg workers "$workers" \
+  --argjson resourceSafetyMaxAggregateQueuedBytes "$resource_safety_max_aggregate_queued_bytes" \
+  --argjson resourceSafetyMaxDirectMemoryUsedBytes "$resource_safety_max_direct_memory_used_bytes" \
   '{
     kind: "raknet-netns-pilot-campaign",
     generatedAt: $generatedAt,
@@ -379,11 +401,17 @@ jq -n \
       packetLimit: (if $packetLimit == "" then null else ($packetLimit | tonumber) end),
       globalPacketLimit: (if $globalPacketLimit == "" then null else ($globalPacketLimit | tonumber) end),
       maxQueuedBytes: (if $maxQueuedBytes == "" then null else ($maxQueuedBytes | tonumber) end),
-      workers: (if $workers == "" then null else ($workers | tonumber) end)
+      workers: (if $workers == "" then null else ($workers | tonumber) end),
+      resourceSafetyMaxAggregateQueuedBytes: $resourceSafetyMaxAggregateQueuedBytes,
+      resourceSafetyMaxDirectMemoryUsedBytes: $resourceSafetyMaxDirectMemoryUsedBytes
     }
   }' >"$campaign_plan"
 
 optional_args=()
+optional_args+=(
+  --resource-safety-max-aggregate-queued-bytes "$resource_safety_max_aggregate_queued_bytes"
+  --resource-safety-max-direct-memory-used-bytes "$resource_safety_max_direct_memory_used_bytes"
+)
 if [[ -n "$packet_limit" ]]; then
   optional_args+=(--packet-limit "$packet_limit")
 fi
@@ -471,10 +499,19 @@ for profile in "${normalized_profiles[@]}"; do
     fi
   else
     completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    failure_kind="worker-case-failure"
+    diagnostic_artifact=""
+    if [[ -s "$case_dir/case-status.json" ]]; then
+      failure_kind="$(jq -r '.failureKind // "worker-case-failure"' "$case_dir/case-status.json")"
+      diagnostic_artifact="$(jq -r '.diagnosticArtifact // ""' "$case_dir/case-status.json")"
+    fi
     jq -nc \
       --arg profile "$profile" --arg caseType "$case_type" --arg status "failed" \
       --arg startedAt "$started_at" --arg completedAt "$completed_at" --arg artifact "$case_dir" \
-      '{profile: $profile, caseType: $caseType, status: $status, startedAt: $startedAt, completedAt: $completedAt, artifact: $artifact}' \
+      --arg failureKind "$failure_kind" --arg diagnosticArtifact "$diagnostic_artifact" \
+      '{profile: $profile, caseType: $caseType, status: $status, startedAt: $startedAt,
+        completedAt: $completedAt, artifact: $artifact, failureKind: $failureKind,
+        diagnosticArtifact: (if $diagnosticArtifact == "" then null else $diagnosticArtifact end)}' \
       >>"$campaign_status"
     failed=1
     break

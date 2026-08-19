@@ -20,6 +20,8 @@
   "globalPacketLimit": null,
   "maxQueuedBytes": null,
   "workers": null,
+  "resourceSafetyMaxAggregateQueuedBytes": 402653184,
+  "resourceSafetyMaxDirectMemoryUsedBytes": 805306368,
   "startAtEpochMillis": 100000,
   "probeIntervalMillis": 200,
   "warmupDrainMillis": 400,

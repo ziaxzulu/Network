@@ -28,6 +28,8 @@ import java.util.Locale;
 
 public final class BenchmarkConfig {
     public static final int DEFAULT_PORT = 19132;
+    public static final long DEFAULT_RESOURCE_SAFETY_MAX_AGGREGATE_QUEUED_BYTES = 384L * 1024L * 1024L;
+    public static final long DEFAULT_RESOURCE_SAFETY_MAX_DIRECT_MEMORY_USED_BYTES = 768L * 1024L * 1024L;
 
     private BenchmarkScenario scenario = BenchmarkScenario.BASELINE_BANDWIDTH;
     private BenchmarkRole role = BenchmarkRole.LOCAL;
@@ -48,6 +50,8 @@ public final class BenchmarkConfig {
     private long externalBlackholeAtEpochMillis;
     private long externalRecoveryAtEpochMillis;
     private long timelineSampleIntervalMillis = 200L;
+    private long resourceSafetyMaxAggregateQueuedBytes = DEFAULT_RESOURCE_SAFETY_MAX_AGGREGATE_QUEUED_BYTES;
+    private long resourceSafetyMaxDirectMemoryUsedBytes = DEFAULT_RESOURCE_SAFETY_MAX_DIRECT_MEMORY_USED_BYTES;
     private int iterations = 3;
     private int workers = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
     private int packetLimit;
@@ -158,6 +162,10 @@ public final class BenchmarkConfig {
             this.externalRecoveryAtEpochMillis = parseNonNegativeLong(key, value);
         } else if ("timeline-sample-interval".equals(key)) {
             this.timelineSampleIntervalMillis = parseDurationMillis(value);
+        } else if ("resource-safety-max-aggregate-queued-bytes".equals(key)) {
+            this.resourceSafetyMaxAggregateQueuedBytes = parsePositiveLong(key, value);
+        } else if ("resource-safety-max-direct-memory-used-bytes".equals(key)) {
+            this.resourceSafetyMaxDirectMemoryUsedBytes = parsePositiveLong(key, value);
         } else if ("iterations".equals(key)) {
             this.iterations = parsePositiveInt(key, value);
         } else if ("workers".equals(key)) {
@@ -365,6 +373,14 @@ public final class BenchmarkConfig {
         return this.timelineSampleIntervalMillis;
     }
 
+    public long resourceSafetyMaxAggregateQueuedBytes() {
+        return this.resourceSafetyMaxAggregateQueuedBytes;
+    }
+
+    public long resourceSafetyMaxDirectMemoryUsedBytes() {
+        return this.resourceSafetyMaxDirectMemoryUsedBytes;
+    }
+
     public String measurementWindowSemantics() {
         if (this.role == BenchmarkRole.SERVER || this.role == BenchmarkRole.CLIENT
                 || this.scenario == BenchmarkScenario.SERVER_WORKER
@@ -504,6 +520,14 @@ public final class BenchmarkConfig {
         long parsed = Long.parseLong(value);
         if (parsed < 0) {
             throw new IllegalArgumentException("--" + key + " must be non-negative");
+        }
+        return parsed;
+    }
+
+    private static long parsePositiveLong(String key, String value) {
+        long parsed = Long.parseLong(value);
+        if (parsed <= 0L) {
+            throw new IllegalArgumentException("--" + key + " must be positive");
         }
         return parsed;
     }

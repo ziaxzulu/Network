@@ -2458,11 +2458,19 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(manifest.path("globalPacketLimit").isNull());
         Assertions.assertTrue(manifest.path("maxQueuedBytes").isNull());
         Assertions.assertTrue(manifest.path("workers").isNull());
+        Assertions.assertEquals(402_653_184L,
+                manifest.path("resourceSafetyMaxAggregateQueuedBytes").asLong());
+        Assertions.assertEquals(805_306_368L,
+                manifest.path("resourceSafetyMaxDirectMemoryUsedBytes").asLong());
         Assertions.assertEquals(10_000, manifest.path("netemLimitPackets").asInt());
         Assertions.assertEquals(root.resolve("benchmark/build/install/benchmark").toString(),
                 manifest.path("benchmarkDistribution").asText());
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--clients 10"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--recovery-mode legacy"));
+        Assertions.assertTrue(manifest.path("serverArgs").asText()
+                .contains("--resource-safety-max-aggregate-queued-bytes 402653184"));
+        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText()
+                .contains("--resource-safety-max-direct-memory-used-bytes 805306368"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--external-impairment-at-epoch-ms "));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode legacy"));
@@ -2474,6 +2482,8 @@ public class BenchmarkKitTests {
         String readme = Files.readString(output.resolve("README.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(readme.contains("single-host smoke harness"));
         Assertions.assertTrue(readme.contains("does not prove NIC line-rate"));
+        JsonNode caseStatus = JSON.readTree(Files.readString(output.resolve("case-status.json")));
+        Assertions.assertEquals("planned", caseStatus.path("status").asText());
     }
 
     @Test
@@ -2540,6 +2550,84 @@ public class BenchmarkKitTests {
 
         String readme = Files.readString(output.resolve("README.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(readme.contains("External recovery at epoch ms: `"));
+    }
+
+    @Test
+    public void testNetnsWorkerChildSupervisionFailsFastEscalatesAndReaps() throws Exception {
+        assumeShellTooling();
+        Path script = repoRoot().resolve("benchmark/scripts/run-netns-worker-smoke.sh");
+        String source = Files.readString(script, StandardCharsets.UTF_8);
+        String beginMarker = "# BEGIN benchmark child supervision";
+        String endMarker = "# END benchmark child supervision";
+        int begin = source.indexOf(beginMarker);
+        int end = source.indexOf(endMarker);
+        Assertions.assertTrue(begin >= 0 && end > begin, "child-supervision source markers must exist");
+        Assertions.assertTrue(source.contains("setsid bash -c \"$sampler_program\""));
+        Assertions.assertTrue(source.contains("start_netem_helper \"$netem_at_ms\""));
+        String functions = source.substring(begin + beginMarker.length(), end);
+        Path nestedPidFile = Files.createTempFile("raknet-nested-helper-pid", ".txt");
+        Files.delete(nestedPidFile);
+        Path interruptedHelperPidFile = Files.createTempFile("raknet-interrupted-helper-pid", ".txt");
+        Files.delete(interruptedHelperPidFile);
+        Path interruptedWorkerPidFile = Files.createTempFile("raknet-interrupted-worker-pid", ".txt");
+        Files.delete(interruptedWorkerPidFile);
+        String harness = "set -euo pipefail\n" + functions + "\n"
+                + "worker_stop_grace_seconds=1\n"
+                + "setsid bash -c 'trap \"\" TERM; while :; do sleep 1; done' & stubborn=$!\n"
+                + "setsid sleep 30 & sibling=$!\n"
+                + "setsid bash -c 'exit 7' & failed=$!\n"
+                + "worker_pids=(\"$stubborn\" \"$sibling\" \"$failed\")\n"
+                + "if wait_for_workers; then exit 20; fi\n"
+                + "\"$worker_termination_escalated\"\n"
+                + "! kill -0 \"$stubborn\" 2>/dev/null\n"
+                + "! kill -0 \"$sibling\" 2>/dev/null\n"
+                + "[[ ${#worker_pids[@]} -eq 0 ]]\n"
+                + "nested_pid_file=$1\n"
+                + "setsid bash -c 'sleep 30 & nested=$!; printf \"%s\\n\" \"$nested\" >\"$1\"; exit 9' -- \"$nested_pid_file\" & failed_helper=$!\n"
+                + "setsid sleep 30 & helper_sibling=$!\n"
+                + "for ignored in {1..100}; do [[ -s \"$nested_pid_file\" ]] && break; sleep 0.01; done\n"
+                + "nested_helper=$(cat \"$nested_pid_file\")\n"
+                + "helper_pids=(\"$failed_helper\" \"$helper_sibling\")\n"
+                + "if wait_for_helpers; then exit 21; fi\n"
+                + "! kill -0 \"$helper_sibling\" 2>/dev/null\n"
+                + "! kill -0 \"$nested_helper\" 2>/dev/null\n"
+                + "[[ ${#helper_pids[@]} -eq 0 ]]\n"
+                + "setsid bash -c 'exit 0' & successful_helper=$!\n"
+                + "helper_pids=(\"$successful_helper\")\n"
+                + "wait_for_helpers\n"
+                + "[[ ${#helper_pids[@]} -eq 0 ]]\n"
+                + "interrupted_helper_pid_file=$2\n"
+                + "(\n"
+                + "  worker_stop_grace_seconds=1\n"
+                + "  setsid bash -c 'trap \"\" TERM; while :; do sleep 1; done' & interrupted_helper=$!\n"
+                + "  printf '%s\\n' \"$interrupted_helper\" >\"$interrupted_helper_pid_file\"\n"
+                + "  helper_pids=(\"$interrupted_helper\")\n"
+                + "  trap 'terminate_and_reap_process_groups \"${helper_pids[@]:-}\"' EXIT\n"
+                + "  interrupted_parent=$BASHPID\n"
+                + "  (sleep 0.2; kill -TERM \"$interrupted_parent\") &\n"
+                + "  wait_for_helpers\n"
+                + ") || true\n"
+                + "interrupted_helper=$(cat \"$interrupted_helper_pid_file\")\n"
+                + "! kill -0 \"$interrupted_helper\" 2>/dev/null\n"
+                + "interrupted_worker_pid_file=$3\n"
+                + "(\n"
+                + "  worker_stop_grace_seconds=1\n"
+                + "  setsid bash -c 'trap \"\" TERM; (trap \"\" TERM; while :; do sleep 1; done) & nested=$!; printf \"%s\\n\" \"$nested\" >\"$1\"; exit 0' -- \"$interrupted_worker_pid_file\" & interrupted_worker=$!\n"
+                + "  worker_pids=(\"$interrupted_worker\")\n"
+                + "  trap 'terminate_and_reap_process_groups \"${worker_pids[@]:-}\"' EXIT\n"
+                + "  for ignored in {1..100}; do [[ -s \"$interrupted_worker_pid_file\" ]] && break; sleep 0.01; done\n"
+                + "  interrupted_parent=$BASHPID\n"
+                + "  (sleep 0.2; kill -TERM \"$interrupted_parent\") &\n"
+                + "  wait_for_workers\n"
+                + ") || true\n"
+                + "interrupted_worker_child=$(cat \"$interrupted_worker_pid_file\")\n"
+                + "! kill -0 \"$interrupted_worker_child\" 2>/dev/null\n";
+
+        ProcessResult result = runProcess(repoRoot(), Duration.ofSeconds(10),
+                "bash", "-c", harness, "--", nestedPidFile.toString(), interruptedHelperPidFile.toString(),
+                interruptedWorkerPidFile.toString());
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
     }
 
     @Test
@@ -2843,6 +2931,10 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(200, plan.path("parameters").path("globalPacketLimit").asInt());
         Assertions.assertEquals(4096, plan.path("parameters").path("maxQueuedBytes").asInt());
         Assertions.assertEquals(2, plan.path("parameters").path("workers").asInt());
+        Assertions.assertEquals(402_653_184L,
+                plan.path("parameters").path("resourceSafetyMaxAggregateQueuedBytes").asLong());
+        Assertions.assertEquals(805_306_368L,
+                plan.path("parameters").path("resourceSafetyMaxDirectMemoryUsedBytes").asLong());
 
         JsonNode manifest = JSON.readTree(Files.readString(
                 output.resolve("cases/01-blackhole/manifest.json"), StandardCharsets.UTF_8));
@@ -2854,6 +2946,10 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(200, manifest.path("globalPacketLimit").asInt());
         Assertions.assertEquals(4096, manifest.path("maxQueuedBytes").asInt());
         Assertions.assertEquals(2, manifest.path("workers").asInt());
+        Assertions.assertEquals(402_653_184L,
+                manifest.path("resourceSafetyMaxAggregateQueuedBytes").asLong());
+        Assertions.assertEquals(805_306_368L,
+                manifest.path("resourceSafetyMaxDirectMemoryUsedBytes").asLong());
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--recovery-mode bounded"));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode bounded"));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--recovery-mode bounded"));
@@ -2877,6 +2973,23 @@ public class BenchmarkKitTests {
 
         Assertions.assertEquals(2, result.exitCode, result.output);
         Assertions.assertTrue(result.output.contains("--workers must be a positive integer"));
+        Assertions.assertFalse(Files.exists(output.resolve("campaign-plan.json")));
+    }
+
+    @Test
+    public void testNetnsPilotCampaignRejectsInvalidResourceSafetyThresholdBeforePlanning() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-netns-invalid-safety-test").resolve("pilot");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash", root.resolve("benchmark/scripts/run-netns-pilot-campaign.sh").toString(),
+                "--out", output.toString(),
+                "--resource-safety-max-direct-memory-used-bytes", "0");
+
+        Assertions.assertEquals(2, result.exitCode, result.output);
+        Assertions.assertTrue(result.output.contains(
+                "--resource-safety-max-direct-memory-used-bytes must be a positive integer"));
         Assertions.assertFalse(Files.exists(output.resolve("campaign-plan.json")));
     }
 
@@ -4046,6 +4159,11 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(summary.has("packetLimit"));
         Assertions.assertTrue(summary.has("globalPacketLimit"));
         Assertions.assertEquals(1_048_576, summary.path("configuredMaxQueuedBytes").asInt());
+        Assertions.assertEquals(402_653_184L,
+                summary.path("resourceSafetyMaxAggregateQueuedBytes").asLong());
+        Assertions.assertEquals(805_306_368L,
+                summary.path("resourceSafetyMaxDirectMemoryUsedBytes").asLong());
+        Assertions.assertEquals("completed-no-abort", summary.path("resourceSafetyStatus").asText());
         Assertions.assertTrue(summary.has("startAtEpochMillis"));
         Assertions.assertEquals("timeline.jsonl", summary.path("timelineArtifact").asText());
         Assertions.assertEquals("independent-session-iterations", summary.path("measurementWindowSemantics").asText());

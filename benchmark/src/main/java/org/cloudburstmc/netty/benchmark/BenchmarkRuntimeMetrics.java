@@ -35,6 +35,10 @@ final class BenchmarkRuntimeMetrics {
     }
 
     static BenchmarkTimeline.RuntimeMetrics capture() {
+        return capture(null);
+    }
+
+    static BenchmarkTimeline.RuntimeMetrics capture(BenchmarkEventLoopDiagnostics eventLoopDiagnostics) {
         Runtime runtime = Runtime.getRuntime();
         long heapCommitted = runtime.totalMemory();
         long heapUsed = heapCommitted - runtime.freeMemory();
@@ -106,6 +110,18 @@ final class BenchmarkRuntimeMetrics {
         if (processCpuLoad == null) {
             unavailable.add("runtime.processCpuLoad");
         }
+        BenchmarkTimeline.EventLoopMetrics eventLoopMetrics = null;
+        if (eventLoopDiagnostics == null) {
+            unavailable.add("runtime.sharedEventLoops");
+        } else {
+            eventLoopMetrics = eventLoopDiagnostics.capture();
+            if (!"available".equals(eventLoopMetrics.status())) {
+                unavailable.add("runtime.sharedEventLoops");
+            }
+            if (eventLoopMetrics.latestMaxSchedulingLagMillis() == null) {
+                unavailable.add("runtime.sharedEventLoops.latestMaxSchedulingLagMillis");
+            }
+        }
 
         return new BenchmarkTimeline.RuntimeMetrics(
                 heapUsed,
@@ -118,6 +134,7 @@ final class BenchmarkRuntimeMetrics {
                 residentSetSize,
                 processCpuTimeNanos,
                 processCpuLoad,
+                eventLoopMetrics,
                 List.copyOf(unavailable)
         );
     }
