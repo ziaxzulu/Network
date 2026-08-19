@@ -32,6 +32,7 @@ global_packet_limit=""
 max_queued_bytes=""
 workers=""
 reliability="reliable_ordered"
+recovery_mode="legacy"
 namespace_prefix=""
 benchmark_run_user=""
 benchmark_run_group=""
@@ -86,6 +87,7 @@ Options:
   --max-queued-bytes N              Optional per-session RAK_MAX_QUEUED_BYTES override.
   --workers N                       Optional benchmark worker count.
   --reliability MODE                Reliability mode. Default: reliable_ordered.
+  --recovery-mode legacy|bounded    RakNet recovery algorithm. Default: legacy.
   --namespace-prefix NAME           Prefix for created network namespaces.
   --help                            Show this help.
 
@@ -222,6 +224,10 @@ while [[ $# -gt 0 ]]; do
       reliability="$2"
       shift 2
       ;;
+    --recovery-mode)
+      recovery_mode="$2"
+      shift 2
+      ;;
     --namespace-prefix)
       namespace_prefix="$2"
       shift 2
@@ -318,6 +324,15 @@ case "$direction" in
     ;;
   *)
     echo "--direction must be server-to-client, client-to-server, or both" >&2
+    exit 2
+    ;;
+esac
+recovery_mode="${recovery_mode,,}"
+case "$recovery_mode" in
+  legacy|bounded)
+    ;;
+  *)
+    echo "--recovery-mode must be legacy or bounded" >&2
     exit 2
     ;;
 esac
@@ -549,6 +564,7 @@ common_worker_args=(
   --probe-interval "$probe_interval"
   --payload-size "$payload_size"
   --reliability "$reliability"
+  --recovery-mode "$recovery_mode"
 )
 if has_netem; then
   common_worker_args+=(--external-impairment-at-epoch-ms "$netem_at_ms")
@@ -640,6 +656,11 @@ cat >"$manifest" <<EOF
   "loss": "$(json_escape "$loss")",
   "netemLimitPackets": $netem_limit,
   "direction": "$(json_escape "$direction")",
+  "recoveryMode": "$(json_escape "$recovery_mode")",
+  "packetLimit": $(if [[ -n "$packet_limit" ]]; then echo "$packet_limit"; else echo "null"; fi),
+  "globalPacketLimit": $(if [[ -n "$global_packet_limit" ]]; then echo "$global_packet_limit"; else echo "null"; fi),
+  "maxQueuedBytes": $(if [[ -n "$max_queued_bytes" ]]; then echo "$max_queued_bytes"; else echo "null"; fi),
+  "workers": $(if [[ -n "$workers" ]]; then echo "$workers"; else echo "null"; fi),
   "benchmarkDistribution": "$(json_escape "$benchmark_distribution_dir")",
   "startAtEpochMillis": $start_at_ms,
   "probeIntervalMillis": $probe_interval_ms,
@@ -676,6 +697,7 @@ cat >"$report" <<EOF
 - External blackhole at epoch ms: \`$(if [[ "$case_type" == "blackhole" ]]; then echo "$blackhole_at_ms"; else echo "not scheduled"; fi)\`
 - External recovery at epoch ms: \`$(if [[ "$recovery_at_ms" -gt 0 ]]; then echo "$recovery_at_ms"; else echo "not scheduled"; fi)\`
 - Direction: \`$direction\`
+- Recovery mode: \`$recovery_mode\`
 - Netem queue limit: \`$netem_limit packets\`
 - Benchmark distribution: \`$benchmark_distribution_dir\`
 - Netem: latency \`$latency\`, jitter \`$jitter\`, loss \`$loss\`

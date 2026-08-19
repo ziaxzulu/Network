@@ -131,7 +131,7 @@ public class ResilienceResultAnalyzerTests {
         Path baseline = Files.createTempDirectory("raknet-resilience-baseline");
         buildFullCampaignSet(baseline);
         Path candidate = Files.createTempDirectory("raknet-resilience-candidate");
-        buildFullCampaignSet(candidate);
+        buildFullCampaignSet(candidate, "bounded");
         scaleCandidatePressure(candidate, 10);
         Path passingOutput = Files.createTempDirectory("raknet-resilience-comparison-pass");
 
@@ -165,7 +165,7 @@ public class ResilienceResultAnalyzerTests {
                 .findValuesAsText("name").contains("maximumCurrentBytes"));
 
         Path weakCandidate = Files.createTempDirectory("raknet-resilience-weak-candidate");
-        buildFullCampaignSet(weakCandidate);
+        buildFullCampaignSet(weakCandidate, "bounded");
         scaleCandidatePressure(weakCandidate, 2);
         Path failingOutput = Files.createTempDirectory("raknet-resilience-comparison-fail");
         ProcessResult failing = compare(baseline, weakCandidate, failingOutput);
@@ -383,11 +383,111 @@ public class ResilienceResultAnalyzerTests {
     }
 
     @Test
+    public void recoveryModeMustAgreeBetweenManifestAndEveryTimelineRecord() throws Exception {
+        Path mismatched = Files.createTempDirectory("raknet-resilience-recovery-mode-mismatch");
+        copyDenseFixture(fixture, mismatched);
+        Path timeline = mismatched.resolve(
+                "cases/01-blackhole/server/netns-blackhole-10c/timeline.jsonl");
+        List<String> rows = Files.readAllLines(timeline, StandardCharsets.UTF_8);
+        ObjectNode first = (ObjectNode) JSON.readTree(rows.get(0));
+        first.put("recoveryMode", "bounded");
+        rows.set(0, JSON.writeValueAsString(first));
+        Files.writeString(timeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+        Path output = Files.createTempDirectory("raknet-resilience-recovery-mode-mismatch-report");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "python3", analyzer.toString(), "--root", mismatched.toString(),
+                "--out", output.toString());
+
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        Assertions.assertTrue(readReport(output).path("cases").toString()
+                .contains("timeline recoveryMode does not match manifest"));
+
+        Path missing = Files.createTempDirectory("raknet-resilience-recovery-mode-missing");
+        copyDenseFixture(fixture, missing);
+        Path manifestPath = missing.resolve("cases/01-blackhole/manifest.json");
+        ObjectNode manifest = (ObjectNode) JSON.readTree(Files.readString(
+                manifestPath, StandardCharsets.UTF_8));
+        manifest.remove("recoveryMode");
+        Files.writeString(manifestPath, JSON.writeValueAsString(manifest) + "\n", StandardCharsets.UTF_8);
+        Path missingOutput = Files.createTempDirectory("raknet-resilience-recovery-mode-missing-report");
+        ProcessResult missingResult = runProcess(root, Duration.ofSeconds(10),
+                "python3", analyzer.toString(), "--root", missing.toString(),
+                "--out", missingOutput.toString());
+        Assertions.assertEquals(1, missingResult.exitCode, missingResult.output);
+        Assertions.assertTrue(readReport(missingOutput).path("cases").toString()
+                .contains("manifest.recoveryMode must be one of"));
+
+        Path receiverMismatch = Files.createTempDirectory("raknet-resilience-receiver-mode-mismatch");
+        copyDenseFixture(fixture, receiverMismatch);
+        Path receiverTimeline = receiverMismatch.resolve(
+                "cases/01-blackhole/receiver-healthy/netns-blackhole-10c-healthy/timeline.jsonl");
+        List<String> receiverRows = Files.readAllLines(receiverTimeline, StandardCharsets.UTF_8);
+        ObjectNode receiverFirst = (ObjectNode) JSON.readTree(receiverRows.get(0));
+        receiverFirst.put("recoveryMode", "bounded");
+        receiverRows.set(0, JSON.writeValueAsString(receiverFirst));
+        Files.writeString(receiverTimeline, String.join("\n", receiverRows) + "\n", StandardCharsets.UTF_8);
+        Path receiverOutput = Files.createTempDirectory("raknet-resilience-receiver-mode-report");
+        ProcessResult receiverResult = runProcess(root, Duration.ofSeconds(10),
+                "python3", analyzer.toString(), "--root", receiverMismatch.toString(),
+                "--out", receiverOutput.toString());
+        Assertions.assertEquals(1, receiverResult.exitCode, receiverResult.output);
+        Assertions.assertTrue(readReport(receiverOutput).path("cases").toString()
+                .contains("receiver timeline recoveryMode does not match manifest"));
+
+        Path missingReceiver = Files.createTempDirectory("raknet-resilience-receiver-missing");
+        copyDenseFixture(fixture, missingReceiver);
+        Files.delete(missingReceiver.resolve(
+                "cases/01-blackhole/receiver-affected/netns-blackhole-10c-affected/timeline.jsonl"));
+        Path missingReceiverOutput = Files.createTempDirectory("raknet-resilience-receiver-missing-report");
+        ProcessResult missingReceiverResult = runProcess(root, Duration.ofSeconds(10),
+                "python3", analyzer.toString(), "--root", missingReceiver.toString(),
+                "--out", missingReceiverOutput.toString());
+        Assertions.assertEquals(1, missingReceiverResult.exitCode, missingReceiverResult.output);
+        Assertions.assertTrue(readReport(missingReceiverOutput).path("cases").toString()
+                .contains("expected exactly one affected receiver timeline.jsonl"));
+    }
+
+    @Test
+    public void comparisonRequiresLegacyBaselineAndBoundedCandidate() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-mode-baseline");
+        Path wrongCandidate = Files.createTempDirectory("raknet-resilience-mode-candidate");
+        buildFullCampaignSet(baseline);
+        buildFullCampaignSet(wrongCandidate);
+        scaleCandidatePressure(wrongCandidate, 10);
+        Path output = Files.createTempDirectory("raknet-resilience-mode-report");
+
+        ProcessResult result = compare(baseline, wrongCandidate, output);
+
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        JsonNode report = readReport(output);
+        Assertions.assertEquals("fail", findGate(report, "comparison-recovery-mode-provenance")
+                .path("status").asText());
+        Assertions.assertTrue(report.path("comparison").path("issues").toString()
+                .contains("every baseline campaign/case to be legacy"));
+
+        Path boundedCandidate = Files.createTempDirectory("raknet-resilience-mode-plan-candidate");
+        buildFullCampaignSet(boundedCandidate, "bounded");
+        scaleCandidatePressure(boundedCandidate, 10);
+        Path planPath = boundedCandidate.resolve("campaign-1/campaign-plan.json");
+        ObjectNode plan = (ObjectNode) JSON.readTree(Files.readString(planPath, StandardCharsets.UTF_8));
+        ((ObjectNode) plan.path("parameters")).put("recoveryMode", "legacy");
+        Files.writeString(planPath, JSON.writeValueAsString(plan) + "\n", StandardCharsets.UTF_8);
+        Path mismatchOutput = Files.createTempDirectory("raknet-resilience-mode-plan-mismatch-report");
+
+        ProcessResult mismatch = compare(baseline, boundedCandidate, mismatchOutput);
+
+        Assertions.assertEquals(1, mismatch.exitCode, mismatch.output);
+        Assertions.assertTrue(readReport(mismatchOutput).path("campaigns").toString()
+                .contains("campaign recovery mode disagrees with manifest"));
+    }
+
+    @Test
     public void comparisonRejectsAnIncompleteSecondCampaign() throws Exception {
         Path baseline = Files.createTempDirectory("raknet-resilience-campaign-baseline");
         buildFullCampaignSet(baseline);
         Path candidate = Files.createTempDirectory("raknet-resilience-campaign-candidate");
-        buildFullCampaignSet(candidate);
+        buildFullCampaignSet(candidate, "bounded");
         scaleCandidatePressure(candidate, 10);
         Path summaryPath = candidate.resolve("campaign-2/campaign-summary.json");
         ObjectNode summary = (ObjectNode) JSON.readTree(Files.readString(summaryPath, StandardCharsets.UTF_8));
@@ -411,7 +511,7 @@ public class ResilienceResultAnalyzerTests {
         Path baseline = Files.createTempDirectory("raknet-resilience-identity-baseline");
         buildFullCampaignSet(baseline);
         Path copiedIdentity = Files.createTempDirectory("raknet-resilience-copied-identity");
-        buildFullCampaignSet(copiedIdentity);
+        buildFullCampaignSet(copiedIdentity, "bounded");
         scaleCandidatePressure(copiedIdentity, 10);
         ObjectNode firstPlan = (ObjectNode) JSON.readTree(Files.readString(
                 copiedIdentity.resolve("campaign-1/campaign-plan.json"), StandardCharsets.UTF_8));
@@ -427,14 +527,24 @@ public class ResilienceResultAnalyzerTests {
                 .path("status").asText());
 
         Path drifted = Files.createTempDirectory("raknet-resilience-config-drift");
-        buildFullCampaignSet(drifted);
+        buildFullCampaignSet(drifted, "bounded");
         scaleCandidatePressure(drifted, 10);
         Path driftedPlanPath = drifted.resolve("campaign-2/campaign-plan.json");
         ObjectNode driftedPlan = (ObjectNode) JSON.readTree(Files.readString(
                 driftedPlanPath, StandardCharsets.UTF_8));
-        ((ObjectNode) driftedPlan.path("parameters")).put("duration", "21s");
+        ((ObjectNode) driftedPlan.path("parameters")).put("workers", 2);
         Files.writeString(driftedPlanPath, JSON.writeValueAsString(driftedPlan) + "\n",
                 StandardCharsets.UTF_8);
+        try (var manifests = Files.walk(drifted.resolve("campaign-2/cases"))) {
+            for (Path manifestPath : manifests.filter(path -> path.getFileName().toString()
+                    .equals("manifest.json")).toList()) {
+                ObjectNode manifest = (ObjectNode) JSON.readTree(Files.readString(
+                        manifestPath, StandardCharsets.UTF_8));
+                manifest.put("workers", 2);
+                Files.writeString(manifestPath, JSON.writeValueAsString(manifest) + "\n",
+                        StandardCharsets.UTF_8);
+            }
+        }
         Path driftedOutput = Files.createTempDirectory("raknet-resilience-config-drift-report");
         ProcessResult drift = compare(baseline, drifted, driftedOutput);
         Assertions.assertEquals(1, drift.exitCode, drift.output);
@@ -447,7 +557,7 @@ public class ResilienceResultAnalyzerTests {
         Path baseline = Files.createTempDirectory("raknet-resilience-missing-severe-baseline");
         Path candidate = Files.createTempDirectory("raknet-resilience-missing-severe-candidate");
         buildFullCampaignSet(baseline);
-        buildFullCampaignSet(candidate);
+        buildFullCampaignSet(candidate, "bounded");
         removeSevereInitialNetem(baseline);
         removeSevereInitialNetem(candidate);
         scaleCandidatePressure(candidate, 10);
@@ -526,6 +636,10 @@ public class ResilienceResultAnalyzerTests {
                 List<String> rewritten = new ArrayList<>();
                 for (String line : Files.readAllLines(timeline, StandardCharsets.UTF_8)) {
                     ObjectNode row = (ObjectNode) JSON.readTree(line);
+                    if (!row.path("affected").isObject()) {
+                        rewritten.add(JSON.writeValueAsString(row));
+                        continue;
+                    }
                     ObjectNode cohort = (ObjectNode) row.path("affected");
                     if (cohort.path("configuredPeers").asInt() == 0) {
                         rewritten.add(JSON.writeValueAsString(row));
@@ -578,6 +692,10 @@ public class ResilienceResultAnalyzerTests {
     }
 
     private static void buildFullCampaignSet(Path output) throws Exception {
+        buildFullCampaignSet(output, "legacy");
+    }
+
+    private static void buildFullCampaignSet(Path output, String recoveryMode) throws Exception {
         for (int campaignIndex = 1; campaignIndex <= 2; campaignIndex++) {
             Path campaign = output.resolve("campaign-" + campaignIndex);
             Files.createDirectories(campaign.resolve("cases"));
@@ -589,7 +707,7 @@ public class ResilienceResultAnalyzerTests {
                 String profile = names.get(profileIndex);
                 Path caseRoot = campaign.resolve("cases/%02d-%s".formatted(profileIndex + 1, profile));
                 copyDenseFixture(fixture.resolve("cases/01-blackhole"), caseRoot);
-                configureProfile(caseRoot, profile, campaignIndex);
+                configureProfile(caseRoot, profile, campaignIndex, recoveryMode);
                 String[] shape = profileShape(profile);
                 String caseType = profile.equals("perfect") ? "fanout"
                         : profile.equals("blackhole") ? "blackhole" : "fairness";
@@ -624,6 +742,11 @@ public class ResilienceResultAnalyzerTests {
             parameters.put("blackholeDuration", "3s");
             parameters.put("direction", "both");
             parameters.put("reliability", "RELIABLE_ORDERED");
+            parameters.put("recoveryMode", recoveryMode);
+            parameters.putNull("packetLimit");
+            parameters.putNull("globalPacketLimit");
+            parameters.putNull("maxQueuedBytes");
+            parameters.putNull("workers");
             Files.writeString(campaign.resolve("campaign-plan.json"),
                     JSON.writerWithDefaultPrettyPrinter().writeValueAsString(plan) + "\n", StandardCharsets.UTF_8);
             ObjectNode summary = JSON.createObjectNode();
@@ -640,7 +763,8 @@ public class ResilienceResultAnalyzerTests {
         }
     }
 
-    private static void configureProfile(Path caseRoot, String profile, int campaignIndex) throws Exception {
+    private static void configureProfile(Path caseRoot, String profile, int campaignIndex,
+                                         String recoveryMode) throws Exception {
         Path manifestPath = caseRoot.resolve("manifest.json");
         ObjectNode manifest = (ObjectNode) JSON.readTree(Files.readString(manifestPath, StandardCharsets.UTF_8));
         String runId = "netns-" + profile + "-10c-" + campaignIndex;
@@ -652,6 +776,7 @@ public class ResilienceResultAnalyzerTests {
         manifest.put("affectedClients", perfect ? 0 : 2);
         manifest.put("healthyClients", perfect ? 10 : 8);
         manifest.put("direction", "both");
+        manifest.put("recoveryMode", recoveryMode);
         String[] shape = profileShape(profile);
         manifest.put("latency", shape[0]);
         manifest.put("jitter", shape[1]);
@@ -679,6 +804,7 @@ public class ResilienceResultAnalyzerTests {
         for (String line : Files.readAllLines(oldTimeline, StandardCharsets.UTF_8)) {
             ObjectNode row = (ObjectNode) JSON.readTree(line);
             row.put("runId", runId);
+            row.put("recoveryMode", recoveryMode);
             if (blackhole) {
                 row.putNull("externalImpairmentAtEpochMillis");
                 row.put("externalBlackholeAtEpochMillis", 102000);
@@ -697,6 +823,16 @@ public class ResilienceResultAnalyzerTests {
         }
         Files.writeString(timeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
         deleteTree(oldTimeline.getParent());
+
+        String healthyRunId = runId + (perfect ? "-receiver" : "-healthy");
+        configureReceiverTimeline(caseRoot, "receiver-healthy", "netns-blackhole-10c-healthy",
+                healthyRunId, recoveryMode);
+        if (perfect) {
+            deleteTree(caseRoot.resolve("receiver-affected"));
+        } else {
+            configureReceiverTimeline(caseRoot, "receiver-affected", "netns-blackhole-10c-affected",
+                    runId + "-affected", recoveryMode);
+        }
 
         ObjectNode summary = (ObjectNode) JSON.readTree(Files.readString(
                 caseRoot.resolve("merged/lab-summary.json"), StandardCharsets.UTF_8));
@@ -728,6 +864,22 @@ public class ResilienceResultAnalyzerTests {
                         qdiscRow(116_100, "affected", "rcvi", netemQdisc)) + "\n", StandardCharsets.UTF_8);
             }
         }
+    }
+
+    private static void configureReceiverTimeline(Path caseRoot, String directory, String oldRunId,
+                                                  String newRunId, String recoveryMode) throws Exception {
+        Path oldTimeline = caseRoot.resolve(directory).resolve(oldRunId).resolve("timeline.jsonl");
+        Path newTimeline = caseRoot.resolve(directory).resolve(newRunId).resolve("timeline.jsonl");
+        List<String> rows = new ArrayList<>();
+        for (String line : Files.readAllLines(oldTimeline, StandardCharsets.UTF_8)) {
+            ObjectNode row = (ObjectNode) JSON.readTree(line);
+            row.put("runId", newRunId);
+            row.put("recoveryMode", recoveryMode);
+            rows.add(JSON.writeValueAsString(row));
+        }
+        Files.createDirectories(newTimeline.getParent());
+        Files.writeString(newTimeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+        deleteTree(oldTimeline.getParent());
     }
 
     private static String[] profileShape(String profile) {

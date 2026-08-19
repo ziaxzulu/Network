@@ -6,8 +6,10 @@ veth pairs, and qdiscs. Candidate Java runs as the explicitly configured `zulu`
 user from a root-owned, read-only staged distribution; it never runs as root or
 as the obsolete `rakbench` service account.
 
-The passwordless launcher accepts no arguments. A small `zulu`-owned mode file
-selects one of six root-owned scenario definitions:
+The passwordless launcher accepts no arguments. A small `zulu`-owned goal-mode
+file selects one of six root-owned scenario definitions, while a second fixed
+selection file chooses the transport recovery algorithm (`legacy` or
+`bounded`). Recovery defaults to `legacy`.
 
 | Mode | Purpose |
 | --- | --- |
@@ -40,8 +42,9 @@ sudo visudo -cf /etc/sudoers
 The installer does not edit sudoers. It installs the reviewed scripts into
 `/usr/local/libexec/raknet-netns-benchmark`, replaces the existing
 `/usr/local/sbin/raknet-netns-pilot` launcher, validates the existing `zulu`
-user and group, and creates `/var/lib/raknet-netns-benchmark/goal-mode`. It does
-not create, modify, or remove the old `rakbench` account if one already exists.
+user and group, and creates `/var/lib/raknet-netns-benchmark/goal-mode` plus
+`/var/lib/raknet-netns-benchmark/recovery-mode`. It does not create, modify, or
+remove the old `rakbench` account if one already exists.
 
 Keep the existing exact authorization:
 
@@ -61,12 +64,27 @@ invoke the fixed launcher:
 cd /home/zulu/development/ziax/Network
 ./gradlew --no-daemon :benchmark:installDist
 printf '%s\n' pilot > /var/lib/raknet-netns-benchmark/goal-mode
+printf '%s\n' legacy > /var/lib/raknet-netns-benchmark/recovery-mode
 sudo -n /usr/local/sbin/raknet-netns-pilot
 ```
 
+For a candidate campaign using the bounded recovery implementation, change only
+the recovery selection before invoking the same fixed launcher:
+
+```bash
+printf '%s\n' bounded > /var/lib/raknet-netns-benchmark/recovery-mode
+sudo -n /usr/local/sbin/raknet-netns-pilot
+```
+
+Use `legacy` for every baseline campaign and `bounded` for every candidate
+campaign. The launcher records the selected value in the goal manifest; each
+campaign plan, case manifest, and Java timeline repeats it so analysis can
+reject missing, mixed, or mislabeled results.
+
 Results are readable by `zulu` below
 `/var/lib/raknet-netns-benchmark/runs/netns-goal-<mode>-*`. Each run records the
-candidate Git revision, the exact staged-jar hashes, and the selected mode.
+candidate Git revision, the exact staged-jar hashes, the selected scenario
+mode, and the selected recovery mode.
 Worker `timeline.jsonl` files are flushed continuously at 100-250 ms cadence;
 qdisc evidence includes millisecond apply bounds and one-second `tc -s`
 snapshots. Transition runs also record the independently scheduled blackhole and
@@ -78,8 +96,9 @@ the workers, so `--blackhole-after` is relative to measurement rather than the
 end of warmup.
 
 The launcher rejects concurrent runs, untrusted installed scripts, symlinked or
-oversized mode controls, and missing candidate distributions. Each subcampaign
-has a 45-minute watchdog, and current-run namespaces are removed during cleanup.
+oversized selection controls, unsupported recovery values, and missing
+candidate distributions. Each subcampaign has a 45-minute watchdog, and
+current-run namespaces are removed during cleanup.
 
 ## Trust boundary
 

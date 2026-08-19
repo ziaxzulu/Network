@@ -24,6 +24,7 @@ global_packet_limit=""
 max_queued_bytes=""
 workers=""
 reliability="reliable_ordered"
+recovery_mode="legacy"
 campaign_run_user=""
 
 usage() {
@@ -63,6 +64,7 @@ Options:
   --max-queued-bytes N              Optional per-session queue cap.
   --workers N                       Optional benchmark worker count.
   --reliability MODE                Reliability mode. Default: reliable_ordered.
+  --recovery-mode legacy|bounded    RakNet recovery algorithm. Default: legacy.
   --help                            Show this help.
 
 Profiles:
@@ -175,6 +177,10 @@ while [[ $# -gt 0 ]]; do
       reliability="$2"
       shift 2
       ;;
+    --recovery-mode)
+      recovery_mode="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -206,6 +212,22 @@ if ! [[ "$netem_limit" =~ ^[0-9]+$ && "$netem_limit" -gt 0 ]]; then
   echo "--netem-limit must be a positive integer" >&2
   exit 2
 fi
+for optional_name in packet_limit global_packet_limit max_queued_bytes workers; do
+  if [[ -n "${!optional_name}" ]] \
+      && ! [[ "${!optional_name}" =~ ^[0-9]+$ && "${!optional_name}" -gt 0 ]]; then
+    echo "--${optional_name//_/-} must be a positive integer" >&2
+    exit 2
+  fi
+done
+recovery_mode="${recovery_mode,,}"
+case "$recovery_mode" in
+  legacy|bounded)
+    ;;
+  *)
+    echo "--recovery-mode must be legacy or bounded" >&2
+    exit 2
+    ;;
+esac
 if [[ ! -x "$runner" ]]; then
   echo "Netns worker runner is missing or not executable: $runner" >&2
   exit 2
@@ -325,6 +347,11 @@ jq -n \
   --arg blackholeDuration "$blackhole_duration" \
   --arg direction "$direction" \
   --arg reliability "$reliability" \
+  --arg recoveryMode "$recovery_mode" \
+  --arg packetLimit "$packet_limit" \
+  --arg globalPacketLimit "$global_packet_limit" \
+  --arg maxQueuedBytes "$max_queued_bytes" \
+  --arg workers "$workers" \
   '{
     kind: "raknet-netns-pilot-campaign",
     generatedAt: $generatedAt,
@@ -347,7 +374,12 @@ jq -n \
       blackholeAfter: $blackholeAfter,
       blackholeDuration: (if $blackholeDuration == "" then null else $blackholeDuration end),
       direction: $direction,
-      reliability: $reliability
+      reliability: $reliability,
+      recoveryMode: $recoveryMode,
+      packetLimit: (if $packetLimit == "" then null else ($packetLimit | tonumber) end),
+      globalPacketLimit: (if $globalPacketLimit == "" then null else ($globalPacketLimit | tonumber) end),
+      maxQueuedBytes: (if $maxQueuedBytes == "" then null else ($maxQueuedBytes | tonumber) end),
+      workers: (if $workers == "" then null else ($workers | tonumber) end)
     }
   }' >"$campaign_plan"
 
@@ -370,6 +402,7 @@ fi
 
 echo "Netns pilot campaign: $output_root"
 echo "Profiles: ${normalized_profiles[*]}"
+echo "Recovery mode: $recovery_mode"
 if ! "$execute"; then
   echo "Dry-run only. Re-run this command with sudo and --execute after reviewing campaign-plan.json."
 fi
@@ -406,6 +439,7 @@ for profile in "${normalized_profiles[@]}"; do
     --loss "$loss"
     --direction "$direction"
     --reliability "$reliability"
+    --recovery-mode "$recovery_mode"
     "${optional_args[@]}"
   )
   if [[ "$case_type" == "fairness" || "$case_type" == "blackhole" ]]; then
@@ -476,6 +510,7 @@ jq -s \
   echo "- Clients per case: \`$clients\`"
   echo "- Affected clients: \`$affected_clients\`"
   echo "- Offered rate: \`${per_client_mbps}Mbps/client\`"
+  echo "- Recovery mode: \`$recovery_mode\`"
   echo
   if "$execute"; then
     echo "| Profile | Impairment | Delivered Gbps | Healthy Gbps | Affected Gbps | Healthy Mbps p50 | Probe p99 ms | Max queue bytes | Stable |"

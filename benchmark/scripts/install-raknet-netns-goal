@@ -19,6 +19,7 @@ installed_scripts="$install_root/benchmark/scripts"
 launcher_target="/usr/local/sbin/raknet-netns-pilot"
 state_root="/var/lib/raknet-netns-benchmark"
 mode_file="$state_root/goal-mode"
+recovery_mode_file="$state_root/recovery-mode"
 result_owner="zulu"
 result_group="zulu"
 
@@ -74,10 +75,13 @@ install -o root -g root -m 0755 \
   "$source_root/raknet-netns-goal-root" \
   "$launcher_target"
 
-if [[ ! -e "$mode_file" ]]; then
+if [[ -L "$mode_file" ]]; then
+  echo "Refusing symlinked goal mode path: $mode_file" >&2
+  exit 77
+elif [[ ! -e "$mode_file" ]]; then
   install -o "$result_owner" -g "$result_group" -m 0644 /dev/null "$mode_file"
   printf 'pilot\n' >"$mode_file"
-elif [[ -L "$mode_file" || ! -f "$mode_file" ]]; then
+elif [[ ! -f "$mode_file" ]]; then
   echo "Refusing non-regular goal mode path: $mode_file" >&2
   exit 77
 else
@@ -94,8 +98,34 @@ case "$mode" in
     ;;
 esac
 
+if [[ -L "$recovery_mode_file" ]]; then
+  echo "Refusing symlinked recovery mode path: $recovery_mode_file" >&2
+  exit 77
+elif [[ ! -e "$recovery_mode_file" ]]; then
+  install -o "$result_owner" -g "$result_group" -m 0644 /dev/null "$recovery_mode_file"
+  printf 'legacy\n' >"$recovery_mode_file"
+elif [[ ! -f "$recovery_mode_file" ]]; then
+  echo "Refusing non-regular recovery mode path: $recovery_mode_file" >&2
+  exit 77
+else
+  chown "$result_owner:$result_group" "$recovery_mode_file"
+  chmod 0644 "$recovery_mode_file"
+fi
+
+recovery_mode="$(<"$recovery_mode_file")"
+case "$recovery_mode" in
+  legacy|bounded)
+    ;;
+  *)
+    printf 'legacy\n' >"$recovery_mode_file"
+    ;;
+esac
+
 echo "Installed autonomous launcher: $launcher_target"
 echo "Installed root-owned orchestration: $installed_scripts"
 echo "Benchmark JVM and result account: $result_owner"
 echo "Goal mode file: $mode_file"
+echo "Recovery mode file: $recovery_mode_file"
+printf '%s\n' "Select legacy recovery: printf '%s\\n' legacy > $recovery_mode_file"
+printf '%s\n' "Select bounded recovery: printf '%s\\n' bounded > $recovery_mode_file"
 echo "Existing exact sudoers authorization for $launcher_target with no arguments can be retained."

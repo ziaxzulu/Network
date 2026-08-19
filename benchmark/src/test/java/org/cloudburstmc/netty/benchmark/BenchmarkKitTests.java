@@ -2453,14 +2453,22 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("5ms", manifest.path("jitter").asText());
         Assertions.assertEquals("2%", manifest.path("loss").asText());
         Assertions.assertEquals("both", manifest.path("direction").asText());
+        Assertions.assertEquals("legacy", manifest.path("recoveryMode").asText());
+        Assertions.assertTrue(manifest.path("packetLimit").isNull());
+        Assertions.assertTrue(manifest.path("globalPacketLimit").isNull());
+        Assertions.assertTrue(manifest.path("maxQueuedBytes").isNull());
+        Assertions.assertTrue(manifest.path("workers").isNull());
         Assertions.assertEquals(10_000, manifest.path("netemLimitPackets").asInt());
         Assertions.assertEquals(root.resolve("benchmark/build/install/benchmark").toString(),
                 manifest.path("benchmarkDistribution").asText());
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--clients 10"));
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--recovery-mode legacy"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--external-impairment-at-epoch-ms "));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
+        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode legacy"));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--external-impairment-at-epoch-ms "));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--clients 2"));
+        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--recovery-mode legacy"));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--external-impairment-at-epoch-ms "));
 
         String readme = Files.readString(output.resolve("README.md"), StandardCharsets.UTF_8);
@@ -2541,6 +2549,12 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8);
         Assertions.assertTrue(launcher.contains("This privileged goal launcher does not accept arguments"));
         Assertions.assertTrue(launcher.contains("pilot|transition|long-hold|cap-sweep|cohort-sweep|all"));
+        Assertions.assertTrue(launcher.contains("recovery_mode_file=\"$state_root/recovery-mode\""));
+        Assertions.assertTrue(launcher.contains("legacy|bounded"));
+        Assertions.assertTrue(launcher.contains("stat -c %U:%G \"$recovery_mode_file\""));
+        Assertions.assertTrue(launcher.contains("stat -c %a \"$recovery_mode_file\""));
+        Assertions.assertTrue(launcher.contains("stat -c %s \"$recovery_mode_file\""));
+        Assertions.assertTrue(launcher.contains("--recovery-mode \"$recovery_mode\""));
         Assertions.assertTrue(launcher.contains("require_trusted_path \"$launcher_path\""));
         Assertions.assertTrue(launcher.contains("flock -n 9"));
         Assertions.assertTrue(launcher.contains("timeout --signal=TERM --kill-after=30s"));
@@ -2579,6 +2593,12 @@ public class BenchmarkKitTests {
         Assertions.assertFalse(installer.contains("benchmark_home"));
         Assertions.assertFalse(installer.contains("rakbench"));
         Assertions.assertFalse(installer.contains("/etc/sudoers"));
+        Assertions.assertTrue(installer.contains("recovery_mode_file=\"$state_root/recovery-mode\""));
+        Assertions.assertTrue(installer.contains("printf 'legacy\\n' >\"$recovery_mode_file\""));
+        Assertions.assertTrue(installer.indexOf("if [[ -L \"$recovery_mode_file\" ]]")
+                < installer.indexOf("elif [[ ! -e \"$recovery_mode_file\" ]]"));
+        Assertions.assertTrue(installer.contains(
+                "Select bounded recovery: printf '%s\\\\n' bounded > $recovery_mode_file"));
 
         String documentation = Files.readString(root.resolve("benchmark/docs/netns-autonomous-goal.md"),
                 StandardCharsets.UTF_8);
@@ -2586,6 +2606,8 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(documentation.contains("normal filesystem access of the `zulu` account"));
         Assertions.assertTrue(documentation.contains(
                 "zulu ALL=(root) NOPASSWD: /usr/local/sbin/raknet-netns-pilot \"\""));
+        Assertions.assertTrue(documentation.contains(
+                "printf '%s\\n' bounded > /var/lib/raknet-netns-benchmark/recovery-mode"));
     }
 
     @Test
@@ -2767,6 +2789,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("severe", plan.path("profiles").get(4).path("profile").asText());
         Assertions.assertEquals("blackhole", plan.path("profiles").get(5).path("profile").asText());
         Assertions.assertEquals(10_000, plan.path("parameters").path("netemLimitPackets").asInt());
+        Assertions.assertEquals("legacy", plan.path("parameters").path("recoveryMode").asText());
         Assertions.assertTrue(Files.exists(output.resolve("cases/01-perfect/manifest.json")));
         Assertions.assertTrue(Files.exists(output.resolve("cases/06-blackhole/manifest.json")));
 
@@ -2798,7 +2821,12 @@ public class BenchmarkKitTests {
                 "--start-offset", "10s",
                 "--blackhole-after", "100ms",
                 "--blackhole-duration", "200ms",
-                "--direction", "both"
+                "--direction", "both",
+                "--recovery-mode", "bounded",
+                "--packet-limit", "100",
+                "--global-packet-limit", "200",
+                "--max-queued-bytes", "4096",
+                "--workers", "2"
         );
 
         Assertions.assertEquals(0, result.exitCode, result.output);
@@ -2808,14 +2836,46 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("blackhole", plan.path("profiles").get(0).path("profile").asText());
         Assertions.assertEquals("200ms", plan.path("parameters").path("blackholeDuration").asText());
         Assertions.assertEquals("both", plan.path("parameters").path("direction").asText());
+        Assertions.assertEquals("bounded", plan.path("parameters").path("recoveryMode").asText());
+        Assertions.assertEquals(100, plan.path("parameters").path("packetLimit").asInt());
+        Assertions.assertEquals(200, plan.path("parameters").path("globalPacketLimit").asInt());
+        Assertions.assertEquals(4096, plan.path("parameters").path("maxQueuedBytes").asInt());
+        Assertions.assertEquals(2, plan.path("parameters").path("workers").asInt());
 
         JsonNode manifest = JSON.readTree(Files.readString(
                 output.resolve("cases/01-blackhole/manifest.json"), StandardCharsets.UTF_8));
         Assertions.assertEquals(200L,
                 manifest.path("recoveryAtEpochMillis").asLong()
                         - manifest.path("blackholeAtEpochMillis").asLong());
+        Assertions.assertEquals("bounded", manifest.path("recoveryMode").asText());
+        Assertions.assertEquals(100, manifest.path("packetLimit").asInt());
+        Assertions.assertEquals(200, manifest.path("globalPacketLimit").asInt());
+        Assertions.assertEquals(4096, manifest.path("maxQueuedBytes").asInt());
+        Assertions.assertEquals(2, manifest.path("workers").asInt());
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--recovery-mode bounded"));
+        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode bounded"));
+        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--recovery-mode bounded"));
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--packet-limit 100"));
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--global-packet-limit 200"));
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--max-queued-bytes 4096"));
+        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--workers 2"));
         Assertions.assertTrue(manifest.path("serverArgs").asText()
                 .contains("--external-recovery-at-epoch-ms "));
+    }
+
+    @Test
+    public void testNetnsPilotCampaignRejectsInvalidOptionalKnobBeforePlanning() throws Exception {
+        assumeShellTooling();
+        Path root = repoRoot();
+        Path output = Files.createTempDirectory("raknet-netns-invalid-optional-test").resolve("pilot");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "bash", root.resolve("benchmark/scripts/run-netns-pilot-campaign.sh").toString(),
+                "--out", output.toString(), "--workers", "0");
+
+        Assertions.assertEquals(2, result.exitCode, result.output);
+        Assertions.assertTrue(result.output.contains("--workers must be a positive integer"));
+        Assertions.assertFalse(Files.exists(output.resolve("campaign-plan.json")));
     }
 
     @Test

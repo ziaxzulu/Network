@@ -105,7 +105,12 @@ same required event from baseline and candidate cannot bypass comparison.
 
 Comparison additionally requires at least two distinct complete campaign
 execution identities on each side, not two directory copies of one execution.
-All four or more campaigns must carry the same full plan configuration. A
+All baseline campaign plans, case manifests, and timeline records must say
+`legacy`; all candidate evidence must say `bounded`. The analyzer permits that
+single intentional algorithm difference, then requires every other network and
+workload parameter to match exactly across all four or more campaigns. Missing,
+invalid, mixed, or plan/manifest/timeline-disagreeing recovery values fail the
+comparison. A
 complete campaign must have an executed and passing campaign
 summary, exactly the profiles `perfect`, `near-loss`, `regional-loss`, `poor`,
 `severe`, and `blackhole`, one completed status and result per profile, and a

@@ -43,6 +43,7 @@ QUEUE_FIELDS = (
     "currentBytesAtTPlus10",
 )
 FULL_CAMPAIGN_PROFILES = ("perfect", "near-loss", "regional-loss", "poor", "severe", "blackhole")
+RECOVERY_MODES = ("legacy", "bounded")
 MAX_TIMELINE_SAMPLE_GAP_MILLIS = 500
 QDISC_SAMPLE_TOLERANCE_MILLIS = 1500
 COUNTERS = (
@@ -207,10 +208,14 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
             "clients", "affectedClients", "payloadSize", "perClientMbps", "warmup", "duration",
             "iterations", "probeInterval", "startDelay", "startOffset", "netemBeforeStart",
             "netemLimitPackets", "blackholeAfter", "blackholeDuration", "direction", "reliability",
+            "recoveryMode", "packetLimit", "globalPacketLimit", "maxQueuedBytes", "workers",
         )
         missing_parameters = [field for field in required_parameters if field not in parameters]
         if missing_parameters:
             raise AnalysisError(f"campaign plan parameters are incomplete: {missing_parameters}")
+        planned_recovery_mode = require_recovery_mode(parameters, "campaign plan parameters")
+        for field in ("packetLimit", "globalPacketLimit", "maxQueuedBytes", "workers"):
+            require_optional_positive_int(parameters, field, "campaign plan parameters")
         if summary.get("kind") != "raknet-netns-pilot-summary" or summary.get("executed") is not True \
                 or summary.get("executionPassed") is not True:
             raise AnalysisError("campaign summary does not prove successful execution")
@@ -262,6 +267,10 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
             manifest = case.get("manifest")
             if not isinstance(manifest, dict):
                 raise AnalysisError(f"campaign case {profile} lacks a validated manifest")
+            if require_recovery_mode(manifest, f"campaign case {profile} manifest") != planned_recovery_mode:
+                raise AnalysisError(f"campaign recovery mode disagrees with manifest for {profile}")
+            if case.get("recoveryMode") != planned_recovery_mode:
+                raise AnalysisError(f"campaign recovery mode disagrees with timeline for {profile}")
             planned = profile_by_name[profile]
             if manifest.get("case") != planned["caseType"]:
                 raise AnalysisError(f"campaign case type disagrees with manifest for {profile}")
@@ -273,6 +282,10 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
                 "perClientMbps": manifest.get("perClientMbps"),
                 "netemLimitPackets": manifest.get("netemLimitPackets"),
                 "direction": manifest.get("direction"),
+                "packetLimit": manifest.get("packetLimit"),
+                "globalPacketLimit": manifest.get("globalPacketLimit"),
+                "maxQueuedBytes": manifest.get("maxQueuedBytes"),
+                "workers": manifest.get("workers"),
             }
             for field, actual in reconciled.items():
                 expected = parameters.get(field)
@@ -288,13 +301,17 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
             if Path(status_artifact).name != expected_case_name or Path(result_artifact).name != expected_case_name:
                 raise AnalysisError(f"campaign artifact provenance disagrees with discovered case for {profile}")
 
-        configuration = {"profiles": profile_rows, "parameters": parameters}
+        comparison_parameters = {
+            field: value for field, value in parameters.items() if field != "recoveryMode"
+        }
+        configuration = {"profiles": profile_rows, "parameters": comparison_parameters}
         identity = f"{generated}|{output_root}"
         result.update({
             "status": "pass",
             "profiles": plan_profiles,
             "fullCampaign": plan_profiles == list(FULL_CAMPAIGN_PROFILES),
             "executionIdentity": identity,
+            "recoveryMode": planned_recovery_mode,
             "experimentConfiguration": configuration,
             "experimentConfigurationKey": json.dumps(configuration, sort_keys=True, separators=(",", ":")),
             "plan": str(campaign_root / "campaign-plan.json"),
@@ -324,8 +341,60 @@ def require_number(container: dict[str, Any], field: str, context: str, *, nonne
     return float(value)
 
 
+def require_recovery_mode(container: dict[str, Any], context: str) -> str:
+    value = container.get("recoveryMode")
+    if value not in RECOVERY_MODES:
+        raise AnalysisError(
+            f"{context}.recoveryMode must be one of: {', '.join(RECOVERY_MODES)}"
+        )
+    return value
+
+
+def require_optional_positive_int(container: dict[str, Any], field: str, context: str) -> int | None:
+    if field not in container:
+        raise AnalysisError(f"{context}.{field} must be present as null or a positive integer")
+    value = container[field]
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise AnalysisError(f"{context}.{field} must be null or a positive integer")
+    return value
+
+
+def validate_role_timeline(path: Path, manifest: dict[str, Any], expected_run_id: str) -> dict[str, Any]:
+    rows = read_jsonl(path)
+    expected_recovery_mode = require_recovery_mode(manifest, "manifest")
+    sequences: list[int] = []
+    for index, row in enumerate(rows):
+        context = f"receiver timeline record {index + 1}"
+        if row.get("schemaVersion") != SCHEMA_VERSION:
+            raise AnalysisError(f"unsupported receiver timeline schema at {path} record {index + 1}")
+        sequence = row.get("sequence")
+        if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+            raise AnalysisError(f"invalid receiver timeline sequence at {path} record {index + 1}")
+        sequences.append(sequence)
+        if row.get("recordType") not in ("event", "sample"):
+            raise AnalysisError(f"unknown receiver recordType at {path} record {index + 1}")
+        if row.get("role") != "client":
+            raise AnalysisError(f"{context}.role must be client in {path}")
+        if row.get("runId") != expected_run_id:
+            raise AnalysisError(f"receiver timeline runId does not match worker topology: {path}")
+        actual_recovery_mode = require_recovery_mode(row, context)
+        if actual_recovery_mode != expected_recovery_mode:
+            raise AnalysisError(f"receiver timeline recoveryMode does not match manifest: {path}")
+    if sequences != sorted(sequences) or len(sequences) != len(set(sequences)):
+        raise AnalysisError(f"receiver timeline sequences are not strictly increasing: {path}")
+    return {
+        "status": "available",
+        "recordCount": len(rows),
+        "runId": expected_run_id,
+        "recoveryMode": expected_recovery_mode,
+    }
+
+
 def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows = read_jsonl(path)
+    expected_recovery_mode = require_recovery_mode(manifest, "manifest")
     sequences: list[int] = []
     samples: list[dict[str, Any]] = []
     run_ids: set[str] = set()
@@ -336,6 +405,9 @@ def parse_timeline(path: Path, manifest: dict[str, Any]) -> tuple[list[dict[str,
         if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
             raise AnalysisError(f"invalid timeline sequence at {path} record {index + 1}")
         sequences.append(sequence)
+        actual_recovery_mode = require_recovery_mode(row, f"timeline record {index + 1}")
+        if actual_recovery_mode != expected_recovery_mode:
+            raise AnalysisError(f"timeline recoveryMode does not match manifest: {path}")
         if isinstance(row.get("runId"), str):
             run_ids.add(row["runId"])
         record_type = row.get("recordType")
@@ -1065,6 +1137,10 @@ def shape_key(case: dict[str, Any], *, perfect_reference: bool = False) -> str:
         "rateMbps": manifest.get("rateMbps"),
         "reliability": aggregate.get("reliability"),
         "configuredMaxQueuedBytes": aggregate.get("configuredMaxQueuedBytes"),
+        "packetLimit": manifest.get("packetLimit"),
+        "globalPacketLimit": manifest.get("globalPacketLimit"),
+        "maxQueuedBytes": manifest.get("maxQueuedBytes"),
+        "workers": manifest.get("workers"),
         "measuredIterations": aggregate.get("measuredIterations"),
         "elapsedMillis": aggregate.get("elapsedMillis"),
         "targetClientMbps": aggregate.get("targetClientMbps"),
@@ -1110,6 +1186,16 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
         if manifest.get("kind") != "raknet-netns-worker-smoke" or manifest.get("execute") is not True:
             raise AnalysisError(f"manifest is not an executed netns worker case: {manifest_path}")
         result["manifest"] = manifest
+        result["recoveryMode"] = require_recovery_mode(manifest, "manifest")
+        for field in ("packetLimit", "globalPacketLimit", "maxQueuedBytes", "workers"):
+            require_optional_positive_int(manifest, field, "manifest")
+        run_id = manifest.get("runId")
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise AnalysisError("manifest.runId must be a non-empty string")
+        healthy_clients = require_number(manifest, "healthyClients", "manifest")
+        affected_clients = require_number(manifest, "affectedClients", "manifest")
+        if healthy_clients != int(healthy_clients) or affected_clients != int(affected_clients):
+            raise AnalysisError("manifest healthy/affected client counts must be integers")
         result["profile"] = profile_name(manifest)
         campaign_root = find_campaign_root(case_root)
         result["campaignRoot"] = None if campaign_root is None else str(campaign_root)
@@ -1117,6 +1203,33 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
         samples, timeline_availability = parse_timeline(timeline_path, manifest)
         result["artifacts"] = {"manifest": str(manifest_path), "timeline": str(timeline_path)}
         result["dataAvailability"]["timeline"] = {"status": "available", **timeline_availability}
+        receiver_timeline_availability: dict[str, Any] = {}
+        receiver_roles = (
+            ("healthy", "receiver-healthy", int(healthy_clients),
+             f"{run_id}-healthy" if affected_clients > 0 else f"{run_id}-receiver"),
+            ("affected", "receiver-affected", int(affected_clients), f"{run_id}-affected"),
+        )
+        for role_name, directory, client_count, expected_run_id in receiver_roles:
+            matches = sorted(case_root.glob(f"{directory}/*/timeline.jsonl"))
+            if client_count > 0:
+                if len(matches) != 1:
+                    raise AnalysisError(
+                        f"expected exactly one {role_name} receiver timeline.jsonl below {case_root}, "
+                        f"found {len(matches)}"
+                    )
+                receiver_timeline_availability[role_name] = validate_role_timeline(
+                    matches[0], manifest, expected_run_id
+                )
+                result["artifacts"][f"{role_name}ReceiverTimeline"] = str(matches[0])
+            elif matches:
+                raise AnalysisError(
+                    f"unexpected {role_name} receiver timeline.jsonl below {case_root}"
+                )
+            else:
+                receiver_timeline_availability[role_name] = {
+                    "status": "not-configured-zero-clients"
+                }
+        result["dataAvailability"]["receiverTimelines"] = receiver_timeline_availability
         aggregate, _summary = load_summary(case_root / "merged" / "lab-summary.json")
         result["aggregate"] = aggregate
         result["artifacts"]["mergedSummary"] = str(case_root / "merged" / "lab-summary.json")
@@ -1124,6 +1237,16 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
             raise AnalysisError("merged aggregate client count does not match manifest")
         if int(aggregate["affectedClients"]) != int(manifest["affectedClients"]):
             raise AnalysisError("merged aggregate affected-client count does not match manifest")
+        aggregate_optional_fields = {
+            "packetLimit": "packetLimit",
+            "globalPacketLimit": "globalPacketLimit",
+            "maxQueuedBytes": "configuredMaxQueuedBytes",
+        }
+        for manifest_field, aggregate_field in aggregate_optional_fields.items():
+            if aggregate.get(aggregate_field) != manifest.get(manifest_field):
+                raise AnalysisError(
+                    f"merged aggregate {aggregate_field} does not match manifest {manifest_field}"
+                )
         events = [event for label in EVENT_LABELS if (event := parse_apply_event(case_root, manifest, label))]
         event_labels = {event["label"] for event in events}
         configured_impairment = any(
@@ -1456,6 +1579,27 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
         campaign["experimentConfigurationKey"]
         for campaign in (*complete_baseline_rows, *complete_candidate_rows)
     }
+    baseline_mode_provenance = {
+        "expected": "legacy",
+        "caseModes": sorted({case.get("recoveryMode") for case in baseline}, key=lambda value: str(value)),
+        "campaignModes": sorted(
+            {campaign.get("recoveryMode") for campaign in baseline_campaigns}, key=lambda value: str(value)
+        ),
+    }
+    candidate_mode_provenance = {
+        "expected": "bounded",
+        "caseModes": sorted({case.get("recoveryMode") for case in candidate}, key=lambda value: str(value)),
+        "campaignModes": sorted(
+            {campaign.get("recoveryMode") for campaign in candidate_campaigns}, key=lambda value: str(value)
+        ),
+    }
+    recovery_modes_pass = (
+        bool(baseline) and bool(candidate) and bool(baseline_campaigns) and bool(candidate_campaigns)
+        and all(case.get("recoveryMode") == "legacy" for case in baseline)
+        and all(case.get("recoveryMode") == "bounded" for case in candidate)
+        and all(campaign.get("recoveryMode") == "legacy" for campaign in baseline_campaigns)
+        and all(campaign.get("recoveryMode") == "bounded" for campaign in candidate_campaigns)
+    )
     campaigns_pass = (
         len(baseline_identities) >= minimum_campaigns
         and len(candidate_identities) >= minimum_campaigns
@@ -1467,6 +1611,8 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
         issues.append(f"candidate has fewer than {minimum_campaigns} distinct complete campaign executions")
     if len(configuration_keys) != 1:
         issues.append("complete campaigns do not share one exact experiment configuration")
+    if not recovery_modes_pass:
+        issues.append("comparison requires every baseline campaign/case to be legacy and every candidate campaign/case to be bounded")
     integrity_pass = not invalid_baseline and not invalid_candidate \
         and not missing_candidate and not extra_candidate
     if invalid_baseline:
@@ -1505,6 +1651,10 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
             "candidateExecutionIdentities": sorted(candidate_identities),
             "experimentConfigurationKeys": sorted(configuration_keys),
         },
+        "recoveryModeProvenance": {
+            "baseline": baseline_mode_provenance,
+            "candidate": candidate_mode_provenance,
+        },
         "invalidBaselineCases": invalid_baseline,
         "invalidCandidateCases": invalid_candidate,
         "gateStatus": {
@@ -1512,6 +1662,7 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
             "eventQueueCap": "pass" if queue_pass else "fail",
             "completeCampaigns": "pass" if campaigns_pass else "fail",
             "evidenceIntegrity": "pass" if integrity_pass else "fail",
+            "recoveryModeProvenance": "pass" if recovery_modes_pass else "fail",
         },
         "status": "pass" if not issues else "fail",
         "issues": issues,
@@ -1748,6 +1899,14 @@ def main(argv: list[str]) -> int:
             },
             "operator": ">= per side",
             "threshold": args.minimum_complete_campaigns,
+            "reason": None,
+        }, {
+            "id": "comparison-recovery-mode-provenance",
+            "scope": "comparison",
+            "status": comparison["gateStatus"]["recoveryModeProvenance"],
+            "actual": comparison["recoveryModeProvenance"],
+            "operator": "baseline legacy and candidate bounded",
+            "threshold": True,
             "reason": None,
         }, {
             "id": "comparison-evidence-integrity",
