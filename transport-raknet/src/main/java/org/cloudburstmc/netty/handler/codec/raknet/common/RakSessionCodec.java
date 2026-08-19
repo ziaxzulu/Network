@@ -40,6 +40,7 @@ import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -87,6 +88,9 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private long lastPingTime = -1;
     private long lastPongTime = -1;
     private IntObjectMap<RakDatagramPacket> sentDatagrams;
+    private IntObjectMap<RakSlidingWindow.ModelDatagramSample> modelDatagramSamples;
+    private Queue<ModelSampleExpiry> modelSampleExpiries;
+    private Queue<ModelSampleLoss> modelSampleLosses;
     private Queue<IntRange> incomingAcks;
     private Queue<IntRange> incomingNaks;
     private Queue<IntRange> outgoingAcks;
@@ -114,7 +118,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         this.recoveryMode = this.channel.config().getRecoveryMode();
         this.slidingWindow = new RakSlidingWindow(mtu, this.recoveryMode);
-        this.boundedRecovery = this.recoveryMode == RakRecoveryMode.BOUNDED
+        this.boundedRecovery = this.recoveryMode.usesBoundedRecovery()
                 ? new RakBoundedRecovery(this.clock) : null;
         this.recoveryMetrics.initialize(this.getMetrics(), this.slidingWindow, this.currentTimeMillis());
 
@@ -133,12 +137,18 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         this.outgoingPackets = new FastBinaryMinHeap<>(8);
         this.sentDatagrams = new IntObjectHashMap<>();
+        if (this.recoveryMode.usesModelBasedCongestionControl()) {
+            this.modelDatagramSamples = new IntObjectHashMap<>();
+            this.modelSampleExpiries = new PriorityQueue<>();
+            this.modelSampleLosses = new PriorityQueue<>();
+        }
 
         this.incomingAcks = new ArrayDeque<>();
         this.incomingNaks = new ArrayDeque<>();
         this.outgoingAcks = new ArrayDeque<>();
         this.outgoingNaks = new ArrayDeque<>();
-        this.pendingRetransmissions = new ArrayDeque<>();
+        this.pendingRetransmissions = this.recoveryMode.usesModelBasedCongestionControl()
+                ? new PriorityQueue<>() : new ArrayDeque<>();
 
         this.reliableDatagramQueue = new BitQueue(512);
         this.splitPackets = new RoundRobinArray<>(256);
@@ -203,6 +213,18 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             for (RakDatagramPacket packet : sentDatagrams.values()) {
                 packet.release();
             }
+        }
+        if (this.modelDatagramSamples != null) {
+            this.modelDatagramSamples.clear();
+            this.modelDatagramSamples = null;
+        }
+        if (this.modelSampleExpiries != null) {
+            this.modelSampleExpiries.clear();
+            this.modelSampleExpiries = null;
+        }
+        if (this.modelSampleLosses != null) {
+            this.modelSampleLosses.clear();
+            this.modelSampleLosses = null;
         }
 
         FastBinaryMinHeap<EncapsulatedPacket>[] orderingHeaps = this.orderingHeaps;
@@ -313,11 +335,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             metrics.encapsulatedOut(1);
         }
         EncapsulatedPacket[] packets = this.createEncapsulated(message);
-        boolean boundedReliable = this.recoveryMode == RakRecoveryMode.BOUNDED
-                && packets[0].getReliability().isReliable();
+        boolean congestionControlled = this.recoveryMode.usesModelBasedCongestionControl()
+                || (this.recoveryMode.usesBoundedRecovery() && packets[0].getReliability().isReliable());
         boolean terminalDisconnect = this.terminalDisconnectWrite
                 && packetId == ID_DISCONNECTION_NOTIFICATION;
-        if (message.priority() == RakPriority.IMMEDIATE && (!boundedReliable || terminalDisconnect)) {
+        if (message.priority() == RakPriority.IMMEDIATE && (!congestionControlled || terminalDisconnect)) {
             // disconnect0 closes the session from this write's success listener, while ordinary write promises mean
             // "accepted by the session". This one terminal control datagram must therefore be handed to the channel
             // before success; the session closes immediately, so it cannot become a sustained cwnd bypass.
@@ -327,8 +349,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         this.queueOutgoingPackets(packets, message.priority());
         if (message.priority() == RakPriority.IMMEDIATE) {
-            // Reliable immediate traffic in bounded mode keeps its priority and requests an immediate flush, but it
-            // must still enter the normal congestion-window admission path.
+            // Reliable immediate traffic in bounded mode, and all data traffic in model mode, keeps its priority
+            // and requests an immediate flush but still enters the normal cwnd/pacer admission path.
             this.internalFlush(ctx);
         }
     }
@@ -538,6 +560,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         this.handleIncomingAcknowledge(ctx, curTime, this.incomingAcks, false);
         this.handleIncomingAcknowledge(ctx, curTime, this.incomingNaks, true);
+        this.expireModelDatagramSamples(curTime);
 
         // Send our know outgoing acknowledge packets.
         int mtuSize = this.getMtu();
@@ -563,11 +586,15 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
 
         // Send packets that are stale first
-        int resendCount = this.recoveryMode == RakRecoveryMode.BOUNDED
+        int resendCount = this.recoveryMode.usesBoundedRecovery()
                 ? this.sendBoundedRecovery(ctx, curTime, mtuSize)
                 : this.sendStaleDatagrams(ctx, curTime);
         // Now send usual packets
-        if (this.recoveryMode == RakRecoveryMode.LEGACY || this.pendingRetransmissions.isEmpty()) {
+        boolean recoveryBlocksOriginals = this.recoveryMode == RakRecoveryMode.BOUNDED
+                ? !this.pendingRetransmissions.isEmpty()
+                : this.hasEligiblePendingRetransmission(curTime);
+        if (!recoveryBlocksOriginals
+                && !this.slidingWindow.isModelPersistentCongestion()) {
             this.sendDatagrams(ctx, curTime, mtuSize);
         }
         // Finally flush channel
@@ -602,13 +629,38 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             }
 
             for (int i = range.start; i <= range.end; i++) {
-                RakDatagramPacket datagram = nack && this.recoveryMode == RakRecoveryMode.BOUNDED
+                RakDatagramPacket datagram = nack && this.recoveryMode.usesBoundedRecovery()
                         ? this.sentDatagrams.get(i) : this.sentDatagrams.remove(i);
                 if (datagram != null) {
                     if (nack) {
                         this.onIncomingNack(ctx, datagram, curTime);
                     } else {
                         this.onIncomingAck(datagram, curTime);
+                    }
+                } else if (this.modelDatagramSamples != null) {
+                    RakSlidingWindow.ModelDatagramSample sample = nack
+                            ? this.modelDatagramSamples.get(i) : this.modelDatagramSamples.remove(i);
+                    if (sample != null) {
+                        if (nack) {
+                            if (sample.scheduleNack(curTime)) {
+                                long eligibleAt = this.slidingWindow.getNackLossDeadlineMillis(
+                                        sample.getSendTimeMillis(), curTime);
+                                this.modelSampleLosses.offer(new ModelSampleLoss(i, eligibleAt, sample));
+                                RakChannelMetrics metrics = this.getMetrics();
+                                if (metrics != null) {
+                                    metrics.rakNackRecoveryHint(Math.max(0L, eligibleAt - curTime));
+                                }
+                            }
+                        } else {
+                            this.slidingWindow.onUnreliableAck(sample, curTime);
+                            if (sample.hasPendingNack()) {
+                                RakChannelMetrics metrics = this.getMetrics();
+                                if (metrics != null) {
+                                    metrics.rakNackReorderingResolved(Math.max(0L,
+                                            curTime - sample.getNackObservedAtMillis()));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -617,6 +669,14 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     private void onIncomingAck(RakDatagramPacket datagram, long curTime) {
         try {
+            PendingRetransmission pending = this.findPendingRetransmission(datagram.getSequenceIndex());
+            long reorderedDelay = -1L;
+            if (pending != null) {
+                this.pendingRetransmissions.remove(pending);
+                if (this.recoveryMode.usesModelBasedCongestionControl() && curTime < pending.eligibleAtMillis) {
+                    reorderedDelay = Math.max(0L, curTime - pending.nackAtMillis);
+                }
+            }
             this.slidingWindow.onAck(curTime, datagram, this.datagramReadIndex);
             if (this.boundedRecovery != null) {
                 this.boundedRecovery.onAcknowledgementProgress(this.slidingWindow, datagram,
@@ -624,6 +684,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             }
             RakChannelMetrics metrics = this.getMetrics();
             this.recoveryMetrics.onAcknowledgementProgress(metrics, this.slidingWindow, datagram, curTime);
+            if (metrics != null && reorderedDelay >= 0L) {
+                // Observability follows every ownership/accounting transition. A broken exporter can fail the
+                // caller, but cannot leave an ACKed packet charged to transport state.
+                metrics.rakNackReorderingResolved(reorderedDelay);
+            }
         } finally {
             datagram.release();
         }
@@ -634,10 +699,22 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             log.trace("NAK'ed datagram {} from {}", datagram.getSequenceIndex(), this.getRemoteAddress());
         }
 
-        if (this.recoveryMode == RakRecoveryMode.BOUNDED) {
+        if (this.recoveryMode.usesBoundedRecovery()) {
             if (this.boundedRecovery.scheduleNack(datagram)) {
-                this.slidingWindow.onBoundedLoss(datagram, this.datagramSendOrdinal - 1L);
-                this.pendingRetransmissions.offer(new PendingRetransmission(datagram.getSequenceIndex()));
+                long eligibleAt = curTime;
+                if (this.recoveryMode.usesModelBasedCongestionControl()) {
+                    // A RakNet NACK proves that a later datagram arrived, but a jitter-reordered packet can still
+                    // arrive shortly afterward. Keep prompt recovery scheduling while deferring the loss decision.
+                    eligibleAt = this.slidingWindow.getNackLossDeadlineMillis(datagram.getSendTime(), curTime);
+                } else {
+                    this.slidingWindow.onBoundedLoss(datagram, this.datagramSendOrdinal - 1L);
+                }
+                this.pendingRetransmissions.offer(new PendingRetransmission(datagram.getSequenceIndex(),
+                        eligibleAt, datagram.getSendOrdinal(), curTime));
+                RakChannelMetrics metrics = this.getMetrics();
+                if (metrics != null && this.recoveryMode.usesModelBasedCongestionControl()) {
+                    metrics.rakNackRecoveryHint(Math.max(0L, eligibleAt - curTime));
+                }
             }
             return;
         }
@@ -662,9 +739,14 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         // A PTO is evidence for only its selected oldest attempt. Do not bulk-retire every blackholed physical
         // attempt: that would manufacture recovery capacity and recreate the retransmission storm this mode bounds.
+        if (this.recoveryMode.usesModelBasedCongestionControl() && this.boundedRecovery.getPtoBackoff() >= 2) {
+            // Multiple exponentially backed-off probes without intervening ACK progress are a duration-based
+            // persistent-congestion signal. A single NACK or PTO never triggers this collapse.
+            this.slidingWindow.onPersistentCongestion();
+        }
         this.slidingWindow.onBoundedLoss(timeoutCandidate, this.datagramSendOrdinal - 1L);
         int size = timeoutCandidate.getSize();
-        boolean probe = !this.slidingWindow.canSendBoundedRecovery(size);
+        boolean probe = !this.slidingWindow.canSendBoundedRecovery(size, curTime);
         if ((probe && !this.slidingWindow.canSendBoundedProbe(size))
                 || !RakBoundedRecovery.ptoFlushBudget(mtuSize).canConsume(size)) {
             // Timeout selection is ephemeral: never put it into the NACK FIFO. A deferred timeout therefore cannot
@@ -689,6 +771,43 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         return null;
     }
 
+    private void expireModelDatagramSamples(long curTime) {
+        if (this.modelSampleExpiries == null) {
+            return;
+        }
+        ModelSampleLoss loss;
+        while ((loss = this.modelSampleLosses.peek()) != null && loss.eligibleAtMillis <= curTime) {
+            this.modelSampleLosses.poll();
+            if (this.modelDatagramSamples.get(loss.sequenceIndex) == loss.sample) {
+                this.modelDatagramSamples.remove(loss.sequenceIndex);
+                this.slidingWindow.onUnreliableLoss(loss.sample);
+                RakChannelMetrics metrics = this.getMetrics();
+                if (metrics != null) {
+                    metrics.rakNackLossValidated(Math.max(0L,
+                            curTime - loss.sample.getNackObservedAtMillis()));
+                }
+            }
+        }
+        ModelSampleExpiry expiry;
+        while ((expiry = this.modelSampleExpiries.peek()) != null && expiry.expiresAtMillis <= curTime) {
+            this.modelSampleExpiries.poll();
+            if (this.modelDatagramSamples.get(expiry.sequenceIndex) == expiry.sample) {
+                if (expiry.sample.hasPendingNack()) {
+                    // A NACK installs a later reordering-validation deadline. Once that happens the ordinary
+                    // metadata tail timeout must not pre-empt a still-possible late original ACK.
+                    continue;
+                }
+                this.modelDatagramSamples.remove(expiry.sequenceIndex);
+                this.slidingWindow.onUnreliableLoss(expiry.sample);
+            }
+        }
+    }
+
+    private boolean hasEligiblePendingRetransmission(long curTime) {
+        PendingRetransmission pending = this.pendingRetransmissions.peek();
+        return pending != null && pending.eligibleAtMillis <= curTime;
+    }
+
     private int drainBoundedRetransmissions(ChannelHandlerContext ctx, long curTime,
                                             RakBoundedRecovery.FlushBudget budget) {
         while (true) {
@@ -704,12 +823,24 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 continue;
             }
 
+            if (pending.eligibleAtMillis > curTime) {
+                break;
+            }
+
             int size = datagram.getSize();
             if (!budget.canConsume(size)) {
                 break;
             }
 
-            boolean probe = !this.slidingWindow.canSendBoundedRecovery(size);
+            if (this.recoveryMode.usesModelBasedCongestionControl() && datagram.isInFlight()) {
+                this.slidingWindow.onBoundedLoss(datagram, this.datagramSendOrdinal - 1L);
+                RakChannelMetrics metrics = this.getMetrics();
+                if (metrics != null) {
+                    metrics.rakNackLossValidated(Math.max(0L, curTime - pending.nackAtMillis));
+                }
+            }
+
+            boolean probe = !this.slidingWindow.canSendBoundedRecovery(size, curTime);
             if (probe) {
                 break;
             }
@@ -730,11 +861,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         long oldSendOrdinal = datagram.getSendOrdinal();
         int oldRetransmissionCount = datagram.getRetransmissionCount();
         RakRecoveryMetrics.SendState oldRecoveryMetricsState = this.recoveryMetrics.captureSendState();
+        RakSlidingWindow.ModelSendState oldModelSendState = this.slidingWindow.captureModelSendState(datagram);
         boolean wasPending = datagram.isRetransmissionPending();
 
         this.sentDatagrams.remove(oldSequenceIndex);
         datagram.setRetransmissionPending(false);
-        this.slidingWindow.onBoundedRetransmit(datagram, probe);
+        this.slidingWindow.onBoundedRetransmit(datagram, probe, curTime,
+                this.outgoingPackets.isEmpty() && this.pendingRetransmissions.size() <= (pending == null ? 0 : 1));
         try {
             this.sendDatagram(ctx, datagram, curTime, this.sentDatagrams, sendType, probe);
         } catch (RuntimeException | Error throwable) {
@@ -747,6 +880,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             }
             this.recoveryMetrics.restoreSendState(oldRecoveryMetricsState);
             this.slidingWindow.onBoundedRetransmitFailed(datagram);
+            this.slidingWindow.restoreModelSendState(datagram, oldModelSendState);
             datagram.setSequenceIndex(oldSequenceIndex);
             datagram.setSendTime(oldSendTime);
             datagram.setNextSend(oldNextSend);
@@ -816,7 +950,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             return;
         }
 
-        int transmissionBandwidth = this.slidingWindow.getTransmissionBandwidth();
+        int transmissionBandwidth = this.slidingWindow.getTransmissionBandwidth(curTime);
         RakDatagramPacket datagram = RakDatagramPacket.newInstance();
         datagram.setSendTime(curTime);
         EncapsulatedPacket packet;
@@ -830,7 +964,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                     || reliabilityBoundary
                     || datagram.getSize() + size > mtuSize - RAKNET_DATAGRAM_HEADER_SIZE;
             int chargedSize = size;
-            if (this.recoveryMode == RakRecoveryMode.BOUNDED && startsDatagram) {
+            if (this.recoveryMode.usesBoundedRecovery() && startsDatagram) {
                 chargedSize += RAKNET_DATAGRAM_HEADER_SIZE;
             }
             if (transmissionBandwidth < chargedSize) {
@@ -858,7 +992,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         if (!datagram.getPackets().isEmpty()) {
             this.sendDatagram(ctx, datagram, curTime, this.sentDatagrams,
                     RakDatagramSendType.ORIGINAL, false);
-        } else if (this.recoveryMode == RakRecoveryMode.BOUNDED) {
+        } else if (this.recoveryMode.usesBoundedRecovery()) {
             // Bounded recovery may intentionally leave traffic queued behind cwnd. Do not leak the empty pooled
             // builder allocated for this flush while waiting for ACK progress.
             datagram.release();
@@ -894,20 +1028,33 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         int oldIndex = datagram.getSequenceIndex();
         datagram.setSequenceIndex(this.datagramWriteIndex++);
         datagram.setSendOrdinal(this.datagramSendOrdinal++);
-        if (oldIndex == -1 || this.recoveryMode == RakRecoveryMode.BOUNDED) {
+        if (oldIndex == -1 || this.recoveryMode.usesBoundedRecovery()) {
             datagram.setSendTime(time);
         }
-        if (this.recoveryMode == RakRecoveryMode.BOUNDED && oldIndex != -1
+        if (this.recoveryMode.usesBoundedRecovery() && oldIndex != -1
                 && datagram.isRecoveryProbe() != recoveryProbe) {
             throw new IllegalStateException("Bounded recovery probe accounting mismatch");
         }
 
+        if (this.modelDatagramSamples != null) {
+            RakSlidingWindow.ModelDatagramSample replaced =
+                    this.modelDatagramSamples.remove(datagram.getSequenceIndex());
+            if (replaced != null) {
+                this.slidingWindow.onUnreliableLoss(replaced);
+            }
+        }
+
+        boolean reliable = false;
+        RakSlidingWindow.ModelDatagramSample unreliableSample = null;
+        ModelSampleExpiry unreliableExpiry = null;
         for (EncapsulatedPacket packet : datagram.getPackets()) {
             // Check if packet is reliable so it can be resent later if a NAK is received.
             if (packet.getReliability().isReliable()) {
+                reliable = true;
                 datagram.setNextSend(time + this.slidingWindow.getRtoForRetransmission());
                 if (oldIndex == -1) {
-                    this.slidingWindow.onReliableSend(datagram);
+                    this.slidingWindow.onReliableSend(datagram,
+                            this.outgoingPackets.isEmpty() && this.pendingRetransmissions.isEmpty());
                 }
                 sent.put(datagram.getSequenceIndex(), datagram.retain()); // Keep for resending
                 if (oldIndex == -1 && this.boundedRecovery != null) {
@@ -916,8 +1063,33 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 break;
             }
         }
-        this.recoveryMetrics.onDatagramSent(metrics, this.slidingWindow, datagram, sendType, time);
-        ctx.write(datagram);
+        if (!reliable) {
+            unreliableSample = this.slidingWindow.onUnreliableSendTracked(
+                    datagram.getSize(), time,
+                    this.outgoingPackets.isEmpty() && this.pendingRetransmissions.isEmpty());
+            if (unreliableSample != null) {
+                this.modelDatagramSamples.put(datagram.getSequenceIndex(), unreliableSample);
+                long expiresAt = time + Math.max(1_000L, this.slidingWindow.getRtoForRetransmission());
+                unreliableExpiry = new ModelSampleExpiry(datagram.getSequenceIndex(), expiresAt,
+                        unreliableSample);
+                this.modelSampleExpiries.offer(unreliableExpiry);
+            }
+        }
+        try {
+            this.recoveryMetrics.onDatagramSent(metrics, this.slidingWindow, datagram, sendType, time);
+            ctx.write(datagram);
+        } catch (RuntimeException | Error throwable) {
+            if (unreliableSample != null
+                    && this.modelDatagramSamples.get(datagram.getSequenceIndex()) == unreliableSample) {
+                this.modelDatagramSamples.remove(datagram.getSequenceIndex());
+                this.modelSampleExpiries.remove(unreliableExpiry);
+                this.slidingWindow.onUnreliableSendFailed(unreliableSample);
+                if (oldIndex == -1 && datagram.refCnt() > 0) {
+                    datagram.release();
+                }
+            }
+            throw throwable;
+        }
     }
 
     private ChannelHandlerContext ctx() {
@@ -1153,11 +1325,60 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         return channel;
     }
 
-    private static final class PendingRetransmission {
+    private static final class PendingRetransmission implements Comparable<PendingRetransmission> {
         private final int sequenceIndex;
+        private final long eligibleAtMillis;
+        private final long sendOrdinal;
+        private final long nackAtMillis;
 
-        private PendingRetransmission(int sequenceIndex) {
+        private PendingRetransmission(int sequenceIndex, long eligibleAtMillis, long sendOrdinal,
+                                      long nackAtMillis) {
             this.sequenceIndex = sequenceIndex;
+            this.eligibleAtMillis = eligibleAtMillis;
+            this.sendOrdinal = sendOrdinal;
+            this.nackAtMillis = nackAtMillis;
+        }
+
+        @Override
+        public int compareTo(PendingRetransmission other) {
+            int deadlineOrder = Long.compare(this.eligibleAtMillis, other.eligibleAtMillis);
+            return deadlineOrder != 0 ? deadlineOrder : Long.compare(this.sendOrdinal, other.sendOrdinal);
+        }
+    }
+
+    private static final class ModelSampleExpiry implements Comparable<ModelSampleExpiry> {
+        private final int sequenceIndex;
+        private final long expiresAtMillis;
+        private final RakSlidingWindow.ModelDatagramSample sample;
+
+        private ModelSampleExpiry(int sequenceIndex, long expiresAtMillis,
+                                  RakSlidingWindow.ModelDatagramSample sample) {
+            this.sequenceIndex = sequenceIndex;
+            this.expiresAtMillis = expiresAtMillis;
+            this.sample = sample;
+        }
+
+        @Override
+        public int compareTo(ModelSampleExpiry other) {
+            return Long.compare(this.expiresAtMillis, other.expiresAtMillis);
+        }
+    }
+
+    private static final class ModelSampleLoss implements Comparable<ModelSampleLoss> {
+        private final int sequenceIndex;
+        private final long eligibleAtMillis;
+        private final RakSlidingWindow.ModelDatagramSample sample;
+
+        private ModelSampleLoss(int sequenceIndex, long eligibleAtMillis,
+                                RakSlidingWindow.ModelDatagramSample sample) {
+            this.sequenceIndex = sequenceIndex;
+            this.eligibleAtMillis = eligibleAtMillis;
+            this.sample = sample;
+        }
+
+        @Override
+        public int compareTo(ModelSampleLoss other) {
+            return Long.compare(this.eligibleAtMillis, other.eligibleAtMillis);
         }
     }
 }

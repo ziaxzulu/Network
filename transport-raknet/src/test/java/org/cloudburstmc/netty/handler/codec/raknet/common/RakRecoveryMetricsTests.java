@@ -19,6 +19,7 @@ package org.cloudburstmc.netty.handler.codec.raknet.common;
 import org.cloudburstmc.netty.channel.raknet.RakSlidingWindow;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelMetrics;
 import org.cloudburstmc.netty.channel.raknet.config.RakDatagramSendType;
+import org.cloudburstmc.netty.channel.raknet.config.RakRecoveryMode;
 import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -197,6 +198,60 @@ public class RakRecoveryMetricsTests {
 
         Assertions.assertEquals("terminal state failure", error.getMessage());
         Assertions.assertTrue(closed[0], "state removal must be attempted even when terminal state reporting fails");
+    }
+
+    @Test
+    public void attemptsStateRemovalWhenTerminalModelCallbackThrows() {
+        RakRecoveryMetrics recovery = new RakRecoveryMetrics();
+        RakSlidingWindow window = new RakSlidingWindow(1_200, RakRecoveryMode.MODEL_BASED);
+        boolean[] closed = {false};
+        RakChannelMetrics throwingMetrics = new RakChannelMetrics() {
+            @Override
+            public void rakCongestionModelState(long observedAtMillis,
+                                                double estimatedDeliveryRateBytesPerSecond,
+                                                double pacingRateBytesPerSecond, long minimumRttMillis,
+                                                double recentLossRate, long packetRound, boolean startup,
+                                                boolean persistentCongestion) {
+                throw new IllegalStateException("terminal model failure");
+            }
+
+            @Override
+            public void rakRecoveryStateClosed(long observedAtMillis) {
+                closed[0] = true;
+            }
+        };
+
+        IllegalStateException error = Assertions.assertThrows(IllegalStateException.class,
+                () -> recovery.close(throwingMetrics, window, 1_000L));
+
+        Assertions.assertEquals("terminal model failure", error.getMessage());
+        Assertions.assertTrue(closed[0], "state removal must be attempted when terminal model reporting fails");
+    }
+
+    @Test
+    public void unsampledModelStateUsesUnavailableSentinels() {
+        RakRecoveryMetrics recovery = new RakRecoveryMetrics();
+        RakSlidingWindow window = new RakSlidingWindow(1_200, RakRecoveryMode.MODEL_BASED);
+        double[] deliveryRate = {Double.NaN};
+        double[] pacingRate = {Double.NaN};
+        long[] minimumRtt = {Long.MIN_VALUE};
+        RakChannelMetrics metrics = new RakChannelMetrics() {
+            @Override
+            public void rakCongestionModelState(long observedAtMillis,
+                                                double estimatedDeliveryRateBytesPerSecond,
+                                                double pacingRateBytesPerSecond, long minimumRttMillis,
+                                                double recentLossRate, long packetRound, boolean startup,
+                                                boolean persistentCongestion) {
+                deliveryRate[0] = estimatedDeliveryRateBytesPerSecond;
+                pacingRate[0] = pacingRateBytesPerSecond;
+                minimumRtt[0] = minimumRttMillis;
+            }
+        };
+
+        recovery.initialize(metrics, window, 0L);
+        Assertions.assertEquals(-1D, deliveryRate[0]);
+        Assertions.assertTrue(pacingRate[0] > 0D, "initial pacing has a real conservative fallback rate");
+        Assertions.assertEquals(-1L, minimumRtt[0]);
     }
 
     private static final class RecordingMetrics implements RakChannelMetrics {

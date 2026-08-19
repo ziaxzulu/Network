@@ -111,6 +111,7 @@ final class RakRecoveryMetrics {
             metrics.rakRecoveryState(observedAtMillis, 0, slidingWindow.getCongestionWindow(),
                     slidingWindow.getSlowStartThreshold(), slidingWindow.getRTT(), slidingWindow.getRttDeviation(),
                     slidingWindow.getRtoForRetransmission(), 0, this.lastAckProgressAtMillis, -1L);
+            this.reportModelState(metrics, slidingWindow, observedAtMillis);
         } finally {
             metrics.rakRecoveryStateClosed(observedAtMillis);
         }
@@ -130,6 +131,22 @@ final class RakRecoveryMetrics {
                 slidingWindow.getRttDeviation(), slidingWindow.getRtoForRetransmission(),
                 this.retransmittedDatagramsInFlight, this.lastAckProgressAtMillis,
                 this.recoveryStartedAtMillis);
+        this.reportModelState(metrics, slidingWindow, observedAtMillis);
+    }
+
+    private void reportModelState(RakChannelMetrics metrics, RakSlidingWindow slidingWindow,
+                                  long observedAtMillis) {
+        double bandwidth = slidingWindow.getModelBandwidthBytesPerMillis();
+        double pacingRate = slidingWindow.getModelPacingRateBytesPerMillis();
+        if (pacingRate < 0D) {
+            return;
+        }
+        metrics.rakCongestionModelState(observedAtMillis,
+                bandwidth < 0D ? -1D : bandwidth * 1_000D,
+                pacingRate < 0D ? -1D : pacingRate * 1_000D,
+                slidingWindow.getModelMinimumRttMillis(), slidingWindow.getModelRecentLossRate(),
+                slidingWindow.getModelRoundCount(), slidingWindow.isModelStartup(),
+                slidingWindow.isModelPersistentCongestion());
     }
 
     static final class SendState {

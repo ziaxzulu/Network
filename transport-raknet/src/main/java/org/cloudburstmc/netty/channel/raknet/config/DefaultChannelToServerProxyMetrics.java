@@ -154,6 +154,43 @@ public class DefaultChannelToServerProxyMetrics implements RakChannelMetrics {
     }
 
     @Override
+    public void rakCongestionModelState(long observedAtMillis, double estimatedDeliveryRateBytesPerSecond,
+                                        double pacingRateBytesPerSecond, long minimumRttMillis,
+                                        double recentLossRate, long packetRound, boolean startup,
+                                        boolean persistentCongestion) {
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakCongestionModelState(channel, observedAtMillis, estimatedDeliveryRateBytesPerSecond,
+                    pacingRateBytesPerSecond, minimumRttMillis, recentLossRate, packetRound, startup,
+                    persistentCongestion);
+        }
+    }
+
+    @Override
+    public void rakNackRecoveryHint(long validationDelayMillis) {
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakNackRecoveryHint(channel, validationDelayMillis);
+        }
+    }
+
+    @Override
+    public void rakNackReorderingResolved(long observedDelayMillis) {
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakNackReorderingResolved(channel, observedDelayMillis);
+        }
+    }
+
+    @Override
+    public void rakNackLossValidated(long observedDelayMillis) {
+        RakServerMetrics metrics = this.parent.config().getMetrics();
+        if (metrics != null) {
+            metrics.rakNackLossValidated(channel, observedDelayMillis);
+        }
+    }
+
+    @Override
     public void rakRecoveryStateClosed(long observedAtMillis) {
         RakServerMetrics metrics = this.parent.config().getMetrics();
         if (metrics != null) {

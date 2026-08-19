@@ -146,6 +146,47 @@ public interface RakServerMetrics {
     }
 
     /**
+     * Server-scoped counterpart to {@link RakChannelMetrics#rakCongestionModelState}.
+     *
+     * @param channel observed child channel
+     * @param observedAtMillis wall-clock observation time, in milliseconds since the Unix epoch
+     * @param estimatedDeliveryRateBytesPerSecond maximum filtered delivery rate, or {@code -1} until sampled
+     * @param pacingRateBytesPerSecond current sender pacing rate
+     * @param minimumRttMillis filtered minimum RTT, or {@code -1} until sampled
+     * @param recentLossRate most recent packet-round loss fraction
+     * @param packetRound completed packet-timed round count
+     * @param startup whether the controller is still in startup
+     * @param persistentCongestion whether persistent no-progress congestion is active
+     */
+    default void rakCongestionModelState(RakChildChannel channel, long observedAtMillis,
+                                         double estimatedDeliveryRateBytesPerSecond,
+                                         double pacingRateBytesPerSecond, long minimumRttMillis,
+                                         double recentLossRate, long packetRound, boolean startup,
+                                         boolean persistentCongestion) {
+    }
+
+    /**
+     * @param channel observed child channel
+     * @param validationDelayMillis delay before the hinted attempt may be declared lost
+     */
+    default void rakNackRecoveryHint(RakChildChannel channel, long validationDelayMillis) {
+    }
+
+    /**
+     * @param channel observed child channel
+     * @param observedDelayMillis time from the NACK hint to the resolving ACK
+     */
+    default void rakNackReorderingResolved(RakChildChannel channel, long observedDelayMillis) {
+    }
+
+    /**
+     * @param channel observed child channel
+     * @param observedDelayMillis time from the NACK hint to loss validation
+     */
+    default void rakNackLossValidated(RakChildChannel channel, long observedDelayMillis) {
+    }
+
+    /**
      * Signals that the channel's terminal recovery snapshot has been delivered. Exporters should remove the channel
      * from any map used to compute aggregate gauges.
      *

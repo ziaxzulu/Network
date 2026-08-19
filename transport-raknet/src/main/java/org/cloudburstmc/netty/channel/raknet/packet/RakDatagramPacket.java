@@ -40,6 +40,13 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
     private boolean inFlight;
     private boolean retransmissionPending;
     private boolean recoveryProbe;
+    private long deliveredBytesAtSend;
+    private long deliveredTimeAtSend;
+    private long firstSendTime;
+    private long modelSendTime;
+    private int modelTxInFlight;
+    private boolean modelSampleValid;
+    private boolean modelAppLimited;
 
     public static RakDatagramPacket newInstance() {
         return RECYCLER.get();
@@ -102,6 +109,13 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         this.inFlight = false;
         this.retransmissionPending = false;
         this.recoveryProbe = false;
+        this.deliveredBytesAtSend = 0;
+        this.deliveredTimeAtSend = 0;
+        this.firstSendTime = 0;
+        this.modelSendTime = 0;
+        this.modelTxInFlight = 0;
+        this.modelSampleValid = false;
+        this.modelAppLimited = false;
         setRefCnt(1);
         this.handle.recycle(this);
     }
@@ -207,6 +221,55 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
 
     public void setRecoveryProbe(boolean recoveryProbe) {
         this.recoveryProbe = recoveryProbe;
+    }
+
+    public long getDeliveredBytesAtSend() {
+        return this.deliveredBytesAtSend;
+    }
+
+    public long getDeliveredTimeAtSend() {
+        return this.deliveredTimeAtSend;
+    }
+
+    public long getFirstSendTime() {
+        return this.firstSendTime;
+    }
+
+    public long getModelSendTime() {
+        return this.modelSendTime;
+    }
+
+    public int getModelTxInFlight() {
+        return this.modelTxInFlight;
+    }
+
+    public boolean isModelSampleValid() {
+        return this.modelSampleValid;
+    }
+
+    public boolean isModelAppLimited() {
+        return this.modelAppLimited;
+    }
+
+    public void setModelSendState(long deliveredBytesAtSend, long deliveredTimeAtSend, long firstSendTime,
+                                  long modelSendTime, int modelTxInFlight, boolean modelAppLimited) {
+        this.deliveredBytesAtSend = deliveredBytesAtSend;
+        this.deliveredTimeAtSend = deliveredTimeAtSend;
+        this.firstSendTime = firstSendTime;
+        this.modelSendTime = modelSendTime;
+        this.modelTxInFlight = modelTxInFlight;
+        this.modelSampleValid = true;
+        this.modelAppLimited = modelAppLimited;
+    }
+
+    public void clearModelSendState() {
+        this.deliveredBytesAtSend = 0;
+        this.deliveredTimeAtSend = 0;
+        this.firstSendTime = 0;
+        this.modelSendTime = 0;
+        this.modelTxInFlight = 0;
+        this.modelSampleValid = false;
+        this.modelAppLimited = false;
     }
 
     @Override

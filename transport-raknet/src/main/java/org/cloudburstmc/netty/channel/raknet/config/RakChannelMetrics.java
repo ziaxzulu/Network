@@ -110,6 +110,51 @@ public interface RakChannelMetrics {
     }
 
     /**
+     * Reports the bounded-cardinality state of the experimental sender delivery model. This callback has the same
+     * at-most-once-per-100-ms periodic cadence as {@link #rakRecoveryState}; exporters should aggregate it using the
+     * same bounded cohort labels rather than remote-address labels. The callback is emitted only for model-based
+     * sessions; delivery rate and minimum RTT are {@code -1} until sampled.
+     *
+     * @param observedAtMillis wall-clock observation time, in milliseconds since the Unix epoch
+     * @param estimatedDeliveryRateBytesPerSecond maximum filtered delivery rate, or {@code -1} until sampled
+     * @param pacingRateBytesPerSecond current sender pacing rate
+     * @param minimumRttMillis filtered minimum RTT, or {@code -1} until sampled
+     * @param recentLossRate most recent packet-round loss fraction
+     * @param packetRound completed packet-timed round count
+     * @param startup whether the controller is still in startup
+     * @param persistentCongestion whether persistent no-progress congestion is active
+     */
+    default void rakCongestionModelState(long observedAtMillis, double estimatedDeliveryRateBytesPerSecond,
+                                         double pacingRateBytesPerSecond, long minimumRttMillis,
+                                         double recentLossRate, long packetRound, boolean startup,
+                                         boolean persistentCongestion) {
+    }
+
+    /**
+     * Records a NACK scheduled behind a reordering-validation delay in the experimental model mode.
+     *
+     * @param validationDelayMillis delay before the hinted attempt may be declared lost
+     */
+    default void rakNackRecoveryHint(long validationDelayMillis) {
+    }
+
+    /**
+     * Records a NACKed attempt acknowledged before its reordering-validation delay expired.
+     *
+     * @param observedDelayMillis time from the NACK hint to the resolving ACK
+     */
+    default void rakNackReorderingResolved(long observedDelayMillis) {
+    }
+
+    /**
+     * Records a NACK hint that survived validation and was declared lost.
+     *
+     * @param observedDelayMillis time from the NACK hint to loss validation
+     */
+    default void rakNackLossValidated(long observedDelayMillis) {
+    }
+
+    /**
      * Invoked after the terminal recovery snapshot when the session closes. Gauge exporters should remove any
      * channel-local state retained for this session.
      *

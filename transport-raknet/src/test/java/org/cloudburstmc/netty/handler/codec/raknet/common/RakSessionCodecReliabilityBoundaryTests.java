@@ -47,6 +47,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -94,6 +95,117 @@ public class RakSessionCodecReliabilityBoundaryTests {
         }
     }
 
+    @Test
+    public void modelUnreliableMetadataIsPayloadFreeAndBoundedByNackOrExpiry() throws Exception {
+        Harness harness = harness(RakRecoveryMode.MODEL_BASED);
+        try {
+            harness.enqueue(UNRELIABLE_PAYLOAD, RakReliability.UNRELIABLE, RakPriority.HIGH);
+            List<RakDatagramPacket> first = harness.sendOriginals();
+            int firstSequence = first.get(0).getSequenceIndex();
+            harness.releaseOutbound(first);
+
+            IntObjectMap<?> samples = (IntObjectMap<?>) get(harness.codec, "modelDatagramSamples");
+            Assertions.assertEquals(1, samples.size());
+            Assertions.assertTrue(harness.window.getBytesInFlight() > 0);
+            Assertions.assertEquals(0, harness.payloads.get(0).refCnt(),
+                    "payload ownership ends at handoff; only scalar model metadata remains");
+
+            harness.clock.set(200L);
+            harness.ack(firstSequence);
+            Assertions.assertTrue(samples.isEmpty());
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+            Assertions.assertTrue(harness.window.getModelBandwidthBytesPerMillis() > 0D,
+                    "the real session ACK path credits payload-free unreliable delivery");
+            double sampledRate = harness.window.getModelBandwidthBytesPerMillis();
+            harness.ack(firstSequence);
+            Assertions.assertEquals(sampledRate, harness.window.getModelBandwidthBytesPerMillis(),
+                    "a duplicate ACK cannot complete scalar metadata twice");
+            Assertions.assertTrue(harness.readOutbound().isEmpty());
+
+            harness.enqueue(UNRELIABLE_PAYLOAD + 1, RakReliability.UNRELIABLE, RakPriority.HIGH);
+            List<RakDatagramPacket> second = harness.sendOriginals();
+            int secondSequence = second.get(0).getSequenceIndex();
+            harness.releaseOutbound(second);
+            Assertions.assertEquals(1, samples.size());
+            harness.nack(secondSequence);
+            Assertions.assertEquals(1, samples.size(), "a NACK is only a reordering hint before validation");
+            harness.clock.set(220L);
+            harness.ack(secondSequence);
+            Assertions.assertTrue(samples.isEmpty(), "a late original ACK cancels unreliable loss validation");
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+            harness.clock.set(450L);
+            invoke(harness.codec, "internalFlush", new Class<?>[]{ChannelHandlerContext.class}, harness.context);
+            Assertions.assertTrue(samples.isEmpty(), "stale scheduled loss cannot double-complete a late ACK");
+
+            harness.enqueue(UNRELIABLE_PAYLOAD + 2, RakReliability.UNRELIABLE, RakPriority.HIGH);
+            List<RakDatagramPacket> third = harness.sendOriginals();
+            harness.releaseOutbound(third);
+            Assertions.assertEquals(1, samples.size());
+            harness.clock.set(2_500L);
+            invoke(harness.codec, "internalFlush", new Class<?>[]{ChannelHandlerContext.class}, harness.context);
+            Assertions.assertTrue(samples.isEmpty(), "unacknowledged metadata expires without payload retention");
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+
+            harness.enqueue(UNRELIABLE_PAYLOAD + 3, RakReliability.UNRELIABLE, RakPriority.HIGH);
+            List<RakDatagramPacket> fourth = harness.sendOriginals();
+            int fourthSequence = fourth.get(0).getSequenceIndex();
+            harness.releaseOutbound(fourth);
+            long tailExpiryAt = harness.clock.get()
+                    + Math.max(1_000L, harness.window.getRtoForRetransmission());
+            harness.clock.set(tailExpiryAt - 10L);
+            harness.nack(fourthSequence);
+            harness.clock.set(tailExpiryAt);
+            invoke(harness.codec, "internalFlush", new Class<?>[]{ChannelHandlerContext.class}, harness.context);
+            Assertions.assertEquals(1, samples.size(),
+                    "the ordinary tail expiry cannot pre-empt a pending NACK reordering deadline");
+            harness.clock.set(tailExpiryAt + 20L);
+            harness.ack(fourthSequence);
+            Assertions.assertTrue(samples.isEmpty(), "the reordered ACK wins before NACK validation");
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+
+            harness.enqueue(UNRELIABLE_PAYLOAD + 4, RakReliability.UNRELIABLE, RakPriority.HIGH);
+            List<RakDatagramPacket> fifth = harness.sendOriginals();
+            int fifthSequence = fifth.get(0).getSequenceIndex();
+            long fifthSendTime = harness.clock.get();
+            harness.releaseOutbound(fifth);
+            harness.nack(fifthSequence);
+            long validationAt = harness.window.getNackLossDeadlineMillis(fifthSendTime, fifthSendTime);
+            harness.clock.set(validationAt);
+            invoke(harness.codec, "internalFlush", new Class<?>[]{ChannelHandlerContext.class}, harness.context);
+            Assertions.assertTrue(samples.isEmpty(), "an unresolved NACK retires scalar flight at its deadline");
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+        } finally {
+            harness.closeAndAssertPayloadsReleased();
+        }
+    }
+
+    @Test
+    public void sequenceReuseRetiresOldUnreliableSampleBeforeReliableAccounting() throws Exception {
+        Harness harness = harness(RakRecoveryMode.MODEL_BASED);
+        try {
+            harness.enqueue(UNRELIABLE_PAYLOAD, RakReliability.UNRELIABLE, RakPriority.HIGH);
+            List<RakDatagramPacket> unreliable = harness.sendOriginals();
+            harness.releaseOutbound(unreliable);
+            Assertions.assertTrue(harness.window.getBytesInFlight() > 0);
+
+            set(harness.codec, "datagramWriteIndex", 0);
+            harness.enqueue(RELIABLE_PAYLOAD, RakReliability.RELIABLE, RakPriority.HIGH);
+            List<RakDatagramPacket> reliable = harness.sendOriginals();
+            int reliableSize = reliable.get(0).getSize();
+            harness.releaseOutbound(reliable);
+
+            IntObjectMap<?> samples = (IntObjectMap<?>) get(harness.codec, "modelDatagramSamples");
+            Assertions.assertTrue(samples.isEmpty());
+            Assertions.assertEquals(reliableSize, harness.window.getBytesInFlight(),
+                    "sequence replacement must retire the old scalar sample before charging reliable flight");
+            harness.clock.set(200L);
+            harness.ack(0);
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+        } finally {
+            harness.closeAndAssertPayloadsReleased();
+        }
+    }
+
     private static void assertRecoveryPayload(RakRecoveryMode mode, RecoveryTrigger trigger) throws Exception {
         Harness harness = harness(mode);
         try {
@@ -113,10 +225,13 @@ public class RakSessionCodecReliabilityBoundaryTests {
 
             if (trigger == RecoveryTrigger.NACK) {
                 harness.nack(workloadSequence);
-                if (mode == RakRecoveryMode.BOUNDED) {
-                    harness.sendBoundedRecovery(0L);
+                if (mode.usesBoundedRecovery()) {
+                    long recoveryAt = mode.usesModelBasedCongestionControl()
+                            ? harness.window.getNackLossDeadlineMillis(workload.getSendTime(), harness.clock.get())
+                            : 0L;
+                    harness.sendBoundedRecovery(recoveryAt);
                 }
-            } else if (mode == RakRecoveryMode.BOUNDED) {
+            } else if (mode.usesBoundedRecovery()) {
                 harness.sendBoundedRecovery(timeoutAt);
             } else {
                 harness.sendLegacyTimeoutRecovery(timeoutAt);
@@ -184,14 +299,22 @@ public class RakSessionCodecReliabilityBoundaryTests {
         RakSessionCodec codec = new RakSessionCodec(channel, clock::get);
         RakSlidingWindow window = new RakSlidingWindow(MTU, mode);
         IntObjectMap<RakDatagramPacket> sent = new IntObjectHashMap<>();
+        Queue<IntRange> incomingAcks = new ArrayDeque<>();
         Queue<IntRange> incomingNaks = new ArrayDeque<>();
         set(codec, "recoveryMode", mode);
         set(codec, "slidingWindow", window);
-        set(codec, "boundedRecovery", mode == RakRecoveryMode.BOUNDED
+        set(codec, "boundedRecovery", mode.usesBoundedRecovery()
                 ? new RakBoundedRecovery(clock::get, () -> 0L) : null);
         set(codec, "sentDatagrams", sent);
-        set(codec, "pendingRetransmissions", new ArrayDeque<>());
-        set(codec, "incomingAcks", new ArrayDeque<>());
+        set(codec, "modelDatagramSamples", mode.usesModelBasedCongestionControl()
+                ? new IntObjectHashMap<>() : null);
+        set(codec, "modelSampleExpiries", mode.usesModelBasedCongestionControl()
+                ? new PriorityQueue<>() : null);
+        set(codec, "modelSampleLosses", mode.usesModelBasedCongestionControl()
+                ? new PriorityQueue<>() : null);
+        set(codec, "pendingRetransmissions", mode.usesModelBasedCongestionControl()
+                ? new PriorityQueue<>() : new ArrayDeque<>());
+        set(codec, "incomingAcks", incomingAcks);
         set(codec, "incomingNaks", incomingNaks);
         set(codec, "outgoingAcks", new ArrayDeque<>());
         set(codec, "outgoingNaks", new ArrayDeque<>());
@@ -200,7 +323,7 @@ public class RakSessionCodecReliabilityBoundaryTests {
         set(codec, "orderWriteIndex", new int[16]);
         set(codec, "state", RakState.CONNECTED);
         invoke(codec, "initHeapWeights");
-        return new Harness(codec, window, sent, incomingNaks, embeddedChannel, context, clock);
+        return new Harness(codec, window, sent, incomingAcks, incomingNaks, embeddedChannel, context, clock);
     }
 
     private static Object invoke(Object target, String name) throws Exception {
@@ -218,6 +341,12 @@ public class RakSessionCodecReliabilityBoundaryTests {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    private static Object get(Object target, String name) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(target);
     }
 
     private static Object defaultValue(Class<?> type) {
@@ -257,6 +386,7 @@ public class RakSessionCodecReliabilityBoundaryTests {
         private final RakSessionCodec codec;
         private final RakSlidingWindow window;
         private final IntObjectMap<RakDatagramPacket> sent;
+        private final Queue<IntRange> incomingAcks;
         private final Queue<IntRange> incomingNaks;
         private final EmbeddedChannel channel;
         private final ChannelHandlerContext context;
@@ -265,11 +395,12 @@ public class RakSessionCodecReliabilityBoundaryTests {
         private boolean closed;
 
         private Harness(RakSessionCodec codec, RakSlidingWindow window, IntObjectMap<RakDatagramPacket> sent,
-                        Queue<IntRange> incomingNaks, EmbeddedChannel channel, ChannelHandlerContext context,
-                        AtomicLong clock) {
+                        Queue<IntRange> incomingAcks, Queue<IntRange> incomingNaks, EmbeddedChannel channel,
+                        ChannelHandlerContext context, AtomicLong clock) {
             this.codec = codec;
             this.window = window;
             this.sent = sent;
+            this.incomingAcks = incomingAcks;
             this.incomingNaks = incomingNaks;
             this.channel = channel;
             this.context = context;
@@ -299,6 +430,13 @@ public class RakSessionCodecReliabilityBoundaryTests {
             invoke(this.codec, "handleIncomingAcknowledge",
                     new Class<?>[]{ChannelHandlerContext.class, long.class, Queue.class, boolean.class},
                     this.context, this.clock.get(), this.incomingNaks, true);
+        }
+
+        private void ack(int sequenceIndex) throws Exception {
+            this.incomingAcks.add(new IntRange(sequenceIndex));
+            invoke(this.codec, "handleIncomingAcknowledge",
+                    new Class<?>[]{ChannelHandlerContext.class, long.class, Queue.class, boolean.class},
+                    this.context, this.clock.get(), this.incomingAcks, false);
         }
 
         private void sendBoundedRecovery(long time) throws Exception {

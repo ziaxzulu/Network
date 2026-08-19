@@ -50,6 +50,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -266,6 +267,301 @@ public class RakSessionCodecBoundedRecoveryTests {
     }
 
     @Test
+    public void modelNackWaitsForReorderingWindowAndLateOriginalAckCancelsRecovery() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RecordingMetrics metrics = new RecordingMetrics();
+        Harness harness = harness(clock, metrics, RakRecoveryMode.MODEL_BASED);
+        TestDatagram reordered = datagram(100, 0);
+        try {
+            harness.add(reordered.packet);
+            harness.arm();
+            double initialCwnd = harness.window.getCongestionWindow();
+
+            invokeNack(harness.codec, reordered.packet, 200L);
+            Assertions.assertEquals(1, harness.pending.size());
+            Assertions.assertTrue(reordered.packet.isInFlight(),
+                    "a NACK hint is not physical-loss proof during the reordering window");
+            Assertions.assertEquals(0, invokeRecovery(harness.codec, harness.context, 249L));
+            Assertions.assertEquals(initialCwnd, harness.window.getCongestionWindow());
+
+            clock.set(225L);
+            acknowledge(harness, reordered.packet, 225L);
+            Assertions.assertTrue(harness.pending.isEmpty(), "the late original ACK cancels pending recovery");
+            Assertions.assertEquals(0, invokeRecovery(harness.codec, harness.context, 250L));
+            Assertions.assertEquals(1, metrics.nackHints);
+            Assertions.assertEquals(1, metrics.reorderedNacks);
+            Assertions.assertEquals(0, metrics.validatedNacks);
+            Assertions.assertTrue(metrics.sendTypes.isEmpty());
+        } finally {
+            harness.close();
+            releaseIfNeeded(reordered.payload);
+        }
+    }
+
+    @Test
+    public void cleanHandshakeMinimumCannotValidateAReorderedNackAfterPathDelayStep() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RecordingMetrics metrics = new RecordingMetrics();
+        Harness harness = harness(clock, metrics, RakRecoveryMode.MODEL_BASED);
+        TestDatagram cleanHandshake = datagram(100, 0);
+        TestDatagram reordered = datagram(100, 1);
+        try {
+            harness.add(cleanHandshake.packet);
+            harness.schedule(cleanHandshake.packet);
+            acknowledge(harness, cleanHandshake.packet, 5L);
+            Assertions.assertEquals(5L, harness.window.getModelMinimumRttMillis());
+
+            reordered.packet.setSendTime(1_000L);
+            harness.add(reordered.packet);
+            harness.schedule(reordered.packet);
+            double initialCwnd = harness.window.getCongestionWindow();
+
+            invokeNack(harness.codec, reordered.packet, 1_190L);
+            Assertions.assertEquals(0, invokeRecovery(harness.codec, harness.context, 1_200L),
+                    "stale clean-path RTT must not validate a gap before the transition reordering floor");
+            acknowledge(harness, reordered.packet, 1_210L);
+            Assertions.assertEquals(0, invokeRecovery(harness.codec, harness.context, 1_240L));
+
+            Assertions.assertTrue(harness.pending.isEmpty());
+            Assertions.assertEquals(initialCwnd, harness.window.getCongestionWindow());
+            Assertions.assertEquals(1, metrics.nackHints);
+            Assertions.assertEquals(1, metrics.reorderedNacks);
+            Assertions.assertEquals(0, metrics.validatedNacks);
+            Assertions.assertTrue(metrics.sendTypes.isEmpty());
+        } finally {
+            harness.close();
+            releaseIfNeeded(cleanHandshake.payload);
+            releaseIfNeeded(reordered.payload);
+        }
+    }
+
+    @Test
+    public void throwingReorderingMetricCannotStrandAcknowledgedTransportState() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RakChannelMetrics throwingMetrics = new RakChannelMetrics() {
+            @Override
+            public void rakNackReorderingResolved(long observedDelayMillis) {
+                throw new IllegalStateException("reordering metric failure");
+            }
+        };
+        Harness harness = harness(clock, throwingMetrics, RakRecoveryMode.MODEL_BASED);
+        TestDatagram reordered = datagram(100, 0);
+        try {
+            harness.add(reordered.packet);
+            harness.arm();
+            invokeNack(harness.codec, reordered.packet, 200L);
+            Assertions.assertSame(reordered.packet, harness.sent.remove(0));
+
+            InvocationTargetException failure = Assertions.assertThrows(InvocationTargetException.class,
+                    () -> invokeAck(harness.codec, reordered.packet, 225L));
+            Assertions.assertEquals("reordering metric failure", failure.getCause().getMessage());
+            Assertions.assertTrue(harness.sent.isEmpty());
+            Assertions.assertTrue(harness.pending.isEmpty());
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+            Assertions.assertEquals(0, harness.window.getUnackedBytes());
+            Assertions.assertEquals(0, reordered.payload.refCnt());
+        } finally {
+            harness.close();
+            releaseIfNeeded(reordered.payload);
+        }
+    }
+
+    @Test
+    public void modelNackSurvivingReorderingWindowIsRecoveredOnceWithoutRenoCollapse() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RecordingMetrics metrics = new RecordingMetrics();
+        Harness harness = harness(clock, metrics, RakRecoveryMode.MODEL_BASED);
+        TestDatagram lost = datagram(100, 0);
+        try {
+            harness.add(lost.packet);
+            harness.arm();
+            double initialCwnd = harness.window.getCongestionWindow();
+
+            invokeNack(harness.codec, lost.packet, 200L);
+            Assertions.assertEquals(0, invokeRecovery(harness.codec, harness.context, 249L));
+            Assertions.assertEquals(1, invokeRecovery(harness.codec, harness.context, 250L));
+            harness.channel.flushOutbound();
+            releaseOutbound(harness.channel, 1);
+
+            Assertions.assertEquals(initialCwnd, harness.window.getCongestionWindow(),
+                    "validated isolated loss is recovered but not treated as a Reno multiplicative decrease");
+            Assertions.assertEquals(Arrays.asList(RakDatagramSendType.NACK_RETRANSMISSION), metrics.sendTypes);
+            Assertions.assertEquals(1, metrics.nackHints);
+            Assertions.assertEquals(0, metrics.reorderedNacks);
+            Assertions.assertEquals(1, metrics.validatedNacks);
+            Assertions.assertTrue(harness.pending.isEmpty());
+        } finally {
+            harness.close();
+            releaseIfNeeded(lost.payload);
+        }
+    }
+
+    @Test
+    public void modelNackSchedulerSelectsEarliestEligibleDeadlineInsteadOfFifoHead() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RecordingMetrics metrics = new RecordingMetrics();
+        Harness harness = harness(clock, metrics, RakRecoveryMode.MODEL_BASED);
+        TestDatagram older = datagram(100, 0);
+        TestDatagram newer = datagram(100, 1);
+        try {
+            newer.packet.setSendTime(100L);
+            harness.add(older.packet);
+            harness.add(newer.packet);
+            harness.arm();
+
+            invokeNack(harness.codec, newer.packet, 200L);
+            invokeNack(harness.codec, older.packet, 200L);
+            Assertions.assertEquals(2, harness.pending.size());
+            Assertions.assertEquals(1, invokeRecovery(harness.codec, harness.context, 250L),
+                    "later-enqueued but earlier-deadline recovery must bypass a future FIFO head");
+            harness.channel.flushOutbound();
+            releaseOutbound(harness.channel, 1);
+
+            Assertions.assertEquals(1, older.packet.getRetransmissionCount());
+            Assertions.assertEquals(0, newer.packet.getRetransmissionCount());
+            Assertions.assertEquals(1, harness.pending.size());
+            Assertions.assertEquals(Arrays.asList(RakDatagramSendType.NACK_RETRANSMISSION), metrics.sendTypes);
+        } finally {
+            harness.close();
+            releaseIfNeeded(older.payload);
+            releaseIfNeeded(newer.payload);
+        }
+    }
+
+    @Test
+    public void modelPersistentBlackholeSendsOnlyBackedOffProbesAndSuppressesOriginals() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RecordingMetrics metrics = new RecordingMetrics();
+        Harness harness = harness(clock, metrics, RakRecoveryMode.MODEL_BASED);
+        TestDatagram blackholed = datagram(100, 0);
+        ByteBuf queuedPayload = Unpooled.buffer(100).writeByte(0x42).writeZero(99);
+        try {
+            harness.add(blackholed.packet);
+            harness.arm();
+
+            for (int probe = 0; probe < 2; probe++) {
+                long due = harness.recovery.getNextProbeAtMillis();
+                clock.set(due);
+                Assertions.assertEquals(1, invokeRecovery(harness.codec, harness.context, due));
+                harness.channel.flushOutbound();
+                releaseOutbound(harness.channel, 1);
+                Assertions.assertFalse(harness.window.isModelPersistentCongestion());
+            }
+
+            ChannelPromise applicationPromise = harness.context.newPromise();
+            harness.codec.write(harness.context,
+                    new RakMessage(queuedPayload, RakReliability.RELIABLE, RakPriority.HIGH), applicationPromise);
+            Assertions.assertTrue(applicationPromise.isSuccess());
+
+            long persistentDue = harness.recovery.getNextProbeAtMillis();
+            clock.set(persistentDue);
+            invokeInternalFlush(harness.codec, harness.context);
+            harness.channel.flushOutbound();
+            releaseOutbound(harness.channel, 1);
+
+            Assertions.assertTrue(harness.window.isModelPersistentCongestion());
+            Assertions.assertEquals(2D * MTU, harness.window.getCongestionWindow());
+            Assertions.assertEquals(Arrays.asList(RakDatagramSendType.TIMEOUT_RETRANSMISSION,
+                    RakDatagramSendType.TIMEOUT_RETRANSMISSION,
+                    RakDatagramSendType.TIMEOUT_RETRANSMISSION), metrics.sendTypes);
+            Assertions.assertTrue((Integer) get(harness.codec, "queuedBytes") > 0,
+                    "ordinary traffic remains queued until ACK progress exits persistent congestion");
+        } finally {
+            harness.close();
+            releaseIfNeeded(blackholed.payload);
+            releaseIfNeeded(queuedPayload);
+        }
+    }
+
+    @Test
+    public void modelRetransmissionCallbackFailureRestoresDeliverySampleAndPacerState() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RakChannelMetrics throwingMetrics = new RakChannelMetrics() {
+            @Override
+            public void rakDatagramSent(RakDatagramSendType sendType, int bytes, int retransmissionAttempt,
+                                        int bytesInFlight) {
+                throw new IllegalStateException("model metrics failure");
+            }
+        };
+        Harness harness = harness(clock, throwingMetrics, RakRecoveryMode.MODEL_BASED);
+        TestDatagram datagram = datagram(100, 0);
+        try {
+            harness.add(datagram.packet);
+            harness.arm();
+            long oldDelivered = datagram.packet.getDeliveredBytesAtSend();
+            long oldDeliveredTime = datagram.packet.getDeliveredTimeAtSend();
+            long oldFirstSend = datagram.packet.getFirstSendTime();
+            long oldModelSend = datagram.packet.getModelSendTime();
+            int oldModelInFlight = datagram.packet.getModelTxInFlight();
+
+            invokeNack(harness.codec, datagram.packet, 200L);
+            InvocationTargetException failure = Assertions.assertThrows(InvocationTargetException.class,
+                    () -> recoveryMethod().invoke(harness.codec, harness.context, 250L, MTU));
+            Assertions.assertEquals("model metrics failure", failure.getCause().getMessage());
+            Assertions.assertSame(datagram.packet, harness.sent.get(0));
+            Assertions.assertEquals(1, harness.pending.size());
+            Assertions.assertEquals(oldDelivered, datagram.packet.getDeliveredBytesAtSend());
+            Assertions.assertEquals(oldDeliveredTime, datagram.packet.getDeliveredTimeAtSend());
+            Assertions.assertEquals(oldFirstSend, datagram.packet.getFirstSendTime());
+            Assertions.assertEquals(oldModelSend, datagram.packet.getModelSendTime());
+            Assertions.assertEquals(oldModelInFlight, datagram.packet.getModelTxInFlight());
+            Assertions.assertEquals(0, datagram.packet.getRetransmissionCount());
+            Assertions.assertFalse(datagram.packet.isInFlight());
+            Assertions.assertTrue(datagram.packet.isRetransmissionPending());
+            Assertions.assertEquals(1, datagram.packet.refCnt());
+        } finally {
+            harness.close();
+            releaseIfNeeded(datagram.payload);
+        }
+    }
+
+    @Test
+    public void modelUnreliableOriginalCallbackFailureRollsBackScalarFlightPacerAndPayload() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RakChannelMetrics throwingMetrics = new RakChannelMetrics() {
+            @Override
+            public void rakDatagramSent(RakDatagramSendType sendType, int bytes, int retransmissionAttempt,
+                                        int bytesInFlight) {
+                if (sendType == RakDatagramSendType.ORIGINAL) {
+                    throw new IllegalStateException("unreliable metrics failure");
+                }
+            }
+        };
+        Harness harness = harness(clock, throwingMetrics, RakRecoveryMode.MODEL_BASED);
+        ByteBuf payload = Unpooled.buffer(100).writeByte(0x44).writeZero(99);
+        try {
+            int initialAllowance = harness.window.getTransmissionBandwidth(0L);
+            ChannelPromise promise = harness.context.newPromise();
+            harness.codec.write(harness.context,
+                    new RakMessage(payload, RakReliability.UNRELIABLE, RakPriority.HIGH), promise);
+            Assertions.assertTrue(promise.isSuccess());
+
+            Method sendDatagrams = RakSessionCodec.class.getDeclaredMethod("sendDatagrams",
+                    ChannelHandlerContext.class, long.class, int.class);
+            sendDatagrams.setAccessible(true);
+            InvocationTargetException failure = Assertions.assertThrows(InvocationTargetException.class,
+                    () -> sendDatagrams.invoke(harness.codec, harness.context, 0L, MTU));
+            Assertions.assertEquals("unreliable metrics failure", failure.getCause().getMessage());
+
+            Assertions.assertTrue(((IntObjectMap<?>) get(harness.codec, "modelDatagramSamples")).isEmpty());
+            Assertions.assertTrue(((Queue<?>) get(harness.codec, "modelSampleExpiries")).isEmpty());
+            Assertions.assertTrue(((Queue<?>) get(harness.codec, "modelSampleLosses")).isEmpty());
+            Assertions.assertTrue(harness.sent.isEmpty());
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+            Assertions.assertEquals(initialAllowance, harness.window.getTransmissionBandwidth(0L),
+                    "a failed handoff restores the exact pacing credit available before the attempt");
+            Assertions.assertEquals(-1D, harness.window.getModelBandwidthBytesPerMillis(),
+                    "a never-handed-off datagram is not credited or recorded as loss");
+            Assertions.assertEquals(0, payload.refCnt(),
+                    "the failed original has no map or channel owner and must release its payload");
+            Assertions.assertNull(harness.channel.readOutbound());
+        } finally {
+            harness.close();
+            releaseIfNeeded(payload);
+        }
+    }
+
+    @Test
     public void terminalDisconnectIsHandedOffBeforeCloseWhileOrdinaryImmediateWaitsForCwnd() throws Exception {
         AtomicLong clock = new AtomicLong();
         Harness harness = harness(clock, null);
@@ -306,7 +602,44 @@ public class RakSessionCodecBoundedRecoveryTests {
         }
     }
 
+    @Test
+    public void modelImmediateUnreliableTrafficCannotBypassSharedPacerAndWindow() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        Harness harness = harness(clock, null, RakRecoveryMode.MODEL_BASED);
+        List<TestDatagram> occupyingWindow = new ArrayList<>();
+        ByteBuf applicationPayload = Unpooled.buffer(100).writeByte(0x43).writeZero(99);
+        try {
+            for (int i = 0; i < 11; i++) {
+                TestDatagram datagram = datagram(1_100, i);
+                occupyingWindow.add(datagram);
+                harness.add(datagram.packet);
+                harness.schedule(datagram.packet);
+            }
+
+            clock.set(1L);
+            ChannelPromise promise = harness.context.newPromise();
+            harness.codec.write(harness.context,
+                    new RakMessage(applicationPayload, RakReliability.UNRELIABLE, RakPriority.IMMEDIATE), promise);
+
+            Assertions.assertTrue(promise.isSuccess());
+            Assertions.assertNull(harness.channel.readOutbound(),
+                    "unreliable application data must not use sendImmediate to bypass model admission");
+            Assertions.assertTrue((Integer) get(harness.codec, "queuedBytes") > 0);
+        } finally {
+            harness.close();
+            for (TestDatagram datagram : occupyingWindow) {
+                releaseIfNeeded(datagram.payload);
+            }
+            releaseIfNeeded(applicationPayload);
+        }
+    }
+
     private static Harness harness(AtomicLong clock, RakChannelMetrics metrics) throws Exception {
+        return harness(clock, metrics, RakRecoveryMode.BOUNDED);
+    }
+
+    private static Harness harness(AtomicLong clock, RakChannelMetrics metrics, RakRecoveryMode recoveryMode)
+            throws Exception {
         ChannelDuplexHandler outboundHandler = new ChannelDuplexHandler();
         EmbeddedChannel embeddedChannel = new EmbeddedChannel();
         embeddedChannel.pipeline().addLast(RakSessionCodec.NAME, outboundHandler);
@@ -319,7 +652,7 @@ public class RakSessionCodecBoundedRecoveryTests {
                         return metrics;
                     }
                     if (method.getName().equals("getRecoveryMode")) {
-                        return RakRecoveryMode.BOUNDED;
+                        return recoveryMode;
                     }
                     if (method.getName().equals("getMtu")) {
                         return MTU;
@@ -345,15 +678,22 @@ public class RakSessionCodecBoundedRecoveryTests {
                 });
 
         RakSessionCodec codec = new RakSessionCodec(channel, clock::get);
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.BOUNDED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU, recoveryMode);
         RakBoundedRecovery recovery = new RakBoundedRecovery(clock::get, () -> 0L);
         IntObjectMap<RakDatagramPacket> sent = new IntObjectHashMap<>();
-        Queue<Object> pending = new ArrayDeque<>();
+        Queue<Object> pending = recoveryMode.usesModelBasedCongestionControl()
+                ? new PriorityQueue<>() : new ArrayDeque<>();
 
-        set(codec, "recoveryMode", RakRecoveryMode.BOUNDED);
+        set(codec, "recoveryMode", recoveryMode);
         set(codec, "slidingWindow", window);
         set(codec, "boundedRecovery", recovery);
         set(codec, "sentDatagrams", sent);
+        set(codec, "modelDatagramSamples", recoveryMode.usesModelBasedCongestionControl()
+                ? new IntObjectHashMap<>() : null);
+        set(codec, "modelSampleExpiries", recoveryMode.usesModelBasedCongestionControl()
+                ? new PriorityQueue<>() : null);
+        set(codec, "modelSampleLosses", recoveryMode.usesModelBasedCongestionControl()
+                ? new PriorityQueue<>() : null);
         set(codec, "pendingRetransmissions", pending);
         set(codec, "incomingAcks", new ArrayDeque<>());
         set(codec, "incomingNaks", new ArrayDeque<>());
@@ -479,11 +819,29 @@ public class RakSessionCodecBoundedRecoveryTests {
 
     private static final class RecordingMetrics implements RakChannelMetrics {
         private final List<RakDatagramSendType> sendTypes = new ArrayList<>();
+        private int nackHints;
+        private int reorderedNacks;
+        private int validatedNacks;
 
         @Override
         public void rakDatagramSent(RakDatagramSendType sendType, int bytes, int retransmissionAttempt,
                                     int bytesInFlight) {
             this.sendTypes.add(sendType);
+        }
+
+        @Override
+        public void rakNackRecoveryHint(long validationDelayMillis) {
+            this.nackHints++;
+        }
+
+        @Override
+        public void rakNackReorderingResolved(long observedDelayMillis) {
+            this.reorderedNacks++;
+        }
+
+        @Override
+        public void rakNackLossValidated(long observedDelayMillis) {
+            this.validatedNacks++;
         }
     }
 
