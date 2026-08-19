@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -117,8 +118,9 @@ def generated_at() -> str:
     return instant.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def discover_case_roots(inputs: Iterable[Path]) -> tuple[list[Path], list[str]]:
-    discovered: set[Path] = set()
+def discover_evidence_roots(inputs: Iterable[Path]) -> tuple[list[Path], list[Path], list[str]]:
+    discovered_cases: set[Path] = set()
+    discovered_campaigns: set[Path] = set()
     issues: list[str] = []
     for supplied in inputs:
         path = supplied.expanduser().resolve()
@@ -135,25 +137,34 @@ def discover_case_roots(inputs: Iterable[Path]) -> tuple[list[Path], list[str]]:
             if case_root is None:
                 issues.append(f"cannot infer case root for raw timeline: {path}")
             else:
-                discovered.add(case_root.resolve())
+                discovered_cases.add(case_root.resolve())
             continue
         if path.is_file() and path.name == "manifest.json":
-            discovered.add(path.parent.resolve())
+            discovered_cases.add(path.parent.resolve())
+            continue
+        if path.is_file() and path.name == "campaign-plan.json":
+            discovered_campaigns.add(path.parent.resolve())
             continue
         if path.is_file():
-            issues.append(f"unsupported input file (expected manifest.json or timeline.jsonl): {path}")
-            continue
-        direct = path / "manifest.json"
-        if direct.is_file():
-            discovered.add(path)
+            issues.append(
+                f"unsupported input file (expected manifest.json, timeline.jsonl, "
+                f"or campaign-plan.json): {path}"
+            )
             continue
         manifests = sorted(path.rglob("manifest.json"))
-        if not manifests:
-            issues.append(f"no netns case manifests found below: {path}")
+        campaign_plans = sorted(path.rglob("campaign-plan.json"))
+        if not manifests and not campaign_plans:
+            issues.append(f"no netns case manifests or campaign plans found below: {path}")
             continue
         for manifest in manifests:
-            discovered.add(manifest.parent.resolve())
-    return sorted(discovered, key=str), issues
+            discovered_cases.add(manifest.parent.resolve())
+        for campaign_plan in campaign_plans:
+            discovered_campaigns.add(campaign_plan.parent.resolve())
+    return (
+        sorted(discovered_cases, key=str),
+        sorted(discovered_campaigns, key=str),
+        issues,
+    )
 
 
 def profile_name(manifest: dict[str, Any]) -> str:
@@ -182,6 +193,71 @@ def find_campaign_root(case_root: Path) -> Path | None:
     return None
 
 
+def find_goal_root(campaign_root: Path) -> Path | None:
+    for candidate in (campaign_root, *campaign_root.parents):
+        if (candidate / "goal-manifest.json").is_file() \
+                and (candidate / "distribution.sha256").is_file():
+            return candidate
+    return None
+
+
+def validate_goal_provenance(campaign_root: Path, recovery_mode: str) -> dict[str, Any]:
+    goal_root = find_goal_root(campaign_root)
+    if goal_root is None:
+        raise AnalysisError("campaign lacks ancestor goal-manifest.json and distribution.sha256")
+    manifest_path = goal_root / "goal-manifest.json"
+    distribution_path = goal_root / "distribution.sha256"
+    manifest = load_json(manifest_path)
+    if manifest.get("kind") != "raknet-netns-autonomous-goal":
+        raise AnalysisError("goal manifest has the wrong kind")
+    generated = manifest.get("generatedAt")
+    if not isinstance(generated, str) or not generated.strip():
+        raise AnalysisError("goal manifest lacks generatedAt provenance")
+    if require_recovery_mode(manifest, "goal manifest") != recovery_mode:
+        raise AnalysisError("goal recovery mode disagrees with campaign")
+    candidate_revision = manifest.get("candidateRevision")
+    if not isinstance(candidate_revision, str):
+        raise AnalysisError("goal manifest lacks candidateRevision provenance")
+    revision_match = re.fullmatch(r"([0-9a-f]{12,40})\+dist-([0-9a-f]{12})", candidate_revision)
+    if revision_match is None:
+        raise AnalysisError("goal candidateRevision is not a source revision plus distribution fingerprint")
+    try:
+        distribution_bytes = distribution_path.read_bytes()
+        distribution_text = distribution_bytes.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise AnalysisError(f"invalid distribution manifest {distribution_path}: {error}") from error
+    if not distribution_text.endswith("\n"):
+        raise AnalysisError("distribution manifest must be nonempty and newline terminated")
+    entries: list[tuple[str, str]] = []
+    for line in distribution_text.splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  ([^/\\\x00]+\.jar)", line)
+        if match is None:
+            raise AnalysisError("distribution manifest contains a malformed or non-flat jar entry")
+        entries.append((match.group(2), match.group(1)))
+    if not entries or not any(name.startswith("benchmark-") for name, _hash in entries):
+        raise AnalysisError("distribution manifest lacks a benchmark jar")
+    names = [name for name, _hash in entries]
+    if names != sorted(names) or len(names) != len(set(names)):
+        raise AnalysisError("distribution manifest jar names are unsorted or duplicated")
+    distribution_hash = hashlib.sha256(distribution_bytes).hexdigest()
+    if revision_match.group(2) != distribution_hash[:12]:
+        raise AnalysisError("goal candidateRevision distribution fingerprint disagrees with distribution.sha256")
+    return {
+        "goalRoot": str(goal_root),
+        "goalGeneratedAt": generated,
+        # The launcher emits one immutable manifest per goal. Its generatedAt value is the only
+        # execution identifier shared by sibling campaigns within that goal; paths are not identities
+        # because copying one goal tree must not manufacture another independent repetition.
+        "goalExecutionIdentity": generated,
+        "candidateRevision": candidate_revision,
+        "sourceRevision": revision_match.group(1),
+        "distributionSha256": distribution_hash,
+        "distributionEntries": len(entries),
+        "manifest": str(manifest_path),
+        "distributionManifest": str(distribution_path),
+    }
+
+
 def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {
         "campaignRoot": str(campaign_root),
@@ -199,7 +275,7 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
         parameters = plan.get("parameters")
         if not isinstance(generated, str) or not generated.strip():
             raise AnalysisError("campaign plan lacks a generatedAt execution identity")
-        if not isinstance(output_root, str) or not output_root.strip():
+        if not isinstance(output_root, str) or not output_root.strip() or not Path(output_root).is_absolute():
             raise AnalysisError("campaign plan lacks an outputRoot execution identity")
         if not isinstance(parameters, dict):
             raise AnalysisError("campaign plan parameters must be an object")
@@ -215,6 +291,7 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
             raise AnalysisError(f"campaign plan parameters are incomplete: {missing_parameters}")
         planned_recovery_mode = require_recovery_mode(parameters, "campaign plan parameters")
         planned_resource_safety = require_resource_safety(parameters, "campaign plan parameters")
+        goal_provenance = validate_goal_provenance(campaign_root, planned_recovery_mode)
         for field in ("packetLimit", "globalPacketLimit", "maxQueuedBytes", "workers"):
             require_optional_positive_int(parameters, field, "campaign plan parameters")
         if summary.get("kind") != "raknet-netns-pilot-summary" or summary.get("executed") is not True \
@@ -222,9 +299,13 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
             raise AnalysisError("campaign summary does not prove successful execution")
         if not isinstance(summary.get("generatedAt"), str) or not summary["generatedAt"].strip():
             raise AnalysisError("campaign summary lacks generatedAt provenance")
+        declared_output_root = Path(output_root)
         if not isinstance(summary.get("campaignPlan"), str) \
-                or Path(summary["campaignPlan"]).name != "campaign-plan.json":
+                or Path(summary["campaignPlan"]) != declared_output_root / "campaign-plan.json":
             raise AnalysisError("campaign summary does not identify its campaign plan")
+        if not isinstance(summary.get("campaignStatus"), str) \
+                or Path(summary["campaignStatus"]) != declared_output_root / "campaign-status.jsonl":
+            raise AnalysisError("campaign summary does not identify its campaign status log")
         profile_rows = plan.get("profiles")
         if not isinstance(profile_rows, list) or not all(isinstance(row, dict) for row in profile_rows):
             raise AnalysisError("campaign plan profiles must be an array of objects")
@@ -272,6 +353,10 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
                 raise AnalysisError(f"campaign recovery mode disagrees with manifest for {profile}")
             if case.get("recoveryMode") != planned_recovery_mode:
                 raise AnalysisError(f"campaign recovery mode disagrees with timeline for {profile}")
+            if case.get("artifactRevisions") != [goal_provenance["candidateRevision"]]:
+                raise AnalysisError(
+                    f"campaign merged server/receiver revisions disagree with goal candidate for {profile}"
+                )
             planned = profile_by_name[profile]
             if manifest.get("case") != planned["caseType"]:
                 raise AnalysisError(f"campaign case type disagrees with manifest for {profile}")
@@ -305,14 +390,17 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
             result_artifact = result_by_profile[profile].get("caseArtifact")
             if not isinstance(result_artifact, str) or not result_artifact.strip():
                 raise AnalysisError(f"campaign result lacks caseArtifact for {profile}")
-            if Path(status_artifact).name != expected_case_name or Path(result_artifact).name != expected_case_name:
+            expected_artifact = declared_output_root / "cases" / expected_case_name
+            if Path(status_artifact) != expected_artifact or Path(result_artifact) != expected_artifact:
                 raise AnalysisError(f"campaign artifact provenance disagrees with discovered case for {profile}")
 
         comparison_parameters = {
             field: value for field, value in parameters.items() if field != "recoveryMode"
         }
         configuration = {"profiles": profile_rows, "parameters": comparison_parameters}
-        identity = f"{generated}|{output_root}"
+        # One autonomous goal launches at most one full six-profile campaign. Count the launcher's
+        # path-independent goal identity so relocating or copying evidence cannot create a repetition.
+        identity = goal_provenance["goalExecutionIdentity"]
         result.update({
             "status": "pass",
             "profiles": plan_profiles,
@@ -320,6 +408,7 @@ def validate_campaign(campaign_root: Path, cases: list[dict[str, Any]]) -> dict[
             "executionIdentity": identity,
             "recoveryMode": planned_recovery_mode,
             "resourceSafety": planned_resource_safety,
+            "goalProvenance": goal_provenance,
             "experimentConfiguration": configuration,
             "experimentConfigurationKey": json.dumps(configuration, sort_keys=True, separators=(",", ":")),
             "plan": str(campaign_root / "campaign-plan.json"),
@@ -1034,7 +1123,7 @@ def sustained_reclamation(
 
 def event_metrics(
     samples: list[dict[str, Any]], event: dict[str, Any], next_event: dict[str, Any] | None,
-    previous_event: dict[str, Any] | None,
+    previous_event: dict[str, Any] | None, *, permanent_disappearance: bool = False,
 ) -> dict[str, Any]:
     start = event["applyStartedAtEpochMillis"]
     completed = event["applyCompletedAtEpochMillis"]
@@ -1182,7 +1271,7 @@ def event_metrics(
         if previous_event is not None and previous_event["label"] == "external-blackhole":
             steady_pre = last_at_or_before(samples, previous_event["applyStartedAtEpochMillis"]) or pre
         result["timing"]["reclamation"] = sustained_reclamation(samples, completed, steady_pre)
-    elif event["label"] == "external-blackhole" and next_event is None:
+    elif event["label"] == "external-blackhole" and next_event is None and permanent_disappearance:
         result["timing"]["reclamation"] = sustained_reclamation(
             samples, completed, pre, require_closed_peers=True
         )
@@ -1262,9 +1351,13 @@ def shape_key(case: dict[str, Any], *, perfect_reference: bool = False) -> str:
 
 
 def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[str, Any]:
+    campaign_root = find_campaign_root(case_root)
     result: dict[str, Any] = {
         "caseRoot": str(case_root),
         "caseId": str(case_root),
+        # Preserve structural ancestry even when manifest JSON is malformed. Comparison mode must
+        # not lose the ability to scope a failed candidate case merely because parsing failed early.
+        "campaignRoot": None if campaign_root is None else str(campaign_root),
         "status": "fail",
         "issues": [],
         "dataAvailability": {},
@@ -1288,8 +1381,6 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
         if healthy_clients != int(healthy_clients) or affected_clients != int(affected_clients):
             raise AnalysisError("manifest healthy/affected client counts must be integers")
         result["profile"] = profile_name(manifest)
-        campaign_root = find_campaign_root(case_root)
-        result["campaignRoot"] = None if campaign_root is None else str(campaign_root)
         timeline_path = find_one(case_root, "server/*/timeline.jsonl", "server timeline.jsonl")
         samples, timeline_availability = parse_timeline(timeline_path, manifest)
         result["artifacts"] = {"manifest": str(manifest_path), "timeline": str(timeline_path)}
@@ -1326,8 +1417,43 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
                     "status": "not-configured-zero-clients"
                 }
         result["dataAvailability"]["receiverTimelines"] = receiver_timeline_availability
-        aggregate, _summary = load_summary(case_root / "merged" / "lab-summary.json")
+        aggregate, merged_summary = load_summary(case_root / "merged" / "lab-summary.json")
         result["aggregate"] = aggregate
+        server_provenance = merged_summary.get("server")
+        if not isinstance(server_provenance, dict) \
+                or server_provenance.get("runId") != run_id \
+                or server_provenance.get("role") != "server" \
+                or not isinstance(server_provenance.get("gitRevision"), str) \
+                or not server_provenance["gitRevision"].strip():
+            raise AnalysisError("merged summary lacks exact server run/revision provenance")
+        artifact_revisions: list[str] = [server_provenance["gitRevision"]]
+        receiver_provenance = merged_summary.get("receivers")
+        expected_receivers = {
+            expected_run_id: client_count
+            for _role_name, _directory, client_count, expected_run_id in receiver_roles
+            if client_count > 0
+        }
+        if not isinstance(receiver_provenance, list) \
+                or len(receiver_provenance) != len(expected_receivers):
+            raise AnalysisError("merged summary receiver provenance count is incomplete or duplicated")
+        seen_receiver_runs: set[str] = set()
+        for receiver in receiver_provenance:
+            if not isinstance(receiver, dict):
+                raise AnalysisError("merged summary receiver provenance row is not an object")
+            receiver_run_id = receiver.get("runId")
+            receiver_revision = receiver.get("gitRevision")
+            if receiver.get("role") != "client" \
+                    or receiver_run_id not in expected_receivers \
+                    or receiver_run_id in seen_receiver_runs \
+                    or receiver.get("clients") != expected_receivers.get(receiver_run_id) \
+                    or not isinstance(receiver_revision, str) \
+                    or not receiver_revision.strip():
+                raise AnalysisError("merged summary receiver run/revision provenance is incomplete or unexpected")
+            seen_receiver_runs.add(receiver_run_id)
+            artifact_revisions.append(receiver_revision)
+        if seen_receiver_runs != set(expected_receivers):
+            raise AnalysisError("merged summary receiver provenance does not cover the expected roles")
+        result["artifactRevisions"] = sorted(set(artifact_revisions))
         result["artifacts"]["mergedSummary"] = str(case_root / "merged" / "lab-summary.json")
         if int(aggregate["clients"]) != int(manifest["clients"]):
             raise AnalysisError("merged aggregate client count does not match manifest")
@@ -1374,10 +1500,18 @@ def analyze_case(case_root: Path, early_millis: int, late_millis: int) -> dict[s
                 "maximumEarlyStartMillis": early_millis,
                 "maximumLateCompletionMillis": late_millis,
             }
+        permanent_disappearance = (
+            manifest.get("case") == "blackhole"
+            and manifest.get("recoveryAtEpochMillis") is None
+            and manifest.get("direction") == "both"
+        )
         for index, event in enumerate(events):
             next_event = events[index + 1] if index + 1 < len(events) else None
             previous_event = events[index - 1] if index > 0 else None
-            result["externalEvents"].append(event_metrics(samples, event, next_event, previous_event))
+            result["externalEvents"].append(event_metrics(
+                samples, event, next_event, previous_event,
+                permanent_disappearance=permanent_disappearance,
+            ))
         result["runtimeMaxima"] = {
             "heapUsedBytes": max(sample["runtime"]["heapUsedBytes"] for sample in samples),
             "directBufferPoolMemoryUsedBytes": max(
@@ -1580,10 +1714,21 @@ def absolute_gates(cases: list[dict[str, Any]], args: argparse.Namespace) -> lis
                                   reclaim_ms is not None and reclaim_ms <= 10_000))
         else:
             for event in blackholes:
-                peer_reclaim = event["timing"]["irrecoverablePeerReclamationMillis"]
-                gates.append(gate("irrecoverable-peer-reclamation-millis", scope, peer_reclaim,
-                                  "<=", args.peer_reclamation,
-                                  peer_reclaim is not None and peer_reclaim <= args.peer_reclamation))
+                if case["manifest"].get("direction") == "both":
+                    peer_reclaim = event["timing"]["irrecoverablePeerReclamationMillis"]
+                    gates.append(gate("irrecoverable-peer-reclamation-millis", scope, peer_reclaim,
+                                      "<=", args.peer_reclamation,
+                                      peer_reclaim is not None and peer_reclaim <= args.peer_reclamation))
+                else:
+                    gates.append({
+                        "id": "irrecoverable-peer-reclamation-millis",
+                        "scope": scope,
+                        "status": "not-applicable",
+                        "actual": None,
+                        "operator": None,
+                        "threshold": None,
+                        "reason": "permanent disappearance requires a bidirectional blackhole",
+                    })
     if not poor:
         gates.append({"id": "poor-link-usefulness", "scope": "dataset", "status": "not-applicable",
                       "reason": "no poor profile"})
@@ -1615,21 +1760,64 @@ def reduction(baseline: float, candidate: float) -> tuple[str, float | None]:
 def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]],
                   baseline_campaigns: list[dict[str, Any]], candidate_campaigns: list[dict[str, Any]],
                   minimum: float, max_affected_queue_per_client: int,
-                  minimum_campaigns: int) -> dict[str, Any]:
+                  minimum_campaigns: int, peer_reclamation_millis: int) -> dict[str, Any]:
+    complete_baseline_rows = [
+        campaign for campaign in baseline_campaigns
+        if campaign["status"] == "pass" and campaign["fullCampaign"]
+    ]
+    complete_candidate_rows = [
+        campaign for campaign in candidate_campaigns
+        if campaign["status"] == "pass" and campaign["fullCampaign"]
+    ]
+    complete_baseline_roots = {campaign["campaignRoot"] for campaign in complete_baseline_rows}
+    complete_candidate_roots = {campaign["campaignRoot"] for campaign in complete_candidate_rows}
+    campaign_by_root = {
+        campaign["campaignRoot"]: campaign for campaign in (*baseline_campaigns, *candidate_campaigns)
+    }
+    permanent_candidate_cases = [
+        case for case in candidate
+        if case.get("profile") == "blackhole"
+        and case.get("manifest", {}).get("direction") == "both"
+        and case.get("manifest", {}).get("recoveryAtEpochMillis") is None
+    ]
+    valid_permanent_candidate_cases = []
+    for case in permanent_candidate_cases:
+        blackholes = [
+            event for event in case.get("externalEvents", [])
+            if event.get("label") == "external-blackhole"
+        ]
+        reclamation = None if len(blackholes) != 1 else \
+            blackholes[0].get("timing", {}).get("irrecoverablePeerReclamationMillis")
+        if case["status"] == "pass" and case.get("campaignValidationStatus") == "pass" \
+                and finite_number(reclamation) and reclamation <= peer_reclamation_millis:
+            valid_permanent_candidate_cases.append(case)
+    permanent_goal_identities = {
+        campaign_by_root[case["campaignRoot"]]["goalProvenance"]["goalExecutionIdentity"]
+        for case in valid_permanent_candidate_cases
+        if case.get("campaignRoot") in campaign_by_root
+        and isinstance(campaign_by_root[case["campaignRoot"]].get("goalProvenance"), dict)
+    }
     invalid_baseline = [
         case["caseRoot"] for case in baseline
-        if case["status"] != "pass" or case.get("campaignValidationStatus") != "pass"
+        if case.get("campaignRoot") in complete_baseline_roots
+        and (case["status"] != "pass" or case.get("campaignValidationStatus") != "pass")
     ]
     invalid_candidate = [
         case["caseRoot"] for case in candidate
         if case["status"] != "pass" or case.get("campaignValidationStatus") != "pass"
     ]
+    invalid_candidate_campaigns = [
+        campaign["campaignRoot"] for campaign in candidate_campaigns
+        if campaign["status"] != "pass"
+    ]
     base_map = {case.get("matchKey"): case for case in baseline
                 if case.get("matchKey") and case["status"] == "pass"
-                and case.get("campaignValidationStatus") == "pass"}
+                and case.get("campaignValidationStatus") == "pass"
+                and case.get("campaignRoot") in complete_baseline_roots}
     cand_map = {case.get("matchKey"): case for case in candidate
                 if case.get("matchKey") and case["status"] == "pass"
-                and case.get("campaignValidationStatus") == "pass"}
+                and case.get("campaignValidationStatus") == "pass"
+                and case.get("campaignRoot") in complete_candidate_roots}
     missing_candidate = sorted(key for key in base_map if key not in cand_map)
     extra_candidate = sorted(key for key in cand_map if key not in base_map)
     event_rows: list[dict[str, Any]] = []
@@ -1748,14 +1936,6 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
             "status": gate_status,
         })
     issues: list[str] = []
-    complete_baseline_rows = [
-        campaign for campaign in baseline_campaigns
-        if campaign["status"] == "pass" and campaign["fullCampaign"]
-    ]
-    complete_candidate_rows = [
-        campaign for campaign in candidate_campaigns
-        if campaign["status"] == "pass" and campaign["fullCampaign"]
-    ]
     complete_baseline_campaigns = [campaign["campaignRoot"] for campaign in complete_baseline_rows]
     complete_candidate_campaigns = [campaign["campaignRoot"] for campaign in complete_candidate_rows]
     baseline_identities = {campaign["executionIdentity"] for campaign in complete_baseline_rows}
@@ -1764,32 +1944,69 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
         campaign["experimentConfigurationKey"]
         for campaign in (*complete_baseline_rows, *complete_candidate_rows)
     }
+    valid_candidate_campaign_rows = [
+        campaign for campaign in candidate_campaigns if campaign["status"] == "pass"
+    ]
+    provenance_rows = [
+        *complete_baseline_rows, *valid_candidate_campaign_rows,
+    ]
+    distribution_hashes = {
+        campaign["goalProvenance"]["distributionSha256"]
+        for campaign in provenance_rows
+    }
+    candidate_revisions = {
+        campaign["goalProvenance"]["candidateRevision"]
+        for campaign in provenance_rows
+    }
+    source_revisions = {
+        campaign["goalProvenance"]["sourceRevision"]
+        for campaign in provenance_rows
+    }
+    baseline_scoped_cases = [
+        case for case in baseline if case.get("campaignRoot") in complete_baseline_roots
+    ]
+    # Every explicitly supplied candidate case is decision evidence. Unlike baseline ancillary diagnostics,
+    # a malformed, wrong-mode, or differently-built supplemental candidate must never be silently ignored.
+    candidate_scoped_cases = candidate
+    candidate_scoped_campaigns = candidate_campaigns
     baseline_mode_provenance = {
         "expected": "legacy",
-        "caseModes": sorted({case.get("recoveryMode") for case in baseline}, key=lambda value: str(value)),
+        "caseModes": sorted({case.get("recoveryMode") for case in baseline_scoped_cases},
+                            key=lambda value: str(value)),
         "campaignModes": sorted(
-            {campaign.get("recoveryMode") for campaign in baseline_campaigns}, key=lambda value: str(value)
+            {campaign.get("recoveryMode") for campaign in complete_baseline_rows},
+            key=lambda value: str(value)
         ),
     }
     candidate_mode_provenance = {
         "expected": "bounded",
-        "caseModes": sorted({case.get("recoveryMode") for case in candidate}, key=lambda value: str(value)),
+        "caseModes": sorted({case.get("recoveryMode") for case in candidate_scoped_cases},
+                            key=lambda value: str(value)),
         "campaignModes": sorted(
-            {campaign.get("recoveryMode") for campaign in candidate_campaigns}, key=lambda value: str(value)
+            {campaign.get("recoveryMode") for campaign in candidate_scoped_campaigns},
+            key=lambda value: str(value)
         ),
     }
     recovery_modes_pass = (
-        bool(baseline) and bool(candidate) and bool(baseline_campaigns) and bool(candidate_campaigns)
-        and all(case.get("recoveryMode") == "legacy" for case in baseline)
-        and all(case.get("recoveryMode") == "bounded" for case in candidate)
-        and all(campaign.get("recoveryMode") == "legacy" for campaign in baseline_campaigns)
-        and all(campaign.get("recoveryMode") == "bounded" for campaign in candidate_campaigns)
+        bool(baseline_scoped_cases) and bool(candidate_scoped_cases)
+        and bool(complete_baseline_rows) and bool(complete_candidate_rows)
+        and all(case.get("recoveryMode") == "legacy" for case in baseline_scoped_cases)
+        and all(case.get("recoveryMode") == "bounded" for case in candidate_scoped_cases)
+        and all(campaign.get("recoveryMode") == "legacy" for campaign in complete_baseline_rows)
+        and all(campaign.get("recoveryMode") == "bounded" for campaign in candidate_scoped_campaigns)
     )
     campaigns_pass = (
         len(baseline_identities) >= minimum_campaigns
         and len(candidate_identities) >= minimum_campaigns
         and len(configuration_keys) == 1
     )
+    distribution_provenance_pass = (
+        bool(complete_baseline_rows) and bool(complete_candidate_rows)
+        and len(distribution_hashes) == 1
+        and len(candidate_revisions) == 1
+        and len(source_revisions) == 1
+    )
+    permanent_disappearance_pass = len(permanent_goal_identities) >= minimum_campaigns
     if len(baseline_identities) < minimum_campaigns:
         issues.append(f"baseline has fewer than {minimum_campaigns} distinct complete campaign executions")
     if len(candidate_identities) < minimum_campaigns:
@@ -1798,12 +2015,22 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
         issues.append("complete campaigns do not share one exact experiment configuration")
     if not recovery_modes_pass:
         issues.append("comparison requires every baseline campaign/case to be legacy and every candidate campaign/case to be bounded")
+    if not distribution_provenance_pass:
+        issues.append("comparison requires one identical source revision and staged jar distribution across both recovery modes")
+    if not permanent_disappearance_pass:
+        issues.append(
+            f"candidate has fewer than {minimum_campaigns} distinct valid permanent bidirectional "
+            "disappearance goal executions"
+        )
     integrity_pass = not invalid_baseline and not invalid_candidate \
+        and not invalid_candidate_campaigns \
         and not missing_candidate and not extra_candidate
     if invalid_baseline:
         issues.append("baseline contains invalid cases excluded from comparison")
     if invalid_candidate:
         issues.append("candidate contains invalid cases excluded from comparison")
+    if invalid_candidate_campaigns:
+        issues.append("candidate contains invalid campaign evidence")
     if missing_candidate:
         issues.append("candidate is missing baseline cases")
     if extra_candidate:
@@ -1840,14 +2067,35 @@ def compare_cases(baseline: list[dict[str, Any]], candidate: list[dict[str, Any]
             "baseline": baseline_mode_provenance,
             "candidate": candidate_mode_provenance,
         },
+        "distributionProvenance": {
+            "candidateRevisions": sorted(candidate_revisions),
+            "sourceRevisions": sorted(source_revisions),
+            "distributionSha256": sorted(distribution_hashes),
+            "baselineGoalRoots": sorted({
+                campaign["goalProvenance"]["goalRoot"] for campaign in complete_baseline_rows
+            }),
+            "candidateGoalRoots": sorted({
+                campaign["goalProvenance"]["goalRoot"] for campaign in valid_candidate_campaign_rows
+            }),
+        },
+        "permanentDisappearanceEvidence": {
+            "minimumExecutions": minimum_campaigns,
+            "maximumReclamationMillis": peer_reclamation_millis,
+            "candidateGoalExecutionIdentities": sorted(permanent_goal_identities),
+            "candidateCases": [case["caseRoot"] for case in valid_permanent_candidate_cases],
+            "discoveredCandidateCases": [case["caseRoot"] for case in permanent_candidate_cases],
+        },
         "invalidBaselineCases": invalid_baseline,
         "invalidCandidateCases": invalid_candidate,
+        "invalidCandidateCampaigns": invalid_candidate_campaigns,
         "gateStatus": {
             "pressureReduction": "pass" if reduction_pass else "fail",
             "eventQueueCap": "pass" if queue_pass else "fail",
             "completeCampaigns": "pass" if campaigns_pass else "fail",
             "evidenceIntegrity": "pass" if integrity_pass else "fail",
             "recoveryModeProvenance": "pass" if recovery_modes_pass else "fail",
+            "distributionProvenance": "pass" if distribution_provenance_pass else "fail",
+            "permanentDisappearanceEvidence": "pass" if permanent_disappearance_pass else "fail",
         },
         "status": "pass" if not issues else "fail",
         "issues": issues,
@@ -1940,9 +2188,12 @@ def markdown(report: dict[str, Any]) -> str:
     if not report.get("campaigns"):
         lines.append("- No ancestor campaign plan/summary was supplied; raw-case analysis only.")
     for campaign in report.get("campaigns", []):
+        provenance = campaign.get("goalProvenance") or {}
         lines.append(
             f"- `{campaign['campaignRoot']}`: `{campaign['status']}`; "
-            f"full six-profile campaign: `{campaign.get('fullCampaign', False)}`"
+            f"full six-profile campaign: `{campaign.get('fullCampaign', False)}`; "
+            f"candidate: `{provenance.get('candidateRevision')}`; "
+            f"distribution SHA-256: `{provenance.get('distributionSha256')}`"
         )
         for issue in campaign.get("issues", []):
             lines.append(f"  - {issue}")
@@ -2036,12 +2287,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def analyze_inputs(paths: list[Path], args: argparse.Namespace) -> tuple[
         list[dict[str, Any]], list[str], list[dict[str, Any]]]:
-    roots, issues = discover_case_roots(paths)
+    roots, discovered_campaign_roots, issues = discover_evidence_roots(paths)
     cases = [analyze_case(root, args.apply_early, args.apply_late) for root in roots]
     if not cases:
         issues.append("no analyzable cases discovered")
     assign_occurrences(cases)
-    campaign_roots = sorted({case["campaignRoot"] for case in cases if case.get("campaignRoot")})
+    campaign_roots = sorted({
+        *(str(path) for path in discovered_campaign_roots),
+        *(case["campaignRoot"] for case in cases if case.get("campaignRoot")),
+    })
     campaigns = [validate_campaign(Path(path), cases) for path in campaign_roots]
     campaign_status = {campaign["campaignRoot"]: campaign["status"] for campaign in campaigns}
     for case in cases:
@@ -2049,8 +2303,6 @@ def analyze_inputs(paths: list[Path], args: argparse.Namespace) -> tuple[
             "unavailable-no-campaign" if case.get("campaignRoot") is None
             else campaign_status.get(case["campaignRoot"], "fail")
         )
-    if any(campaign["status"] != "pass" for campaign in campaigns):
-        issues.append("one or more discovered campaigns have invalid plan/summary evidence")
     return cases, issues, campaigns
 
 
@@ -2061,6 +2313,10 @@ def main(argv: list[str]) -> int:
     if args.root:
         cases, issues, campaigns = analyze_inputs(args.root, args)
         gates = absolute_gates(cases, args)
+        if any(campaign["status"] != "pass" for campaign in campaigns):
+            issues.append("one or more discovered campaigns have invalid plan/summary evidence")
+        if any(case["status"] != "pass" for case in cases):
+            issues.append("one or more cases have missing or invalid required evidence")
         mode = "single"
     else:
         baseline, baseline_issues, baseline_campaigns = analyze_inputs(args.baseline_root, args)
@@ -2074,8 +2330,26 @@ def main(argv: list[str]) -> int:
         comparison = compare_cases(
             baseline, candidate, baseline_campaigns, candidate_campaigns,
             args.minimum_pressure_reduction_percent, args.max_affected_queue_per_client,
-            args.minimum_complete_campaigns
+            args.minimum_complete_campaigns, args.peer_reclamation
         )
+        baseline_comparison_roots = set(comparison["requiredCompleteCampaigns"]["baseline"])
+        candidate_comparison_roots = set(comparison["requiredCompleteCampaigns"]["candidate"])
+        candidate_disappearance_cases = set(
+            comparison["permanentDisappearanceEvidence"]["discoveredCandidateCases"]
+        )
+        for case in cases:
+            if case["side"] == "baseline":
+                case["comparisonRole"] = (
+                    "matched-comparison"
+                    if case.get("campaignRoot") in baseline_comparison_roots
+                    else "diagnostic-only"
+                )
+            elif case.get("campaignRoot") in candidate_comparison_roots:
+                case["comparisonRole"] = "matched-comparison"
+            elif case.get("caseRoot") in candidate_disappearance_cases:
+                case["comparisonRole"] = "candidate-absolute-evidence"
+            else:
+                case["comparisonRole"] = "candidate-supplemental-evidence"
         campaigns = [dict(campaign, side="baseline") for campaign in baseline_campaigns] + [
             dict(campaign, side="candidate") for campaign in candidate_campaigns
         ]
@@ -2124,12 +2398,29 @@ def main(argv: list[str]) -> int:
             "threshold": True,
             "reason": None,
         }, {
+            "id": "comparison-distribution-provenance",
+            "scope": "comparison",
+            "status": comparison["gateStatus"]["distributionProvenance"],
+            "actual": comparison["distributionProvenance"],
+            "operator": "one identical source revision and staged jar distribution",
+            "threshold": True,
+            "reason": None,
+        }, {
+            "id": "comparison-permanent-disappearance-evidence",
+            "scope": "comparison",
+            "status": comparison["gateStatus"]["permanentDisappearanceEvidence"],
+            "actual": comparison["permanentDisappearanceEvidence"],
+            "operator": ">= distinct bidirectional no-recovery executions",
+            "threshold": args.minimum_complete_campaigns,
+            "reason": None,
+        }, {
             "id": "comparison-evidence-integrity",
             "scope": "comparison",
             "status": comparison["gateStatus"]["evidenceIntegrity"],
             "actual": {
                 "invalidBaselineCases": comparison["invalidBaselineCases"],
                 "invalidCandidateCases": comparison["invalidCandidateCases"],
+                "invalidCandidateCampaigns": comparison["invalidCandidateCampaigns"],
                 "missingCandidateCases": comparison["missingCandidateCases"],
                 "extraCandidateCases": comparison["extraCandidateCases"],
             },
@@ -2138,8 +2429,6 @@ def main(argv: list[str]) -> int:
             "reason": None,
         }])
         mode = "comparison"
-    if any(case["status"] != "pass" for case in cases):
-        issues.append("one or more cases have missing or invalid required evidence")
     if comparison is not None and comparison["status"] != "pass":
         issues.append("one or more comparative gates failed")
     if any(row["status"] == "fail" for row in gates):

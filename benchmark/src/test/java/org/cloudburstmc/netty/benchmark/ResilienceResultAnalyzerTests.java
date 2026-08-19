@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -34,6 +35,9 @@ import java.util.concurrent.TimeUnit;
 
 public class ResilienceResultAnalyzerTests {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String FIXTURE_SOURCE_REVISION = "0123456789ab";
+    private static final String FIXTURE_BENCHMARK_JAR_SHA256 =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static Path root;
     private static Path fixture;
     private static Path analyzer;
@@ -339,6 +343,25 @@ public class ResilienceResultAnalyzerTests {
     }
 
     @Test
+    public void oneWayPermanentBlackholeIsNotDisappearanceEvidence() throws Exception {
+        Path oneWay = Files.createTempDirectory("raknet-resilience-one-way-blackhole");
+        copyDenseFixture(fixture, oneWay);
+        makeOneWayPermanentBlackhole(oneWay);
+        Path output = Files.createTempDirectory("raknet-resilience-one-way-blackhole-report");
+
+        ProcessResult result = runProcess(root, Duration.ofSeconds(10),
+                "python3", analyzer.toString(), "--root", oneWay.toString(), "--out", output.toString());
+
+        Assertions.assertEquals(0, result.exitCode, result.output);
+        JsonNode report = readReport(output);
+        JsonNode gate = findGate(report, "irrecoverable-peer-reclamation-millis");
+        Assertions.assertEquals("not-applicable", gate.path("status").asText());
+        Assertions.assertTrue(gate.path("reason").asText().contains("bidirectional"));
+        JsonNode blackhole = event(report.path("cases").get(0), "external-blackhole");
+        Assertions.assertTrue(blackhole.path("timing").path("reclamation").isNull());
+    }
+
+    @Test
     public void qdiscCoverageIsRequiredPerTargetAndNullableRuntimeSamplesAreSafe() throws Exception {
         Path nullable = Files.createTempDirectory("raknet-resilience-null-runtime");
         copyDenseFixture(fixture, nullable);
@@ -580,7 +603,282 @@ public class ResilienceResultAnalyzerTests {
 
         Assertions.assertEquals(1, mismatch.exitCode, mismatch.output);
         Assertions.assertTrue(readReport(mismatchOutput).path("campaigns").toString()
-                .contains("campaign recovery mode disagrees with manifest"));
+                .contains("recovery mode disagrees"));
+    }
+
+    @Test
+    public void comparisonRequiresOneExactStagedDistribution() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-dist-baseline");
+        Path candidate = Files.createTempDirectory("raknet-resilience-dist-candidate");
+        buildFullCampaignSet(baseline);
+        buildFullCampaignSet(candidate, "bounded");
+        scaleCandidatePressure(candidate, 10);
+        replaceGoalDistribution(candidate,
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        Path output = Files.createTempDirectory("raknet-resilience-dist-report");
+
+        ProcessResult result = compare(baseline, candidate, output);
+
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        JsonNode report = readReport(output);
+        Assertions.assertEquals("fail", findGate(report, "comparison-distribution-provenance")
+                .path("status").asText());
+        Assertions.assertTrue(report.path("comparison").path("issues").toString()
+                .contains("one identical source revision and staged jar distribution"));
+        Assertions.assertEquals(2, report.path("comparison").path("distributionProvenance")
+                .path("distributionSha256").size());
+
+        Files.writeString(candidate.resolve("campaign-1/distribution.sha256"),
+                FIXTURE_BENCHMARK_JAR_SHA256 + "  benchmark-test.jar\n", StandardCharsets.UTF_8);
+        Path staleOutput = Files.createTempDirectory("raknet-resilience-dist-stale-report");
+        ProcessResult stale = compare(baseline, candidate, staleOutput);
+        Assertions.assertEquals(1, stale.exitCode, stale.output);
+        Assertions.assertTrue(readReport(staleOutput).path("campaigns").toString()
+                .contains("fingerprint disagrees with distribution.sha256"));
+    }
+
+    @Test
+    public void comparisonRequiresRepeatedPermanentDisappearanceEvidence() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-disappearance-baseline");
+        Path candidate = Files.createTempDirectory("raknet-resilience-disappearance-candidate");
+        buildFullCampaignSet(baseline);
+        buildFullCampaignSet(candidate, "bounded");
+        scaleCandidatePressure(candidate, 10);
+        deleteTree(candidate.resolve("disappearance-1"));
+        deleteTree(candidate.resolve("disappearance-2"));
+        Path output = Files.createTempDirectory("raknet-resilience-disappearance-report");
+
+        ProcessResult result = compare(baseline, candidate, output);
+
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        JsonNode report = readReport(output);
+        Assertions.assertEquals("fail", findGate(report,
+                "comparison-permanent-disappearance-evidence").path("status").asText());
+        Assertions.assertTrue(report.path("comparison").path("issues").toString()
+                .contains("fewer than 2 distinct valid permanent bidirectional disappearance goal executions"));
+    }
+
+    @Test
+    public void disappearanceEvidenceRequiresDistinctPassingGoalExecutions() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-disappearance-goal-baseline");
+        buildFullCampaignSet(baseline);
+
+        Path copiedGoal = Files.createTempDirectory("raknet-resilience-disappearance-copied-goal");
+        buildFullCampaignSet(copiedGoal, "bounded");
+        scaleCandidatePressure(copiedGoal, 10);
+        Path firstGoal = copiedGoal.resolve("disappearance-1/goal-manifest.json");
+        Path secondGoal = copiedGoal.resolve("disappearance-2/goal-manifest.json");
+        ObjectNode first = (ObjectNode) JSON.readTree(Files.readString(firstGoal, StandardCharsets.UTF_8));
+        ObjectNode second = (ObjectNode) JSON.readTree(Files.readString(secondGoal, StandardCharsets.UTF_8));
+        second.put("generatedAt", first.path("generatedAt").asText());
+        Files.writeString(secondGoal, JSON.writeValueAsString(second) + "\n", StandardCharsets.UTF_8);
+        Path copiedOutput = Files.createTempDirectory("raknet-resilience-disappearance-copied-report");
+
+        ProcessResult copied = compare(baseline, copiedGoal, copiedOutput);
+
+        Assertions.assertEquals(1, copied.exitCode, copied.output);
+        JsonNode copiedEvidence = readReport(copiedOutput).path("comparison")
+                .path("permanentDisappearanceEvidence");
+        Assertions.assertEquals(1, copiedEvidence.path("candidateGoalExecutionIdentities").size());
+
+        Path late = Files.createTempDirectory("raknet-resilience-disappearance-late");
+        buildFullCampaignSet(late, "bounded");
+        scaleCandidatePressure(late, 10);
+        makePermanentBlackhole(late.resolve("disappearance-2"), 133_000L);
+        Path lateOutput = Files.createTempDirectory("raknet-resilience-disappearance-late-report");
+
+        ProcessResult lateResult = compare(baseline, late, lateOutput);
+
+        Assertions.assertEquals(1, lateResult.exitCode, lateResult.output);
+        Assertions.assertEquals(1, readReport(lateOutput).path("comparison")
+                .path("permanentDisappearanceEvidence").path("candidateGoalExecutionIdentities").size());
+    }
+
+    @Test
+    public void abortedLegacyDisappearanceIsDiagnosticButAbortedCandidateEvidenceFails() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-aborted-disappearance-baseline");
+        Path candidate = Files.createTempDirectory("raknet-resilience-aborted-disappearance-candidate");
+        buildFullCampaignSet(baseline);
+        buildFullCampaignSet(candidate, "bounded");
+        scaleCandidatePressure(candidate, 10);
+        appendResourceSafetyAbort(baseline.resolve("disappearance-1/cases/01-blackhole"));
+        Path baselineAbortOutput = Files.createTempDirectory("raknet-resilience-baseline-abort-report");
+
+        ProcessResult baselineAbort = compare(baseline, candidate, baselineAbortOutput);
+
+        Assertions.assertEquals(0, baselineAbort.exitCode, baselineAbort.output);
+        JsonNode baselineAbortReport = readReport(baselineAbortOutput);
+        Assertions.assertEquals("pass", baselineAbortReport.path("comparison").path("status").asText());
+        Assertions.assertTrue(baselineAbortReport.path("cases").findValuesAsText("comparisonRole")
+                .contains("diagnostic-only"));
+
+        appendResourceSafetyAbort(candidate.resolve("disappearance-1/cases/01-blackhole"));
+        Path candidateAbortOutput = Files.createTempDirectory("raknet-resilience-candidate-abort-report");
+
+        ProcessResult candidateAbort = compare(baseline, candidate, candidateAbortOutput);
+
+        Assertions.assertEquals(1, candidateAbort.exitCode, candidateAbort.output);
+        JsonNode report = readReport(candidateAbortOutput);
+        Assertions.assertEquals("fail", findGate(report,
+                "comparison-permanent-disappearance-evidence").path("status").asText());
+        Assertions.assertFalse(report.path("comparison").path("invalidCandidateCases").isEmpty());
+        Assertions.assertTrue(report.path("cases").findValuesAsText("comparisonRole")
+                .contains("candidate-absolute-evidence"));
+    }
+
+    @Test
+    public void malformedCandidateSupplementalFailsWhileMalformedLegacyAncillaryIsDiagnostic() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-malformed-ancillary-baseline");
+        Path candidate = Files.createTempDirectory("raknet-resilience-malformed-ancillary-candidate");
+        buildFullCampaignSet(baseline);
+        buildFullCampaignSet(candidate, "bounded");
+        scaleCandidatePressure(candidate, 10);
+        Files.writeString(baseline.resolve("disappearance-1/cases/01-blackhole/manifest.json"), "{\n",
+                StandardCharsets.UTF_8);
+        Path diagnosticOutput = Files.createTempDirectory("raknet-resilience-malformed-legacy-report");
+
+        ProcessResult diagnostic = compare(baseline, candidate, diagnosticOutput);
+
+        Assertions.assertEquals(0, diagnostic.exitCode, diagnostic.output);
+        Assertions.assertEquals("pass", readReport(diagnosticOutput).path("comparison").path("status").asText());
+
+        Files.writeString(candidate.resolve("disappearance-1/cases/01-blackhole/manifest.json"), "{\n",
+                StandardCharsets.UTF_8);
+        Path candidateOutput = Files.createTempDirectory("raknet-resilience-malformed-candidate-report");
+
+        ProcessResult malformedCandidate = compare(baseline, candidate, candidateOutput);
+
+        Assertions.assertEquals(1, malformedCandidate.exitCode, malformedCandidate.output);
+        JsonNode report = readReport(candidateOutput);
+        Assertions.assertFalse(report.path("comparison").path("invalidCandidateCases").isEmpty());
+        Assertions.assertEquals("fail", findGate(report, "comparison-evidence-integrity")
+                .path("status").asText());
+    }
+
+    @Test
+    public void candidateSupplementalCampaignsMustShareModeAndDistribution() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-supplemental-baseline");
+        buildFullCampaignSet(baseline);
+
+        Path wrongMode = Files.createTempDirectory("raknet-resilience-supplemental-mode-candidate");
+        buildFullCampaignSet(wrongMode, "bounded");
+        scaleCandidatePressure(wrongMode, 10);
+        Path modeSupplemental = wrongMode.resolve("disappearance-3");
+        buildDisappearanceCampaign(wrongMode, 3, "bounded");
+        makeAncillaryOneWay(modeSupplemental);
+        setCampaignRecoveryMode(modeSupplemental, "legacy");
+        Path modeOutput = Files.createTempDirectory("raknet-resilience-supplemental-mode-report");
+
+        ProcessResult modeResult = compare(baseline, wrongMode, modeOutput);
+
+        Assertions.assertEquals(1, modeResult.exitCode, modeResult.output);
+        Assertions.assertEquals("fail", findGate(readReport(modeOutput),
+                "comparison-recovery-mode-provenance").path("status").asText());
+
+        Path wrongDistribution = Files.createTempDirectory("raknet-resilience-supplemental-dist-candidate");
+        buildFullCampaignSet(wrongDistribution, "bounded");
+        scaleCandidatePressure(wrongDistribution, 10);
+        Path distributionSupplemental = wrongDistribution.resolve("disappearance-3");
+        buildDisappearanceCampaign(wrongDistribution, 3, "bounded");
+        makeAncillaryOneWay(distributionSupplemental);
+        replaceGoalDistribution(distributionSupplemental,
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        Path distributionOutput = Files.createTempDirectory("raknet-resilience-supplemental-dist-report");
+
+        ProcessResult distributionResult = compare(baseline, wrongDistribution, distributionOutput);
+
+        Assertions.assertEquals(1, distributionResult.exitCode, distributionResult.output);
+        Assertions.assertEquals("fail", findGate(readReport(distributionOutput),
+                "comparison-distribution-provenance").path("status").asText());
+    }
+
+    @Test
+    public void candidateCampaignWithNoDiscoverableCaseFailsClosed() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-missing-case-baseline");
+        buildFullCampaignSet(baseline);
+        Path candidate = Files.createTempDirectory("raknet-resilience-missing-case-candidate");
+        buildFullCampaignSet(candidate, "bounded");
+        scaleCandidatePressure(candidate, 10);
+        Path missingCaseCampaign = candidate.resolve("disappearance-3");
+        buildDisappearanceCampaign(candidate, 3, "bounded");
+        makeAncillaryOneWay(missingCaseCampaign);
+        Files.delete(missingCaseCampaign.resolve("cases/01-blackhole/manifest.json"));
+        Path output = Files.createTempDirectory("raknet-resilience-missing-case-report");
+
+        ProcessResult result = compare(baseline, candidate, output);
+
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        JsonNode report = readReport(output);
+        Assertions.assertTrue(report.path("comparison").path("invalidCandidateCampaigns")
+                .toString().contains(missingCaseCampaign.toString()));
+        Assertions.assertEquals("fail", findGate(report, "comparison-evidence-integrity")
+                .path("status").asText());
+        Assertions.assertTrue(report.path("campaigns").toString()
+                .contains("discovered case artifacts do not match the campaign plan profiles"));
+    }
+
+    @Test
+    public void mergedWorkerProvenanceMustBeCompleteForEveryRole() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-role-provenance-baseline");
+        buildFullCampaignSet(baseline);
+
+        Path missingServer = Files.createTempDirectory("raknet-resilience-missing-server-provenance");
+        buildFullCampaignSet(missingServer, "bounded");
+        scaleCandidatePressure(missingServer, 10);
+        Path serverSummaryPath = missingServer.resolve("campaign-1/cases/02-near-loss/merged/lab-summary.json");
+        ObjectNode serverSummary = (ObjectNode) JSON.readTree(Files.readString(
+                serverSummaryPath, StandardCharsets.UTF_8));
+        ((ObjectNode) serverSummary.path("server")).remove("gitRevision");
+        Files.writeString(serverSummaryPath, JSON.writeValueAsString(serverSummary) + "\n",
+                StandardCharsets.UTF_8);
+        Path serverOutput = Files.createTempDirectory("raknet-resilience-missing-server-report");
+
+        ProcessResult serverResult = compare(baseline, missingServer, serverOutput);
+
+        Assertions.assertEquals(1, serverResult.exitCode, serverResult.output);
+        Assertions.assertTrue(readReport(serverOutput).path("cases").toString()
+                .contains("exact server run/revision provenance"));
+
+        Path missingReceiver = Files.createTempDirectory("raknet-resilience-missing-role-provenance");
+        buildFullCampaignSet(missingReceiver, "bounded");
+        scaleCandidatePressure(missingReceiver, 10);
+        Path receiverSummaryPath = missingReceiver.resolve(
+                "campaign-1/cases/02-near-loss/merged/lab-summary.json");
+        ObjectNode receiverSummary = (ObjectNode) JSON.readTree(Files.readString(
+                receiverSummaryPath, StandardCharsets.UTF_8));
+        ((ArrayNode) receiverSummary.path("receivers")).remove(0);
+        Files.writeString(receiverSummaryPath, JSON.writeValueAsString(receiverSummary) + "\n",
+                StandardCharsets.UTF_8);
+        Path receiverOutput = Files.createTempDirectory("raknet-resilience-missing-role-report");
+
+        ProcessResult receiverResult = compare(baseline, missingReceiver, receiverOutput);
+
+        Assertions.assertEquals(1, receiverResult.exitCode, receiverResult.output);
+        Assertions.assertTrue(readReport(receiverOutput).path("cases").toString()
+                .contains("receiver provenance count is incomplete or duplicated"));
+    }
+
+    @Test
+    public void campaignArtifactPointersMustMatchTheDeclaredOutputLayout() throws Exception {
+        Path baseline = Files.createTempDirectory("raknet-resilience-pointer-baseline");
+        Path candidate = Files.createTempDirectory("raknet-resilience-pointer-candidate");
+        buildFullCampaignSet(baseline);
+        buildFullCampaignSet(candidate, "bounded");
+        scaleCandidatePressure(candidate, 10);
+        Path summaryPath = candidate.resolve("campaign-1/campaign-summary.json");
+        ObjectNode summary = (ObjectNode) JSON.readTree(Files.readString(summaryPath, StandardCharsets.UTF_8));
+        ((ObjectNode) summary.path("statuses").get(0)).put(
+                "artifact", "/different-parent/cases/01-perfect");
+        ((ObjectNode) summary.path("results").get(0)).put(
+                "caseArtifact", "/different-parent/cases/01-perfect");
+        Files.writeString(summaryPath, JSON.writeValueAsString(summary) + "\n", StandardCharsets.UTF_8);
+        Path output = Files.createTempDirectory("raknet-resilience-pointer-report");
+
+        ProcessResult result = compare(baseline, candidate, output);
+
+        Assertions.assertEquals(1, result.exitCode, result.output);
+        Assertions.assertTrue(readReport(output).path("campaigns").toString()
+                .contains("artifact provenance disagrees with discovered case"));
     }
 
     @Test
@@ -604,7 +902,7 @@ public class ResilienceResultAnalyzerTests {
                 .path("status").asText());
         Assertions.assertEquals(1, report.path("comparison").path("requiredCompleteCampaigns")
                 .path("candidate").size());
-        Assertions.assertFalse(report.path("comparison").path("invalidCandidateCases").isEmpty());
+        Assertions.assertFalse(report.path("comparison").path("missingCandidateCases").isEmpty());
     }
 
     @Test
@@ -614,13 +912,13 @@ public class ResilienceResultAnalyzerTests {
         Path copiedIdentity = Files.createTempDirectory("raknet-resilience-copied-identity");
         buildFullCampaignSet(copiedIdentity, "bounded");
         scaleCandidatePressure(copiedIdentity, 10);
-        ObjectNode firstPlan = (ObjectNode) JSON.readTree(Files.readString(
-                copiedIdentity.resolve("campaign-1/campaign-plan.json"), StandardCharsets.UTF_8));
-        Path secondPlanPath = copiedIdentity.resolve("campaign-2/campaign-plan.json");
-        ObjectNode secondPlan = (ObjectNode) JSON.readTree(Files.readString(secondPlanPath, StandardCharsets.UTF_8));
-        secondPlan.put("generatedAt", firstPlan.path("generatedAt").asText());
-        secondPlan.put("outputRoot", firstPlan.path("outputRoot").asText());
-        Files.writeString(secondPlanPath, JSON.writeValueAsString(secondPlan) + "\n", StandardCharsets.UTF_8);
+        ObjectNode firstGoal = (ObjectNode) JSON.readTree(Files.readString(
+                copiedIdentity.resolve("campaign-1/goal-manifest.json"), StandardCharsets.UTF_8));
+        Path secondGoalPath = copiedIdentity.resolve("campaign-2/goal-manifest.json");
+        ObjectNode secondGoal = (ObjectNode) JSON.readTree(Files.readString(
+                secondGoalPath, StandardCharsets.UTF_8));
+        secondGoal.put("generatedAt", firstGoal.path("generatedAt").asText());
+        Files.writeString(secondGoalPath, JSON.writeValueAsString(secondGoal) + "\n", StandardCharsets.UTF_8);
         Path copiedOutput = Files.createTempDirectory("raknet-resilience-copied-identity-report");
         ProcessResult copied = compare(baseline, copiedIdentity, copiedOutput);
         Assertions.assertEquals(1, copied.exitCode, copied.output);
@@ -814,6 +1112,94 @@ public class ResilienceResultAnalyzerTests {
         }
     }
 
+    private static void writeGoalProvenance(Path output, String recoveryMode, String benchmarkJarSha256)
+            throws Exception {
+        Files.createDirectories(output);
+        String distribution = benchmarkJarSha256 + "  benchmark-test.jar\n";
+        Files.writeString(output.resolve("distribution.sha256"), distribution, StandardCharsets.UTF_8);
+        ObjectNode goal = JSON.createObjectNode();
+        goal.put("kind", "raknet-netns-autonomous-goal");
+        String directoryName = output.getFileName().toString();
+        int suffix = Integer.parseInt(directoryName.substring(directoryName.lastIndexOf('-') + 1));
+        int second = directoryName.startsWith("disappearance-") ? 10 + suffix : suffix;
+        goal.put("generatedAt", String.format("2026-08-19T00:00:%02dZ", second));
+        goal.put("mode", "pilot");
+        goal.put("recoveryMode", recoveryMode);
+        goal.put("candidateRevision", fixtureCandidateRevision(benchmarkJarSha256));
+        Files.writeString(output.resolve("goal-manifest.json"),
+                JSON.writerWithDefaultPrettyPrinter().writeValueAsString(goal) + "\n",
+                StandardCharsets.UTF_8);
+    }
+
+    private static String fixtureCandidateRevision(String benchmarkJarSha256) throws Exception {
+        String distribution = benchmarkJarSha256 + "  benchmark-test.jar\n";
+        return FIXTURE_SOURCE_REVISION + "+dist-" + sha256Hex(distribution.getBytes(StandardCharsets.UTF_8))
+                .substring(0, 12);
+    }
+
+    private static String sha256Hex(byte[] bytes) throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+        StringBuilder value = new StringBuilder(digest.length * 2);
+        for (byte element : digest) {
+            value.append(String.format("%02x", element & 0xff));
+        }
+        return value.toString();
+    }
+
+    private static void setMergedProvenance(ObjectNode summary, String runId, int healthyClients,
+                                            int affectedClients, String revision) {
+        summary.putObject("server")
+                .put("runId", runId)
+                .put("role", "server")
+                .put("gitRevision", revision);
+        ArrayNode receivers = summary.putArray("receivers");
+        if (affectedClients > 0) {
+            receivers.addObject()
+                    .put("runId", runId + "-affected")
+                    .put("role", "client")
+                    .put("clients", affectedClients)
+                    .put("gitRevision", revision);
+            receivers.addObject()
+                    .put("runId", runId + "-healthy")
+                    .put("role", "client")
+                    .put("clients", healthyClients)
+                    .put("gitRevision", revision);
+        } else {
+            receivers.addObject()
+                    .put("runId", runId + "-receiver")
+                    .put("role", "client")
+                    .put("clients", healthyClients)
+                    .put("gitRevision", revision);
+        }
+    }
+
+    private static void replaceGoalDistribution(Path output, String benchmarkJarSha256) throws Exception {
+        String revision = fixtureCandidateRevision(benchmarkJarSha256);
+        try (var manifests = Files.walk(output)) {
+            for (Path manifest : manifests.filter(path -> path.getFileName().toString()
+                    .equals("goal-manifest.json")).toList()) {
+                ObjectNode goal = (ObjectNode) JSON.readTree(Files.readString(
+                        manifest, StandardCharsets.UTF_8));
+                writeGoalProvenance(manifest.getParent(), goal.path("recoveryMode").asText(),
+                        benchmarkJarSha256);
+            }
+        }
+        try (var summaries = Files.walk(output)) {
+            for (Path summaryPath : summaries.filter(path -> path.getFileName().toString()
+                    .equals("lab-summary.json")).toList()) {
+                ObjectNode summary = (ObjectNode) JSON.readTree(Files.readString(
+                        summaryPath, StandardCharsets.UTF_8));
+                ((ObjectNode) summary.path("server")).put("gitRevision", revision);
+                for (JsonNode receiver : summary.path("receivers")) {
+                    ((ObjectNode) receiver).put("gitRevision", revision);
+                }
+                Files.writeString(summaryPath,
+                        JSON.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                        StandardCharsets.UTF_8);
+            }
+        }
+    }
+
     private static void buildFullCampaignSet(Path output) throws Exception {
         buildFullCampaignSet(output, "legacy");
     }
@@ -821,6 +1207,7 @@ public class ResilienceResultAnalyzerTests {
     private static void buildFullCampaignSet(Path output, String recoveryMode) throws Exception {
         for (int campaignIndex = 1; campaignIndex <= 2; campaignIndex++) {
             Path campaign = output.resolve("campaign-" + campaignIndex);
+            writeGoalProvenance(campaign, recoveryMode, FIXTURE_BENCHMARK_JAR_SHA256);
             Files.createDirectories(campaign.resolve("cases"));
             ArrayNode profiles = JSON.createArrayNode();
             ArrayNode statuses = JSON.createArrayNode();
@@ -886,6 +1273,77 @@ public class ResilienceResultAnalyzerTests {
             Files.writeString(campaign.resolve("campaign-summary.json"),
                     JSON.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n", StandardCharsets.UTF_8);
         }
+        for (int campaignIndex = 1; campaignIndex <= 2; campaignIndex++) {
+            buildDisappearanceCampaign(output, campaignIndex, recoveryMode);
+        }
+    }
+
+    private static void buildDisappearanceCampaign(Path output, int campaignIndex, String recoveryMode)
+            throws Exception {
+        Path campaign = output.resolve("disappearance-" + campaignIndex);
+        writeGoalProvenance(campaign, recoveryMode, FIXTURE_BENCHMARK_JAR_SHA256);
+        Path caseRoot = campaign.resolve("cases/01-blackhole");
+        Files.createDirectories(campaign.resolve("cases"));
+        copyDenseFixture(fixture.resolve("cases/01-blackhole"), caseRoot);
+        configureProfile(caseRoot, "blackhole", 10 + campaignIndex, recoveryMode);
+        makePermanentBlackhole(campaign, true);
+
+        ObjectNode plan = JSON.createObjectNode();
+        plan.put("kind", "raknet-netns-pilot-campaign");
+        plan.put("generatedAt", "20260819T10000" + campaignIndex + "Z");
+        plan.put("execute", true);
+        plan.put("outputRoot", campaign.toString());
+        plan.putArray("profiles").addObject().put("profile", "blackhole").put("caseType", "blackhole")
+                .put("latency", "0ms").put("jitter", "0ms").put("loss", "0%");
+        ObjectNode parameters = plan.putObject("parameters");
+        parameters.put("clients", "10");
+        parameters.put("affectedClients", "2");
+        parameters.put("payloadSize", "512");
+        parameters.put("perClientMbps", "5");
+        parameters.put("warmup", "10s");
+        parameters.put("duration", "20s");
+        parameters.put("iterations", "1");
+        parameters.put("probeInterval", "200ms");
+        parameters.put("startDelay", "1s");
+        parameters.put("startOffset", "1s");
+        parameters.put("netemBeforeStart", "0s");
+        parameters.put("netemLimitPackets", 10000);
+        parameters.put("blackholeAfter", "2s");
+        parameters.put("blackholeDuration", "0s");
+        parameters.put("direction", "both");
+        parameters.put("reliability", "RELIABLE_ORDERED");
+        parameters.put("recoveryMode", recoveryMode);
+        parameters.putNull("packetLimit");
+        parameters.putNull("globalPacketLimit");
+        parameters.putNull("maxQueuedBytes");
+        parameters.putNull("workers");
+        parameters.put("resourceSafetyMaxAggregateQueuedBytes", 402_653_184);
+        parameters.put("resourceSafetyMaxDirectMemoryUsedBytes", 805_306_368);
+        Files.writeString(campaign.resolve("campaign-plan.json"),
+                JSON.writerWithDefaultPrettyPrinter().writeValueAsString(plan) + "\n", StandardCharsets.UTF_8);
+
+        ObjectNode status = JSON.createObjectNode();
+        status.put("profile", "blackhole");
+        status.put("caseType", "blackhole");
+        status.put("status", "completed");
+        status.put("startedAt", "2026-08-19T00:00:00Z");
+        status.put("completedAt", "2026-08-19T00:01:00Z");
+        status.put("artifact", caseRoot.toString());
+        ObjectNode result = JSON.createObjectNode();
+        result.put("profile", "blackhole");
+        result.put("caseType", "blackhole");
+        result.put("caseArtifact", caseRoot.toString());
+        ObjectNode summary = JSON.createObjectNode();
+        summary.put("kind", "raknet-netns-pilot-summary");
+        summary.put("generatedAt", "2026-08-19T00:02:00Z");
+        summary.put("executed", true);
+        summary.put("executionPassed", true);
+        summary.put("campaignPlan", campaign.resolve("campaign-plan.json").toString());
+        summary.put("campaignStatus", campaign.resolve("campaign-status.jsonl").toString());
+        summary.putArray("statuses").add(status);
+        summary.putArray("results").add(result);
+        Files.writeString(campaign.resolve("campaign-summary.json"),
+                JSON.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n", StandardCharsets.UTF_8);
     }
 
     private static void configureProfile(Path caseRoot, String profile, int campaignIndex,
@@ -965,6 +1423,8 @@ public class ResilienceResultAnalyzerTests {
         aggregate.put("affectedClients", perfect ? 0 : 2);
         aggregate.put("affectedClientMbpsP50", perfect ? 0.0D : 4.0D);
         aggregate.put("affectedSentToDeliveredBytesRatio", perfect ? 0.0D : 1.5D);
+        setMergedProvenance(summary, runId, perfect ? 10 : 8, perfect ? 0 : 2,
+                fixtureCandidateRevision(FIXTURE_BENCHMARK_JAR_SHA256));
         Files.writeString(caseRoot.resolve("merged/lab-summary.json"),
                 JSON.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n", StandardCharsets.UTF_8);
 
@@ -1077,6 +1537,33 @@ public class ResilienceResultAnalyzerTests {
         }
     }
 
+    private static void appendResourceSafetyAbort(Path caseRoot) throws Exception {
+        Path timeline;
+        try (var timelines = Files.walk(caseRoot.resolve("server"))) {
+            List<Path> matches = timelines.filter(path -> path.getFileName().toString()
+                    .equals("timeline.jsonl")).toList();
+            Assertions.assertEquals(1, matches.size());
+            timeline = matches.get(0);
+        }
+        List<String> rows = new ArrayList<>(Files.readAllLines(timeline, StandardCharsets.UTF_8));
+        ObjectNode previous = (ObjectNode) JSON.readTree(rows.get(rows.size() - 1));
+        ObjectNode abort = previous.deepCopy();
+        abort.put("sequence", previous.path("sequence").asLong() + 1L);
+        abort.put("epochMillis", previous.path("epochMillis").asLong() + 1L);
+        abort.put("monotonicElapsedMillis", previous.path("monotonicElapsedMillis").asLong() + 1L);
+        abort.put("recordType", "event");
+        abort.put("eventName", "resource-safety-abort");
+        abort.put("eventSource", "benchmark-resource-watchdog");
+        ObjectNode detail = abort.putObject("resourceSafetyAbort");
+        detail.put("reason", "aggregate-queued-bytes");
+        detail.put("observedAggregateQueuedBytes", 500_000_000L);
+        detail.put("observedDirectMemoryUsedBytes", 100_000_000L);
+        detail.put("maxAggregateQueuedBytes", 402_653_184L);
+        detail.put("maxDirectMemoryUsedBytes", 805_306_368L);
+        rows.add(JSON.writeValueAsString(abort));
+        Files.writeString(timeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+    }
+
     private static void scaleGauge(ObjectNode cohort, String field, long steady, int divisor) {
         long value = cohort.path(field).asLong();
         cohort.put(field, steady + Math.max(0L, value - steady) / divisor);
@@ -1093,7 +1580,13 @@ public class ResilienceResultAnalyzerTests {
         manifest.put("netemAtEpochMillis", 101_200L);
         Files.writeString(manifestPath, JSON.writeValueAsString(manifest) + "\n", StandardCharsets.UTF_8);
 
-        Path timeline = caseRoot.resolve("server/netns-blackhole-10c/timeline.jsonl");
+        Path timeline;
+        try (var timelines = Files.walk(caseRoot.resolve("server"))) {
+            List<Path> matches = timelines.filter(path -> path.getFileName().toString()
+                    .equals("timeline.jsonl")).toList();
+            Assertions.assertEquals(1, matches.size());
+            timeline = matches.get(0);
+        }
         List<String> timelineRows = new ArrayList<>();
         for (String line : Files.readAllLines(timeline, StandardCharsets.UTF_8)) {
             ObjectNode row = (ObjectNode) JSON.readTree(line);
@@ -1167,14 +1660,77 @@ public class ResilienceResultAnalyzerTests {
         makePermanentBlackhole(campaign, reclaimPeers ? 112_100L : null);
     }
 
+    private static void makeOneWayPermanentBlackhole(Path campaign) throws Exception {
+        makePermanentBlackhole(campaign, false);
+        Path caseRoot = campaign.resolve("cases/01-blackhole");
+        Path manifestPath = caseRoot.resolve("manifest.json");
+        ObjectNode manifest = (ObjectNode) JSON.readTree(Files.readString(
+                manifestPath, StandardCharsets.UTF_8));
+        manifest.put("direction", "server-to-client");
+        Files.writeString(manifestPath, JSON.writeValueAsString(manifest) + "\n", StandardCharsets.UTF_8);
+        Files.delete(caseRoot.resolve("netem/external-blackhole-affected-rcvi.txt"));
+        Path qdisc = caseRoot.resolve("netem/qdisc-timeseries.jsonl");
+        List<String> serverRows = new ArrayList<>();
+        for (String line : Files.readAllLines(qdisc, StandardCharsets.UTF_8)) {
+            JsonNode row = JSON.readTree(line);
+            if (row.path("namespace").asText().equals("server")) {
+                serverRows.add(line);
+            }
+        }
+        Files.writeString(qdisc, String.join("\n", serverRows) + "\n", StandardCharsets.UTF_8);
+    }
+
+    private static void makeAncillaryOneWay(Path campaign) throws Exception {
+        makeOneWayPermanentBlackhole(campaign);
+        Path planPath = campaign.resolve("campaign-plan.json");
+        ObjectNode plan = (ObjectNode) JSON.readTree(Files.readString(planPath, StandardCharsets.UTF_8));
+        ((ObjectNode) plan.path("parameters")).put("direction", "server-to-client");
+        Files.writeString(planPath, JSON.writeValueAsString(plan) + "\n", StandardCharsets.UTF_8);
+    }
+
+    private static void setCampaignRecoveryMode(Path campaign, String recoveryMode) throws Exception {
+        Path goalPath = campaign.resolve("goal-manifest.json");
+        ObjectNode goal = (ObjectNode) JSON.readTree(Files.readString(goalPath, StandardCharsets.UTF_8));
+        goal.put("recoveryMode", recoveryMode);
+        Files.writeString(goalPath, JSON.writeValueAsString(goal) + "\n", StandardCharsets.UTF_8);
+
+        Path planPath = campaign.resolve("campaign-plan.json");
+        ObjectNode plan = (ObjectNode) JSON.readTree(Files.readString(planPath, StandardCharsets.UTF_8));
+        ((ObjectNode) plan.path("parameters")).put("recoveryMode", recoveryMode);
+        Files.writeString(planPath, JSON.writeValueAsString(plan) + "\n", StandardCharsets.UTF_8);
+
+        try (var manifests = Files.walk(campaign.resolve("cases"))) {
+            for (Path manifestPath : manifests.filter(path -> path.getFileName().toString()
+                    .equals("manifest.json")).toList()) {
+                ObjectNode manifest = (ObjectNode) JSON.readTree(Files.readString(
+                        manifestPath, StandardCharsets.UTF_8));
+                manifest.put("recoveryMode", recoveryMode);
+                Files.writeString(manifestPath, JSON.writeValueAsString(manifest) + "\n",
+                        StandardCharsets.UTF_8);
+            }
+        }
+        try (var timelines = Files.walk(campaign.resolve("cases"))) {
+            for (Path timeline : timelines.filter(path -> path.getFileName().toString()
+                    .equals("timeline.jsonl")).toList()) {
+                List<String> rows = new ArrayList<>();
+                for (String line : Files.readAllLines(timeline, StandardCharsets.UTF_8)) {
+                    ObjectNode row = (ObjectNode) JSON.readTree(line);
+                    row.put("recoveryMode", recoveryMode);
+                    rows.add(JSON.writeValueAsString(row));
+                }
+                Files.writeString(timeline, String.join("\n", rows) + "\n", StandardCharsets.UTF_8);
+            }
+        }
+    }
+
     private static void makePermanentBlackhole(Path campaign, Long reclaimAtEpochMillis) throws Exception {
         Path caseRoot = campaign.resolve("cases/01-blackhole");
         Path manifestPath = caseRoot.resolve("manifest.json");
         ObjectNode manifest = (ObjectNode) JSON.readTree(Files.readString(manifestPath, StandardCharsets.UTF_8));
         manifest.putNull("recoveryAtEpochMillis");
         Files.writeString(manifestPath, JSON.writeValueAsString(manifest) + "\n", StandardCharsets.UTF_8);
-        Files.delete(caseRoot.resolve("netem/external-recovery-server-srvi.txt"));
-        Files.delete(caseRoot.resolve("netem/external-recovery-affected-rcvi.txt"));
+        Files.deleteIfExists(caseRoot.resolve("netem/external-recovery-server-srvi.txt"));
+        Files.deleteIfExists(caseRoot.resolve("netem/external-recovery-affected-rcvi.txt"));
         Path qdisc = caseRoot.resolve("netem/qdisc-timeseries.jsonl");
         List<ObjectNode> qdiscRows = new ArrayList<>();
         ArrayNode blackholeState = null;
@@ -1195,7 +1751,13 @@ public class ResilienceResultAnalyzerTests {
             qdiscJson.add(JSON.writeValueAsString(row));
         }
         Files.writeString(qdisc, String.join("\n", qdiscJson) + "\n", StandardCharsets.UTF_8);
-        Path timeline = caseRoot.resolve("server/netns-blackhole-10c/timeline.jsonl");
+        Path timeline;
+        try (var timelines = Files.walk(caseRoot.resolve("server"))) {
+            List<Path> matches = timelines.filter(path -> path.getFileName().toString()
+                    .equals("timeline.jsonl")).toList();
+            Assertions.assertEquals(1, matches.size());
+            timeline = matches.get(0);
+        }
         List<ObjectNode> source = new ArrayList<>();
         for (String line : Files.readAllLines(timeline, StandardCharsets.UTF_8)) {
             source.add((ObjectNode) JSON.readTree(line));
@@ -1216,15 +1778,25 @@ public class ResilienceResultAnalyzerTests {
         List<String> rewritten = new ArrayList<>();
         for (ObjectNode row : source) {
             row.putNull("externalRecoveryAtEpochMillis");
-            if (reclaimAtEpochMillis != null
-                    && row.path("epochMillis").asLong() >= reclaimAtEpochMillis) {
+            if (reclaimAtEpochMillis != null) {
                 ObjectNode cohort = (ObjectNode) row.path("affected");
-                cohort.put("openPeers", 0);
-                cohort.put("activePeers", 0);
-                cohort.put("disconnectedPeers", 2);
-                cohort.put("disconnectEvents", 2);
-                cohort.put("currentQueuedBytes", 0);
-                cohort.put("currentBytesInFlight", 0);
+                if (row.path("epochMillis").asLong() >= reclaimAtEpochMillis) {
+                    cohort.put("openPeers", 0);
+                    cohort.put("activePeers", 0);
+                    cohort.put("disconnectedPeers", 2);
+                    cohort.put("disconnectEvents", 2);
+                    cohort.put("currentQueuedBytes", 0);
+                    cohort.put("currentBytesInFlight", 0);
+                } else {
+                    cohort.put("openPeers", 2);
+                    cohort.put("activePeers", 2);
+                    cohort.put("disconnectedPeers", 0);
+                    cohort.put("disconnectEvents", 0);
+                    cohort.put("currentQueuedBytes", Math.max(100L,
+                            cohort.path("currentQueuedBytes").asLong()));
+                    cohort.put("currentBytesInFlight", Math.max(100L,
+                            cohort.path("currentBytesInFlight").asLong()));
+                }
             }
             rewritten.add(JSON.writeValueAsString(row));
         }

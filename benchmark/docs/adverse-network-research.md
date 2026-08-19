@@ -52,6 +52,15 @@ provides a mature reference design whose most relevant properties are:
   timer expiry, then reduces the congestion window to a small floor; and
 - packets should be paced, or bursts must be explicitly limited.
 
+[RFC 8985, RACK-TLP](https://www.rfc-editor.org/rfc/rfc8985.html) is an
+additional useful reference for the failure that the first bounded prototype
+exposed. It uses per-segment transmit timestamps, time-based loss inference,
+and a tail-loss probe to recover lost retransmissions and application-limited
+tails. It permits at most one additional probe beyond the congestion window at
+a time. RakNet cannot copy its TCP sequence/SACK machinery, but the important
+invariant carries over: acknowledgement of newer work must not postpone the
+loss deadline of an older outstanding attempt indefinitely.
+
 [RFC 9000, QUIC Transport](https://www.rfc-editor.org/rfc/rfc9000.html)
 keeps three controls distinct: congestion control bounds network load, flow
 control bounds receiver memory commitments, and idle timeout bounds connection
@@ -90,32 +99,50 @@ describes experimentation before deployment. That is evidence to evaluate
 model-based controllers later; it is not evidence that selecting BBR fixes
 incorrect in-flight accounting, timeout behavior, or queue ownership.
 
+The July 2026 IETF CCWG
+[BBRv3 working-group draft](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/)
+makes the poor-link tradeoff explicit. It reports that even 1% loss over a
+100 ms path limits CUBIC to about 3 Mbps, then specifies a sender-side model
+using delivery rate, minimum RTT, and loss to control both pacing rate and
+maximum in-flight data. That is directly relevant to the active 3.5 Mbps goal
+at 5% loss: repairing RakNet's recovery and scheduler is necessary, but a
+Reno-style multiplicative decrease is unlikely to meet that target. The draft
+is also a roughly hundred-page state machine with transport integration
+requirements, not permission to ignore loss or pin a large minimum window.
+Before selecting or adapting it, RakNet needs trustworthy delivery-rate
+samples, application-limited marking, packet-timed rounds, and a real pacer;
+its fairness and queue-pressure behavior then need comparison against both
+loss-based traffic and the genre transports below.
+
 ## Comparable implementations
 
 Three official implementations provide useful, but different, reference
 points:
 
-- [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets)
+- [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets/tree/e707b3a6b638f4de31ee3e13a64284bd9abfa98e)
   is the closest semantic comparator. It provides reliable and unreliable
   messages, an acknowledgement-vector recovery design, per-lane priority and
   bandwidth sharing, impairment simulation, and detailed statistics. Its
-  [real-time status API](https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/include/steam/steamnetworkingtypes.h)
+  [real-time status API](https://github.com/ValveSoftware/GameNetworkingSockets/blob/e707b3a6b638f4de31ee3e13a64284bd9abfa98e/include/steam/steamnetworkingtypes.h)
   exposes estimated send rate, pending reliable and unreliable bytes,
   unacknowledged reliable bytes, queue time, ping, jitter, and connection
   quality.
-- [ENet](https://github.com/lsalzman/enet) is a useful genre baseline rather
+- [ENet](https://github.com/lsalzman/enet/tree/5a9c537fd464b3c6d3c55e1d3bd47588faf71b42) is a useful genre baseline rather
   than an external definition of best practice. Its
-  [public peer state](https://github.com/lsalzman/enet/blob/master/include/enet/enet.h)
+  [public peer state](https://github.com/lsalzman/enet/blob/5a9c537fd464b3c6d3c55e1d3bd47588faf71b42/include/enet/enet.h)
   includes bandwidth throttling, RTT and variance, loss, reliable bytes in
   flight, queue limits, and configurable timeout behavior.
-- [MsQuic](https://github.com/microsoft/msquic) is a mature standards-based
-  comparator. Its [settings](https://github.com/microsoft/msquic/blob/main/docs/Settings.md)
+- [MsQuic](https://github.com/microsoft/msquic/tree/6a6a75870e8f9f4a7ccb97a3e1bc455db630aa30) is a mature standards-based
+  comparator. Its [settings](https://github.com/microsoft/msquic/blob/6a6a75870e8f9f4a7ccb97a3e1bc455db630aa30/docs/Settings.md)
   enable pacing by default and expose initial RTT/window, idle and disconnect
   timeouts, and congestion-controller selection. Its
-  [statistics API](https://github.com/microsoft/msquic/blob/main/src/inc/msquic.h)
+  [statistics API](https://github.com/microsoft/msquic/blob/6a6a75870e8f9f4a7ccb97a3e1bc455db630aa30/src/inc/msquic.h)
   tracks suspected and spurious loss, congestion and persistent-congestion
   events, congestion window, RTT variance, bytes in flight, estimated
   bandwidth, and queue delay.
+
+Those repository references are pinned to the upstream heads inspected on
+2026-08-19 so later API drift cannot silently change the comparison basis.
 
 An apples-to-apples run should map one RakNet ordering channel to one
 GameNetworkingSockets reliable lane, one ENet reliable channel, and one framed
@@ -205,10 +232,23 @@ before attempting a different congestion controller:
 - a NACK schedules one idempotent pending recovery entry instead of sending the
   datagram immediately, and one 10 ms flush may send at most two recovery
   datagrams and two MTUs;
-- one connection-wide PTO is based on acknowledgement progress. It sends at
-  most one probe, doubles after consecutive no-progress probes, is capped at
-  eight seconds, and adds non-negative jitter below 10% so a cohort does not
-  remain perfectly synchronized;
+- every physical reliable send attempt receives an immutable loss deadline
+  based on the current retransmission timeout. A cached oldest-attempt anchor
+  makes ordinary sends, ticks, and unrelated acknowledgements O(1); rescanning
+  is needed only when that anchor is acknowledged, retransmitted, or restored
+  after a failed handoff;
+- acknowledgement progress resets probe backoff, but recomputes the next PTO
+  from the immutable deadlines of work that remains outstanding. An ACK for a
+  newer datagram therefore cannot continually postpone repair of an older
+  ordered hole;
+- a due PTO selects and declares only its single oldest attempt lost and sends
+  at most one probe. It never bulk-retires all outstanding physical attempts,
+  doubles after consecutive no-progress probes, is capped at eight seconds,
+  and adds non-negative jitter below 10% so a cohort does not remain perfectly
+  synchronized;
+- timeout selection is ephemeral rather than an entry in the NACK FIFO. If a
+  probe must be deferred, later NACK recovery and newly admitted traffic can
+  still proceed;
 - the base retransmission timeout starts at one second and is clamped to
   500-2,000 ms as RTT evidence becomes available. Karn's rule excludes
   retransmitted datagrams from RTT sampling;
@@ -231,21 +271,54 @@ wire-visible persistent-congestion signalling, deadline-aware unreliable
 queues, CUBIC, or BBR. Queue caps remain a separate backpressure guard rather
 than part of the recovery algorithm.
 
-The minimal FIFO scheduler also has a known first-version tradeoff: a deferred
-timeout entry at the head can delay a later NACK until the rearmed PTO. After
-fresh acknowledgement progress that delay is bounded by the 500-2,000 ms base
-timeout plus jitter; during a blackhole it follows the intentional exponential
-backoff up to eight seconds. Avoiding the head-of-line interaction cleanly
-would require eligible-entry scanning or separate NACK/PTO queues, so it is
-left observable for the transition and long-hold campaigns rather than hidden
-inside a larger unvalidated scheduler rewrite.
+The first bounded prototype instead rearmed one connection-wide PTO from every
+new acknowledgement and allowed a deferred timeout to occupy the NACK FIFO.
+External-qdisc near-loss evidence rejected that design: later packets continued
+to be acknowledged, timeout retransmissions remained zero for the run, an
+early `RELIABLE_ORDERED` hole did not repair, and the affected queue grew to
+about 163 MiB. The immutable attempt deadline and ephemeral timeout selection
+above are the deliberately narrow correction. Deterministic tests now keep
+ACKing newer datagrams before each RTO yet require the lost older
+retransmission to be probed by its original deadline; a separate test proves a
+deferred probe cannot block later NACK work or a new original. The correction
+passed its deterministic transport tests but remains only one part of a viable
+candidate.
 
-The benchmark uses the same integrated distribution for both sides of the A/B
-comparison and records `legacy` or `bounded` in the goal manifest, campaign
-plan, case manifest, every server and receiver timeline record, CSV, JSON, and
-Markdown output. The fail-closed analyzer treats recovery mode as the only
-intentional configuration difference and rejects missing, mixed, or mislabeled
-evidence.
+The first external-qdisc run of that corrected timer design failed the
+candidate decision, but for a separate, older transport defect. Healthy clients
+remained at roughly 4.99 Mbps/client while lossy clients continued to ACK wire
+data yet delivered virtually no `RELIABLE_ORDERED` application data. Affected
+queues reached about 159 MiB at 10 ms/2 ms/2% and 277 MiB at
+200 ms/20 ms/10%. The bidirectional-disappearance case was nevertheless well
+contained: all ten affected peers disconnected and sustained zero queue and
+in-flight state about 10.1 seconds after the applied blackhole.
+
+Source and event evidence identify the ordered-delivery stall in the Java
+priority scheduler rather than the PTO. Reliability and ordering indices are
+assigned before an encapsulated packet enters the priority heap. The Java port
+then derives each new heap weight from the last enqueue, uses the inverse of the
+reference comparison, and advances a priority only inside that condition. A
+periodic high-priority probe can therefore jump ahead of an older normal packet
+indefinitely while later normal packets are transmitted and acknowledged; the
+receiver correctly waits forever for the older ordering index, which was never
+put on the wire and therefore cannot be recovered by NACK or PTO. The RakNet
+[reference implementation](https://github.com/facebookarchive/RakNet/blob/1a169895a900c9fc4841c556e16514182b75faf8/Source/ReliabilityLayer.cpp#L3880-L3903)
+instead derives the scheduling floor from the actual heap root and advances the
+selected priority on every nonempty enqueue. The next candidate must repair
+those semantics and keep benchmark probes outside the workload's ordered stream
+before recovery or congestion-control conclusions are drawn from another
+campaign.
+
+The benchmark requires the same launcher-recorded source revision and staged
+distribution manifest for both sides of the A/B comparison and records
+`legacy` or `bounded` in the goal manifest, campaign plan, case manifest, every
+server and receiver timeline record, CSV, JSON, and Markdown output. Every
+merged worker must report the same composite revision. The fail-closed analyzer
+treats recovery mode as the only intentional configuration difference and
+rejects missing, mixed, or mislabeled candidate evidence. Because the temporary
+jar stage is removed after execution, this is reconciliation within the
+root-owned launcher/evidence trust boundary rather than post-run cryptographic
+attestation of the executed classpath.
 
 ## What not to copy blindly from QUIC
 
@@ -302,10 +375,30 @@ and upper confidence bounds for amplification and resource use.
 
 ## Evidence-driven acceptance gates
 
-These are initial product gates to calibrate with the comparator run, not
-claims of an industry-standard numeric threshold.
+The active candidate decision uses the following contractual gates across two
+complete, independently executed external-qdisc campaigns per recovery mode.
+They are engineering targets for this workload, not claims of universal
+industry-standard thresholds.
 
-| Property | Initial gate |
+| Property | Active gate |
+| --- | --- |
+| Healthy-client useful throughput | p50 at least 4.75 Mbps/client in every profile |
+| Healthy-client isolation | Jain fairness at least 0.99 and send/deliver ratio at most 1.10 |
+| Poor-link usefulness | At 100 ms latency, 10 ms jitter, and 5% loss: affected p50 at least 3.5 Mbps/client, no more than one disconnect, and send/deliver ratio at most 2.0 |
+| Severe/disruption pressure | For severe loss and timed blackhole, reduce affected-path retransmitted datagrams, retransmitted bytes, and retransmitted datagrams/second by at least 90% from matching legacy evidence by T+10 seconds |
+| Queue bound | Maximum observed queue at most 8 MiB per peer, with independently scaled affected-cohort, healthy-collateral, aggregate-queue, and direct-memory guards |
+| Permanent disappearance | Affected open/active peers reach zero and queue/in-flight state remains reclaimed for a continuous second, beginning within 30 seconds of the applied bidirectional blackhole |
+
+The transition/recovery, long-hold, queue-cap, and impaired-cohort campaigns
+exercise additional failure regimes and must not weaken the same healthy-client
+guardrails. The fail-closed analyzer definitions and evidence requirements are
+documented in `resilience-result-analysis.md`.
+
+The following stricter values remain research stretch targets to calibrate
+against semantically comparable transports; they do not replace the active
+candidate decision above:
+
+| Property | Research stretch target |
 | --- | --- |
 | Healthy-client isolation | Healthy median goodput at least 98% of the perfect profile and Jain fairness at least 0.999 with 10%, 25%, and 50% impaired cohorts |
 | Poor-link usefulness | Affected p50 at least 4 Mbps/client and p10 at least 3 Mbps/client; zero loss-induced disconnects; send/deliver ratio at most 1.35; maximum queue at most 2 MiB/session |

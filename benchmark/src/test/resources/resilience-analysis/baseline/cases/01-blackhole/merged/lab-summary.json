@@ -19,5 +19,24 @@
     "affectedUndeliveredServerBytesOut": 500000,
     "affectedUndeliveredServerGbps": 0.004,
     "maxQueuedBytes": 5500
-  }
+  },
+  "server": {
+    "runId": "netns-blackhole-10c",
+    "role": "server",
+    "gitRevision": "fixture-revision"
+  },
+  "receivers": [
+    {
+      "runId": "netns-blackhole-10c-healthy",
+      "role": "client",
+      "clients": 8,
+      "gitRevision": "fixture-revision"
+    },
+    {
+      "runId": "netns-blackhole-10c-affected",
+      "role": "client",
+      "clients": 2,
+      "gitRevision": "fixture-revision"
+    }
+  ]
 }

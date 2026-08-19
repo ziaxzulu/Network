@@ -50,7 +50,7 @@ command-line usage error.
 | Aggregate queue/direct memory | at most the exact campaign watchdog thresholds; defaults 384 MiB/768 MiB |
 | Transition ACK progress | within 2 seconds of actual recovery application |
 | Transition queue/in-flight reclamation | within 10 seconds |
-| Permanent disappearance peer reclamation | affected open/active peers are zero and queue/in-flight return within 5% of pre-event for a continuous second, starting within 30 seconds of actual blackhole application |
+| Permanent disappearance peer reclamation | for a bidirectional blackhole only, affected open/active peers are zero and queue/in-flight return within 5% of pre-event for a continuous second, starting within 30 seconds of actual blackhole application |
 | External qdisc application | no more than 250 ms early or 1 second late |
 
 The healthy p50 ratio to a matching perfect case is retained as informational
@@ -125,6 +125,9 @@ are reported without inventing values when the runtime cannot expose them.
 
 Comparison additionally requires at least two distinct complete campaign
 execution identities on each side, not two directory copies of one execution.
+Because the autonomous launcher runs at most one six-profile pilot per goal,
+the path-independent goal `generatedAt` identity is the repetition key;
+campaign output paths are provenance pointers, not evidence of another run.
 All baseline campaign plans, case manifests, and timeline records must say
 `legacy`; all candidate evidence must say `bounded`. The analyzer permits that
 single intentional algorithm difference, then requires every other network and
@@ -137,7 +140,44 @@ summary, exactly the profiles `perfect`, `near-loss`, `regional-loss`, `poor`,
 matching discovered case/manifest set. Transition or separate disappearance campaigns
 remain useful event evidence but do not satisfy this repetition gate.
 
-Malformed or missing evidence is retained in the JSON/Markdown availability
-section and makes the command exit non-zero. Invalid cases are excluded from
-numeric comparison and listed explicitly; they cannot silently make a
-candidate pass.
+Every compared campaign must also descend from an autonomous goal containing a
+valid `goal-manifest.json` and newline-terminated, flat, sorted
+`distribution.sha256`. The manifest's `candidateRevision` must contain the
+SHA-256 fingerprint of that recorded distribution manifest. All complete
+baseline campaigns and every supplied candidate campaign must then share one
+exact recorded source revision, candidate revision, and staged-jar manifest
+hash. Every merged server and expected receiver row must independently report
+that candidate revision. This reconciles all launcher and worker provenance
+available after the immutable stage is removed; it is not cryptographic
+runtime attestation of jars that no longer exist. The trust boundary remains
+the root-owned launcher, campaign parents, and evidence files.
+
+A one-way pilot blackhole remains valid containment and retry-pressure
+evidence, but it is explicitly ineligible for the irrecoverable-peer
+reclamation gate. Only a no-recovery case whose manifest says `direction:
+both` can prove permanent disappearance. Comparative acceptance requires at
+least the configured minimum number (two by default) of distinct, valid
+candidate goal executions containing that bidirectional disappearance evidence
+and satisfying the reclamation bound; multiple campaigns from one goal
+execution count once. Supplying only the six one-way pilot profiles therefore
+fails rather than making reclamation silently not applicable. Non-six-profile
+cases remain absolute candidate evidence and are excluded from the matched A/B
+pressure matrix.
+
+Comparison output labels cases as `matched-comparison`,
+`candidate-absolute-evidence`, `candidate-supplemental-evidence`, or
+`diagnostic-only`. In particular, an expected failed legacy disappearance run
+remains visible as a diagnostic but does not invalidate otherwise complete
+six-profile legacy evidence. Every supplied candidate case—including one-way,
+timed-recovery, and other supplemental cases—remains integrity-, mode-,
+distribution-, and absolute-gate scoped. A malformed, aborted, wrong-mode,
+differently built, or late candidate case therefore cannot be silently ignored
+or satisfy the candidate evidence gate.
+
+Malformed or missing evidence in an active decision role is retained in the
+JSON/Markdown availability section and makes the command exit non-zero. This
+includes every supplied candidate campaign, even when a missing sole case
+manifest would otherwise leave that campaign with no discoverable cases.
+Invalid cases are excluded from numeric comparison and listed explicitly; they
+cannot silently make a candidate pass. Intentionally diagnostic-only legacy
+ancillary campaigns remain outside the active decision role.
