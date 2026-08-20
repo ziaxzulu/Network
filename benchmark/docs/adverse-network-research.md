@@ -347,12 +347,17 @@ but not its complete state machine:
   evidence. These are experimental guardrails, not BBRv3's loss-bound or ECN
   algorithms.
 
-The first actionable signal in an ARMED epoch caps flight at 70% of the
+The first actionable signal in an ARMED epoch caps flight relative to the
 smaller of the current window and that bucket's peak flight, with the two-MTU
-minimum still enforced. The controller then enters HOLD: further signals in
-the same epoch cannot reduce the window again. A DELAY signal seen during a
-HARD hold upgrades the hold to DELAY clearing semantics only when the bucket
-does not also carry a HARD signal; simultaneous signals retain HARD precedence.
+minimum still enforced. HARD retains the 0.70 response used for at-least-20%
+loss. DELAY uses 0.90: it still makes an immediate material reduction, but a
+moderate delay-qualified signal does not apply the same severity as hard loss
+and undercut the useful rebased BDP observed in the near-loss experiments.
+Simultaneous signals use the HARD response. The controller then enters HOLD:
+further signals in the same epoch cannot reduce the window again. A DELAY
+signal seen during a HARD hold upgrades the hold to DELAY clearing semantics
+only when the bucket does not also carry a HARD signal; simultaneous signals
+retain HARD precedence.
 Rearming is deliberately asymmetric. A HARD hold needs two complete,
 disjoint, actionable clear buckets; a generic clear bucket is either 128
 packets or 64 loss-free packets, and stable non-inflated sub-hard random loss

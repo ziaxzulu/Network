@@ -40,8 +40,9 @@ wire-compatible recovery policy and adds a sender-side delivery-rate/minRTT
 model, BDP-derived in-flight limit, bounded token pacer, NACK reordering window,
 path-step guardrails, and a persistent no-progress reset. Its experimental loss
 policy keeps path-independent hard-loss evidence separate from path-scoped
-delay/loss evidence, applies at most one reduction while an evidence epoch is
-held, and uses mode-specific rearming evidence. HARD needs two disjoint
+delay/loss evidence, applies a 0.70 HARD response or a less severe 0.90 DELAY
+response at most once while an evidence epoch is held, and uses mode-specific
+rearming evidence. HARD needs two disjoint
 actionable clear buckets; DELAY needs two consecutive actionable 256-packet
 windows with no validated loss. PTO expiry is a progress probe rather than
 congestion-loss proof; validated NACK evidence remains exact-once, while the

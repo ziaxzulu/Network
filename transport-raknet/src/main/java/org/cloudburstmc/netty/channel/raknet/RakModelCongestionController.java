@@ -37,7 +37,8 @@ final class RakModelCongestionController {
     private static final double LOSS_THRESHOLD = 0.02D;
     private static final double HARD_LOSS_THRESHOLD = 0.20D;
     private static final double DELAY_INFLATION_THRESHOLD = 1.25D;
-    private static final double LOSS_BETA = 0.70D;
+    private static final double HARD_LOSS_BETA = 0.70D;
+    private static final double DELAY_LOSS_BETA = 0.90D;
     private static final int MAX_BURST_DATAGRAMS = 8;
     private static final long MINIMUM_RTT_WINDOW_MILLIS = 10_000L;
     private static final double PATH_STEP_MULTIPLIER = 2.5D;
@@ -425,7 +426,8 @@ final class RakModelCongestionController {
                 double peakBound = signalPeakInFlight > 0
                         ? Math.min(this.cwnd, signalPeakInFlight) : this.cwnd;
                 this.lossRecoveryCwnd = Math.max(peakBound, signalMaximumCwnd);
-                this.cwnd = Math.max(this.minimumCwnd, peakBound * LOSS_BETA);
+                double lossBeta = hardSignal ? HARD_LOSS_BETA : DELAY_LOSS_BETA;
+                this.cwnd = Math.max(this.minimumCwnd, peakBound * lossBeta);
                 this.inflightLimit = this.cwnd;
                 if (hardSignal) {
                     this.startup = false;

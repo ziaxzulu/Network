@@ -747,11 +747,11 @@ public class RakSlidingWindowModelTests {
             double sumSquares = 0D;
             for (int phase = 0; phase < 16; phase++) {
                 int lossPhase = phase;
-                SimulationResult result = simulateLoss(true, -1, false, 4_000L, 8_000L,
+                SimulationResult result = simulateLoss(true, -1, false, 9_000L, 12_000L,
                         1_000, handshakeRttMillis, 2_000D,
                         (sentDatagrams, sendAt) -> handshakeRttMillis + 16L
                                 + Math.floorMod(sentDatagrams * 17 + lossPhase, 9),
-                        (sentDatagrams, sendAt) -> Math.floorMod(sentDatagrams + lossPhase, 50) == 0);
+                        (sentDatagrams, sendAt) -> Math.floorMod(sentDatagrams + lossPhase, 49) == 0);
                 long minimumExpectedRtt = handshakeRttMillis + 16L;
                 long maximumExpectedRtt = handshakeRttMillis + 24L;
                 Assertions.assertTrue(result.finalMinimumRttMillis >= minimumExpectedRtt
@@ -765,8 +765,12 @@ public class RakSlidingWindowModelTests {
                         () -> "phase " + lossPhase + " collapsed after the " + handshakeRttMillis
                                 + " ms shallow path step: " + result.measuredMbps
                                 + " Mbps, cwnd=" + result.finalCwnd);
-                Assertions.assertTrue(result.finalCwnd >= 8D * MTU,
-                        () -> "phase " + lossPhase + " finished below eight MTUs: " + result.finalCwnd);
+                Assertions.assertEquals(0L, result.hardLossResponses,
+                        "stationary near-threshold loss must not become a HARD response");
+                Assertions.assertTrue(result.delayLossResponses <= 1L,
+                        "stationary loss must never split into repeated DELAY episodes");
+                Assertions.assertTrue(result.finalCwnd >= 16D * MTU,
+                        () -> "phase " + lossPhase + " finished below sixteen MTUs: " + result.finalCwnd);
                 Assertions.assertTrue(result.maximumMinimumCwndDurationMillis <= 1_000L,
                         () -> "phase " + lossPhase + " stayed at the two-MTU floor for "
                                 + result.maximumMinimumCwndDurationMillis + " ms");
@@ -1144,7 +1148,7 @@ public class RakSlidingWindowModelTests {
     public void continuousDelayQualifiedLossCutsExactlyOnceUntilTwoLossFreeClearWindows() {
         RakModelCongestionController controller = learnedController(5L);
         long now = 1_001L;
-        double learnedCwnd = controller.getCongestionWindow();
+        double signalPeakFlight = 125D * datagramWireSize(1_000);
 
         for (int round = 0; round < 12; round++) {
             now = completeModelRound(controller, now, 125, 6, 11L, 11D);
@@ -1157,12 +1161,31 @@ public class RakSlidingWindowModelTests {
         Assertions.assertEquals(0L, controller.getHardLossResponseCount());
         Assertions.assertEquals(1L, controller.getDelayLossResponseCount());
         Assertions.assertTrue(controller.isLossResponseHeld());
-        Assertions.assertTrue(controller.getCongestionWindow() <= learnedCwnd * 0.75D,
-                "genuine delay-qualified loss must still make an immediate material reduction");
+        Assertions.assertTrue(controller.getCongestionWindow() >= signalPeakFlight * 0.88D
+                        && controller.getCongestionWindow() <= signalPeakFlight * 0.91D,
+                () -> "DELAY must make one material ten-percent response without borrowing HARD severity: "
+                        + controller.getCongestionWindow() + " from peak flight " + signalPeakFlight);
         Assertions.assertTrue(Double.isFinite(controller.getInflightLimit()),
                 "the continuing delay-loss episode must retain its finite cap");
         Assertions.assertEquals(5L, controller.getMinimumRttMillis(),
                 "moderate raw queue delay below the path-step envelope remains congestion evidence");
+    }
+
+    @Test
+    public void hardLossKeepsTheThirtyPercentResponse() {
+        RakModelCongestionController controller = learnedController(5L);
+        long now = 1_001L;
+        double signalPeakFlight = 125D * datagramWireSize(1_000);
+
+        now = completeModelRound(controller, now, 125, 38, 5L, 10D);
+        completeModelRound(controller, now, 125, 38, 5L, 10D);
+
+        Assertions.assertEquals(1L, controller.getHardLossResponseCount());
+        Assertions.assertEquals(0L, controller.getDelayLossResponseCount());
+        Assertions.assertTrue(controller.getCongestionWindow() >= signalPeakFlight * 0.68D
+                        && controller.getCongestionWindow() <= signalPeakFlight * 0.71D,
+                () -> "HARD must preserve the existing thirty-percent response: "
+                        + controller.getCongestionWindow() + " from peak flight " + signalPeakFlight);
     }
 
     @Test
@@ -2335,6 +2358,15 @@ public class RakSlidingWindowModelTests {
 
     private static RakDatagramPacket orderedDatagram(int payloadBytes) {
         return datagram(payloadBytes, RakReliability.RELIABLE_ORDERED);
+    }
+
+    private static int datagramWireSize(int payloadBytes) {
+        RakDatagramPacket datagram = datagram(payloadBytes);
+        try {
+            return datagram.getSize();
+        } finally {
+            datagram.release();
+        }
     }
 
     private static RakDatagramPacket datagram(int payloadBytes, RakReliability reliability) {
