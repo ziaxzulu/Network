@@ -402,9 +402,10 @@ prototype therefore applies narrower guardrails:
   This lower envelope handles a route change
   observed by the idle probe stream; a backlogged sender at the two-MTU floor
   cannot use it. Both paths still need distinct delivery progress and
-  observation times. Low-flight candidate spread is bounded by the greater of
-  1.25 times its minimum and its minimum plus 4 ms, so low-millisecond jitter
-  is tolerated without scaling the extra allowance at high RTT;
+  observation times. All path-step evidence must remain within the greater of
+  1.25 times its minimum and its minimum plus 4 ms. The fixed term lets both a
+  busy trigger and its later drained candidates tolerate low-millisecond netem
+  jitter without scaling the extra allowance at high RTT;
 - the envelope that accepted the current minimum also marks a material downward
   path boundary for invalidating path-scoped DELAY loss and clear evidence.
   Any eligible lower original RTT may still improve minRTT immediately;

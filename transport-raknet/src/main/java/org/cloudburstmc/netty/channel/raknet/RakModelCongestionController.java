@@ -47,6 +47,7 @@ final class RakModelCongestionController {
     private static final int PATH_SUSPICION_CONFIRMATION_SAMPLES = 2;
     private static final int PATH_STEP_CONFIRMATION_SAMPLES = 2;
     private static final double PATH_STEP_STABILITY_MULTIPLIER = 1.25D;
+    private static final long PATH_STEP_STABILITY_ABSOLUTE_DELTA_MILLIS = 4L;
     private static final long PATH_TIMEOUT_RTT_MULTIPLIER = 10L;
     private static final long PATH_TIMEOUT_MIN_MILLIS = 2_000L;
     private static final long PATH_TIMEOUT_MAX_MILLIS = 3_000L;
@@ -827,10 +828,8 @@ final class RakModelCongestionController {
     }
 
     private boolean pathSamplesAreStable(long minimum, long maximum) {
-        double upperBound = Math.ceil(minimum * PATH_STEP_STABILITY_MULTIPLIER);
-        if (this.pathProbeUsesLowFlightEnvelope) {
-            upperBound = Math.max(upperBound, minimum + LOW_FLIGHT_PATH_STEP_ABSOLUTE_DELTA_MILLIS);
-        }
+        double upperBound = Math.max(Math.ceil(minimum * PATH_STEP_STABILITY_MULTIPLIER),
+                minimum + PATH_STEP_STABILITY_ABSOLUTE_DELTA_MILLIS);
         return maximum <= upperBound;
     }
 

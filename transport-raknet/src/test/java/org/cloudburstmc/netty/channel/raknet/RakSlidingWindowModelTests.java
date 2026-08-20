@@ -1711,6 +1711,34 @@ public class RakSlidingWindowModelTests {
     }
 
     @Test
+    public void busyLowMillisecondPathStepToleratesAbsoluteNetemJitterAfterDrain() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        List<RakDatagramPacket> packets = new ArrayList<>();
+        try {
+            acknowledgeOne(window, packets, 0, 0L, 1L);
+
+            // The external benchmark begins bulk traffic immediately after netem is installed, so the first
+            // post-change samples are backlogged rather than app-limited. They must use the conservative busy
+            // trigger, but once that trigger drains the flight, the same 9-13 ms low-millisecond jitter envelope
+            // is stable propagation evidence rather than three failed probe attempts at the stale 1 ms minimum.
+            acknowledgeOne(window, packets, 1, 100L, 109L);
+            acknowledgeOne(window, packets, 2, 220L, 233L);
+            acknowledgeOne(window, packets, 3, 340L, 350L);
+            acknowledgeOne(window, packets, 4, 460L, 472L);
+            acknowledgeOne(window, packets, 5, 580L, 591L);
+
+            Assertions.assertTrue(window.getModelMinimumRttMillis() >= 9L
+                            && window.getModelMinimumRttMillis() <= 13L,
+                    "a drained busy probe must tolerate the external low-millisecond jitter envelope");
+        } finally {
+            for (RakDatagramPacket datagram : packets) {
+                releaseIfNeeded(datagram);
+            }
+            window.close();
+        }
+    }
+
+    @Test
     public void backloggedTwoMtuSenderCannotUseIdlePathAdmission() {
         RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
         List<RakDatagramPacket> packets = new ArrayList<>();
