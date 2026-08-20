@@ -41,7 +41,11 @@ model, BDP-derived in-flight limit, bounded token pacer, NACK reordering window,
 path-step guardrails, and a persistent no-progress reset. Its experimental loss
 policy keeps path-independent hard-loss evidence separate from path-scoped
 delay/loss evidence, applies at most one reduction while an evidence epoch is
-held, and requires two disjoint actionable clear buckets before rearming.
+held, and uses mode-specific rearming evidence. HARD needs two disjoint
+actionable clear buckets; DELAY needs two consecutive actionable 256-packet
+windows with no validated loss. PTO expiry is a progress probe rather than
+congestion-loss proof; validated NACK evidence remains exact-once, while the
+third backed-off no-progress probe invokes the persistent reset.
 Rearming retains minRTT/path provenance and the filtered bandwidth seed while
 restarting bounded bandwidth discovery; persistent no-progress instead starts
 a fresh loss-evidence epoch.

@@ -249,19 +249,12 @@ public class RakSlidingWindow {
             return false;
         }
 
-        int size = datagram.getSize();
-        boolean physicalAttemptWasInFlight = datagram.isInFlight();
-        if (datagram.isInFlight()) {
-            this.bytesInFlight = Math.max(0, this.bytesInFlight - size);
-            datagram.setInFlight(false);
-        }
-        if (datagram.isRecoveryProbe()) {
-            this.recoveryProbeBytes = Math.max(0, this.recoveryProbeBytes - size);
-            datagram.setRecoveryProbe(false);
-        }
+        this.retireBoundedPhysicalAttempt(datagram);
 
-        if (this.modelController != null && physicalAttemptWasInFlight) {
+        if (this.modelController != null && datagram.isModelSampleValid()
+                && !datagram.isModelLossClassified()) {
             this.modelController.onLost(datagram, this.estimatedRTT);
+            datagram.setModelLossClassified(true);
             this.cwnd = this.modelController.getCongestionWindow();
         }
 
@@ -276,6 +269,38 @@ public class RakSlidingWindow {
         this.inRecovery = true;
         this.recoveryBoundary = largestSentOrdinal;
         return true;
+    }
+
+    /** Classifies one validated NACK exactly once, independently of prior PTO flight retirement. */
+    public boolean onBoundedNackLoss(RakDatagramPacket datagram, long largestSentOrdinal) {
+        boolean wasClassified = datagram.isModelLossClassified();
+        this.onBoundedLoss(datagram, largestSentOrdinal);
+        return this.modelController != null && !wasClassified && datagram.isModelLossClassified();
+    }
+
+    /**
+     * Retires an expired PTO attempt from physical flight without declaring congestion loss. PTO is a progress
+     * probe: unlike a validated NACK, its expiry alone does not prove that the network dropped the datagram.
+     */
+    public void onBoundedPtoExpired(RakDatagramPacket datagram) {
+        if (!this.recoveryMode.usesBoundedRecovery() || !datagram.isReliableOutstanding()) {
+            return;
+        }
+        this.retireBoundedPhysicalAttempt(datagram);
+    }
+
+    private boolean retireBoundedPhysicalAttempt(RakDatagramPacket datagram) {
+        int size = datagram.getSize();
+        boolean physicalAttemptWasInFlight = datagram.isInFlight();
+        if (physicalAttemptWasInFlight) {
+            this.bytesInFlight = Math.max(0, this.bytesInFlight - size);
+            datagram.setInFlight(false);
+        }
+        if (datagram.isRecoveryProbe()) {
+            this.recoveryProbeBytes = Math.max(0, this.recoveryProbeBytes - size);
+            datagram.setRecoveryProbe(false);
+        }
+        return physicalAttemptWasInFlight;
     }
 
     /** Returns whether a bounded retransmission can be charged to the congestion window. */
@@ -399,6 +424,32 @@ public class RakSlidingWindow {
         this.modelUnreliableBytesInFlight = Math.max(0,
                 this.modelUnreliableBytesInFlight - sample.controllerState.size());
         this.modelController.restoreUnreliableSendState(sample.rollbackState);
+    }
+
+    /** Rolls back logical, physical, and model state when a new reliable handoff fails synchronously. */
+    public void onReliableSendFailed(RakDatagramPacket datagram, ModelSendState state) {
+        int size = datagram.getSize();
+        if (datagram.isReliableOutstanding()) {
+            this.unackedBytes = Math.max(0, this.unackedBytes - size);
+            datagram.setReliableOutstanding(false);
+        }
+        if (datagram.isInFlight()) {
+            this.bytesInFlight = Math.max(0, this.bytesInFlight - size);
+            datagram.setInFlight(false);
+        }
+        if (datagram.isRecoveryProbe()) {
+            this.recoveryProbeBytes = Math.max(0, this.recoveryProbeBytes - size);
+            datagram.setRecoveryProbe(false);
+        }
+        datagram.setRetransmissionPending(false);
+        this.restoreModelSendState(datagram, state);
+    }
+
+    /** Marks the model sender app-limited after both original and recovery queues drain. */
+    public void onSenderIdle() {
+        if (this.modelController != null) {
+            this.modelController.onSenderIdle();
+        }
     }
 
     private int congestionControlledBytesInFlight() {

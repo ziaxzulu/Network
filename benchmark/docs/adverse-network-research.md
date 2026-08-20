@@ -244,9 +244,12 @@ The model does not bypass the earlier safety work:
 - each reliable physical attempt retains an immutable loss deadline, so an ACK
   for newer work cannot indefinitely rearm the deadline for an older ordered
   hole;
-- a PTO selects at most one oldest attempt, consecutive no-progress PTOs back
-  off to at most eight seconds, and sub-10% timer jitter reduces cohort
-  synchronization; and
+- a PTO selects at most one oldest attempt and retires that physical attempt
+  from flight without treating the timeout itself as congestion loss; a
+  validated NACK still classifies the attempt exactly once. Consecutive
+  no-progress PTOs back off to at most eight seconds, the third due probe
+  invokes the persistent no-progress reset, and sub-10% timer jitter reduces
+  cohort synchronization; and
 - the one-probe window exception, retransmission rollback, queue ownership,
   and terminal state reclamation remain bounded and observable.
 
@@ -316,10 +319,13 @@ but not its complete state machine:
   once over eight rounds through gains 1.25, 0.75, then 1.0. At session
   activation the controller captures the same fixed interval used by the
   scheduled send task (`RAK_FLUSH_INTERVAL` with auto-flush, otherwise the
-  10 ms maintenance tick). Burst capacity is
-  `max(2*MTU, min(8*MTU, pacingRate*capturedSendQuantum + MTU))`. The 0.75 drain
-  gain is custom. Startup and path-transition pacing retain a progress floor
-  of `2*MTU/capturedSendQuantum`, while the burst ceiling remains eight MTUs.
+  10 ms maintenance tick). An idle or application-limited sender has burst
+  capacity `max(2*MTU, min(8*MTU, pacingRate*capturedSendQuantum + MTU))`.
+  While work remains continuously queued, one delayed activation may retain
+  at most two send quanta of credit, still under the same absolute eight-MTU
+  ceiling; a drained sender immediately returns to the one-quantum bound. The
+  0.75 drain gain is custom. Startup and path-transition pacing retain a
+  progress floor of `2*MTU/capturedSendQuantum`.
   BBR draft-06 specifies a 0.90 `ProbeDown` pacing gain. This is a simplified
   capacity probe, not BBRv3 `Startup`, `Drain`, or full `ProbeBW`.
 - **Loss response.** Completed packet-timed rounds feed independent HARD and
@@ -347,11 +353,16 @@ minimum still enforced. The controller then enters HOLD: further signals in
 the same epoch cannot reduce the window again. A DELAY signal seen during a
 HARD hold upgrades the hold to DELAY clearing semantics only when the bucket
 does not also carry a HARD signal; simultaneous signals retain HARD precedence.
-Release needs two
-complete, disjoint, actionable clear buckets. A clear bucket is either 128
-packets or 64 loss-free packets. DELAY holds do not count a mature bucket that
-still has loss above 2%; HARD holds may count stable, non-inflated random loss
-as clear. Startup or path-suppressed evidence cannot release either hold.
+Rearming is deliberately asymmetric. A HARD hold needs two complete,
+disjoint, actionable clear buckets; a generic clear bucket is either 128
+packets or 64 loss-free packets, and stable non-inflated sub-hard random loss
+may count as clear. A DELAY hold instead needs two consecutive actionable
+256-delivered-packet windows with no validated loss at all: 512 continuously
+clean delivered packets. Any validated loss, startup/path-suppressed evidence,
+or material path boundary resets that DELAY clear progress. This packet-based
+rule prevents a stationary path near the 2% threshold from repeatedly
+splitting one congestion episode; its wall-clock release time therefore
+depends on the active packet rate.
 
 On release, the finite in-flight cap is removed and the window can be restored
 only as far as the bounded pre-response window remembered for that epoch. The

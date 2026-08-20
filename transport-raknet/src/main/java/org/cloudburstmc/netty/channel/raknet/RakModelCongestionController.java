@@ -57,6 +57,7 @@ final class RakModelCongestionController {
     private static final int STARTUP_MINIMUM_ROUND_MTUS = 4;
     private static final int LOSS_BUCKET_MINIMUM_PACKETS = 64;
     private static final int DELAY_LOSS_MINIMUM_PACKETS = 128;
+    private static final int DELAY_CLEAR_BUCKET_MINIMUM_PACKETS = 256;
     private static final int HARD_LOSS_MINIMUM_LOST_PACKETS = 8;
     private static final int DELAY_LOSS_MINIMUM_LOST_PACKETS = 4;
     private static final int LOSS_CLEAR_BUCKETS_TO_RELEASE = 2;
@@ -78,6 +79,7 @@ final class RakModelCongestionController {
     private LossState lossState = LossState.ARMED;
     private LossHoldKind lossHoldKind = LossHoldKind.NONE;
     private int lossClearBuckets;
+    private long lossClearPackets;
     private long lossResponseCount;
     private long hardLossResponseCount;
     private long delayLossResponseCount;
@@ -141,6 +143,7 @@ final class RakModelCongestionController {
 
     private double pacingTokens;
     private long pacingUpdatedAtMillis = -1L;
+    private boolean continuouslyBacklogged;
 
     RakModelCongestionController(int mtu) {
         this(mtu, 10L);
@@ -171,6 +174,7 @@ final class RakModelCongestionController {
     void onPacketSent(RakDatagramPacket datagram, long nowMillis, int bytesInFlight, boolean appLimited) {
         this.refillPacingTokens(nowMillis);
         this.pacingTokens = Math.max(0D, this.pacingTokens - datagram.getSize());
+        this.continuouslyBacklogged = !appLimited;
 
         if (bytesInFlight <= datagram.getSize()) {
             this.firstSendTimeMillis = nowMillis;
@@ -187,6 +191,7 @@ final class RakModelCongestionController {
     DatagramSample onUnreliablePacketSent(int size, long nowMillis, int bytesInFlight, boolean appLimited) {
         this.refillPacingTokens(nowMillis);
         this.pacingTokens = Math.max(0D, this.pacingTokens - size);
+        this.continuouslyBacklogged = !appLimited;
         if (bytesInFlight <= size) {
             this.firstSendTimeMillis = nowMillis;
             this.deliveredTimeMillis = nowMillis;
@@ -197,7 +202,7 @@ final class RakModelCongestionController {
 
     UnreliableSendState captureUnreliableSendState() {
         return new UnreliableSendState(this.pacingTokens, this.pacingUpdatedAtMillis, this.firstSendTimeMillis,
-                this.deliveredTimeMillis);
+                this.deliveredTimeMillis, this.continuouslyBacklogged);
     }
 
     void restoreUnreliableSendState(UnreliableSendState state) {
@@ -205,6 +210,7 @@ final class RakModelCongestionController {
         this.pacingUpdatedAtMillis = state.pacingUpdatedAtMillis;
         this.firstSendTimeMillis = state.firstSendTimeMillis;
         this.deliveredTimeMillis = state.deliveredTimeMillis;
+        this.continuouslyBacklogged = state.continuouslyBacklogged;
     }
 
     void onAcknowledged(RakDatagramPacket datagram, long nowMillis, long rttSampleMillis,
@@ -327,6 +333,7 @@ final class RakModelCongestionController {
         this.lossState = LossState.ARMED;
         this.lossHoldKind = LossHoldKind.NONE;
         this.lossClearBuckets = 0;
+        this.lossClearPackets = 0L;
         this.lossRecoveryCwnd = 0D;
         this.resetLossBuckets();
         this.resetRoundLossEvidence();
@@ -365,6 +372,7 @@ final class RakModelCongestionController {
                     this.delayLossBucketMaximumRttRatio, this.delayRoundMaximumRttRatio);
             this.delayLossBucketEvidenceActionable &= this.delayRoundEvidenceActionable;
             this.evaluateLossBucket();
+            this.updateDelayHoldClearProgress();
         }
         this.resetRoundLossEvidence();
     }
@@ -432,6 +440,7 @@ final class RakModelCongestionController {
                 this.lossHoldKind = LossHoldKind.DELAY;
             }
             this.lossClearBuckets = 0;
+            this.lossClearPackets = 0L;
             this.resetLossBuckets();
             return;
         }
@@ -446,28 +455,27 @@ final class RakModelCongestionController {
         if (completeClearBucket && !actionableDelayEvidence) {
             // Suppressed/startup evidence cannot either cut or release a held loss epoch.
             this.lossClearBuckets = 0;
+            this.lossClearPackets = 0L;
             this.resetDelayLossBucket();
         } else if (delayPressure || continuingDelayEpoch) {
             // Startup/path validation owns suppressed pressure; continuing loss also cannot clear a DELAY hold.
             // Neither case is evidence that the active episode ended.
             this.lossClearBuckets = 0;
+            this.lossClearPackets = 0L;
             this.resetDelayLossBucket();
+        } else if (this.lossState == LossState.HOLD && this.lossHoldKind == LossHoldKind.DELAY) {
+            // A stationary path close to the two-percent DELAY threshold naturally produces alternating
+            // above/below-threshold 128-packet samples. Treating the lower samples as clear repeatedly splits one
+            // continuing loss episode. A DELAY hold therefore rearms only after two disjoint 256-packet windows
+            // with no validated loss at all. Any loss resets clear progress; smaller samples remain accumulated.
+            if (delayTotalPackets >= DELAY_CLEAR_BUCKET_MINIMUM_PACKETS) {
+                this.resetDelayLossBucket();
+            }
         } else {
             if (completeClearBucket) {
                 if (this.lossState == LossState.HOLD
                         && ++this.lossClearBuckets >= LOSS_CLEAR_BUCKETS_TO_RELEASE) {
-                    this.inflightLimit = Double.POSITIVE_INFINITY;
-                    this.lossState = LossState.ARMED;
-                    this.lossHoldKind = LossHoldKind.NONE;
-                    this.lossClearBuckets = 0;
-                    // The finite cap can leave the bandwidth filter self-consistently below the path's capacity.
-                    // Restore only the window observed immediately before the cut, then re-enter bounded startup so
-                    // clean delivery can promptly rediscover the useful pre-loss rate.
-                    this.cwnd = Math.max(this.cwnd, Math.min(this.maximumCwnd, this.lossRecoveryCwnd));
-                    this.lossRecoveryCwnd = 0D;
-                    this.startup = true;
-                    this.fullBandwidthBytesPerMillis = 0D;
-                    this.fullBandwidthRounds = 0;
+                    this.releaseLossHold();
                 }
                 this.resetDelayLossBucket();
             }
@@ -478,6 +486,41 @@ final class RakModelCongestionController {
         if (completeHardBucket) {
             this.resetHardLossBucket();
         }
+    }
+
+    private void updateDelayHoldClearProgress() {
+        if (this.lossState != LossState.HOLD || this.lossHoldKind != LossHoldKind.DELAY) {
+            return;
+        }
+        if (!this.delayRoundEvidenceActionable || this.delayRoundLostPackets > 0L) {
+            this.lossClearBuckets = 0;
+            this.lossClearPackets = 0L;
+            return;
+        }
+        this.lossClearPackets = saturatingAdd(this.lossClearPackets, this.delayRoundDeliveredPackets);
+        while (this.lossClearPackets >= DELAY_CLEAR_BUCKET_MINIMUM_PACKETS) {
+            this.lossClearPackets -= DELAY_CLEAR_BUCKET_MINIMUM_PACKETS;
+            if (++this.lossClearBuckets >= LOSS_CLEAR_BUCKETS_TO_RELEASE) {
+                this.releaseLossHold();
+                return;
+            }
+        }
+    }
+
+    private void releaseLossHold() {
+        this.inflightLimit = Double.POSITIVE_INFINITY;
+        this.lossState = LossState.ARMED;
+        this.lossHoldKind = LossHoldKind.NONE;
+        this.lossClearBuckets = 0;
+        this.lossClearPackets = 0L;
+        // The finite cap can leave the bandwidth filter self-consistently below the path's capacity. Restore only
+        // the window observed immediately before the cut, then re-enter bounded startup so clean delivery can
+        // promptly rediscover the useful pre-loss rate.
+        this.cwnd = Math.max(this.cwnd, Math.min(this.maximumCwnd, this.lossRecoveryCwnd));
+        this.lossRecoveryCwnd = 0D;
+        this.startup = true;
+        this.fullBandwidthBytesPerMillis = 0D;
+        this.fullBandwidthRounds = 0;
     }
 
     private void resetLossBuckets() {
@@ -550,8 +593,15 @@ final class RakModelCongestionController {
                 && nowMillis - this.minimumRttTimestampMillis >= MINIMUM_RTT_WINDOW_MILLIS
                 && lowFlight;
         if (this.minimumRttMillis == Long.MAX_VALUE || rttSampleMillis < this.minimumRttMillis) {
+            boolean materialLowerPath = this.minimumRttMillis != Long.MAX_VALUE
+                    && this.minimumRttMillis >= Math.max(
+                    (long) Math.ceil(rttSampleMillis * PATH_STEP_MULTIPLIER),
+                    rttSampleMillis + PATH_STEP_ABSOLUTE_DELTA_MILLIS);
             if (probing) {
                 this.restorePathProbeWindow();
+            }
+            if (materialLowerPath) {
+                this.invalidateLossEvidenceForPathTransition();
             }
             this.minimumRttMillis = rttSampleMillis;
             this.minimumRttTimestampMillis = nowMillis;
@@ -803,6 +853,7 @@ final class RakModelCongestionController {
         this.resetDelayLossBucket();
         this.resetDelayRoundLossEvidence();
         this.lossClearBuckets = 0;
+        this.lossClearPackets = 0L;
     }
 
     private static long pathProbeTimeoutMillis(long rttMillis) {
@@ -905,27 +956,36 @@ final class RakModelCongestionController {
     }
 
     private double maximumBurstBytes() {
-        double pacedQuantum = this.pacingRateBytesPerMillis() * this.sendQuantumMillis + this.mtu;
+        long creditedQuanta = this.continuouslyBacklogged ? 2L : 1L;
+        double pacedQuantum = this.pacingRateBytesPerMillis() * this.sendQuantumMillis * creditedQuanta + this.mtu;
         return Math.max(2D * this.mtu, Math.min(MAX_BURST_DATAGRAMS * (double) this.mtu, pacedQuantum));
+    }
+
+    void onSenderIdle() {
+        this.continuouslyBacklogged = false;
     }
 
     SendState captureSendState(RakDatagramPacket datagram) {
         return new SendState(this.pacingTokens, this.pacingUpdatedAtMillis, this.firstSendTimeMillis,
+                this.deliveredTimeMillis,
                 datagram.getDeliveredBytesAtSend(), datagram.getDeliveredTimeAtSend(), datagram.getFirstSendTime(),
                 datagram.getModelSendTime(), datagram.getModelTxInFlight(), datagram.isModelSampleValid(),
-                datagram.isModelAppLimited());
+                datagram.isModelAppLimited(), datagram.isModelLossClassified(), this.continuouslyBacklogged);
     }
 
     void restoreSendState(RakDatagramPacket datagram, SendState state) {
         this.pacingTokens = state.pacingTokens;
         this.pacingUpdatedAtMillis = state.pacingUpdatedAtMillis;
         this.firstSendTimeMillis = state.firstSendTimeMillis;
+        this.deliveredTimeMillis = state.deliveredTimeMillis;
+        this.continuouslyBacklogged = state.continuouslyBacklogged;
         if (state.modelSampleValid) {
             datagram.setModelSendState(state.deliveredBytesAtSend, state.deliveredTimeAtSend,
                     state.packetFirstSendTime, state.modelSendTime, state.modelTxInFlight, state.modelAppLimited);
         } else {
             datagram.clearModelSendState();
         }
+        datagram.setModelLossClassified(state.modelLossClassified);
     }
 
     double getCongestionWindow() {
@@ -1011,6 +1071,7 @@ final class RakModelCongestionController {
         private final double pacingTokens;
         private final long pacingUpdatedAtMillis;
         private final long firstSendTimeMillis;
+        private final long deliveredTimeMillis;
         private final long deliveredBytesAtSend;
         private final long deliveredTimeAtSend;
         private final long packetFirstSendTime;
@@ -1018,14 +1079,19 @@ final class RakModelCongestionController {
         private final int modelTxInFlight;
         private final boolean modelSampleValid;
         private final boolean modelAppLimited;
+        private final boolean modelLossClassified;
+        private final boolean continuouslyBacklogged;
 
         private SendState(double pacingTokens, long pacingUpdatedAtMillis, long firstSendTimeMillis,
+                          long deliveredTimeMillis,
                           long deliveredBytesAtSend, long deliveredTimeAtSend, long packetFirstSendTime,
                           long modelSendTime, int modelTxInFlight, boolean modelSampleValid,
-                          boolean modelAppLimited) {
+                          boolean modelAppLimited, boolean modelLossClassified,
+                          boolean continuouslyBacklogged) {
             this.pacingTokens = pacingTokens;
             this.pacingUpdatedAtMillis = pacingUpdatedAtMillis;
             this.firstSendTimeMillis = firstSendTimeMillis;
+            this.deliveredTimeMillis = deliveredTimeMillis;
             this.deliveredBytesAtSend = deliveredBytesAtSend;
             this.deliveredTimeAtSend = deliveredTimeAtSend;
             this.packetFirstSendTime = packetFirstSendTime;
@@ -1033,6 +1099,8 @@ final class RakModelCongestionController {
             this.modelTxInFlight = modelTxInFlight;
             this.modelSampleValid = modelSampleValid;
             this.modelAppLimited = modelAppLimited;
+            this.modelLossClassified = modelLossClassified;
+            this.continuouslyBacklogged = continuouslyBacklogged;
         }
     }
 
@@ -1070,13 +1138,15 @@ final class RakModelCongestionController {
         private final long pacingUpdatedAtMillis;
         private final long firstSendTimeMillis;
         private final long deliveredTimeMillis;
+        private final boolean continuouslyBacklogged;
 
         private UnreliableSendState(double pacingTokens, long pacingUpdatedAtMillis, long firstSendTimeMillis,
-                                    long deliveredTimeMillis) {
+                                    long deliveredTimeMillis, boolean continuouslyBacklogged) {
             this.pacingTokens = pacingTokens;
             this.pacingUpdatedAtMillis = pacingUpdatedAtMillis;
             this.firstSendTimeMillis = firstSendTimeMillis;
             this.deliveredTimeMillis = deliveredTimeMillis;
+            this.continuouslyBacklogged = continuouslyBacklogged;
         }
     }
 }

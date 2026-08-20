@@ -47,6 +47,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
     private int modelTxInFlight;
     private boolean modelSampleValid;
     private boolean modelAppLimited;
+    private boolean modelLossClassified;
 
     public static RakDatagramPacket newInstance() {
         return RECYCLER.get();
@@ -116,6 +117,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         this.modelTxInFlight = 0;
         this.modelSampleValid = false;
         this.modelAppLimited = false;
+        this.modelLossClassified = false;
         setRefCnt(1);
         this.handle.recycle(this);
     }
@@ -251,6 +253,14 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         return this.modelAppLimited;
     }
 
+    public boolean isModelLossClassified() {
+        return this.modelLossClassified;
+    }
+
+    public void setModelLossClassified(boolean modelLossClassified) {
+        this.modelLossClassified = modelLossClassified;
+    }
+
     public void setModelSendState(long deliveredBytesAtSend, long deliveredTimeAtSend, long firstSendTime,
                                   long modelSendTime, int modelTxInFlight, boolean modelAppLimited) {
         this.deliveredBytesAtSend = deliveredBytesAtSend;
@@ -260,6 +270,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         this.modelTxInFlight = modelTxInFlight;
         this.modelSampleValid = true;
         this.modelAppLimited = modelAppLimited;
+        this.modelLossClassified = false;
     }
 
     public void clearModelSendState() {
@@ -270,6 +281,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
         this.modelTxInFlight = 0;
         this.modelSampleValid = false;
         this.modelAppLimited = false;
+        this.modelLossClassified = false;
     }
 
     @Override

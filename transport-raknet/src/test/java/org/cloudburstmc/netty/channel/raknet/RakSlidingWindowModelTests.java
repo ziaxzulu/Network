@@ -57,7 +57,24 @@ public class RakSlidingWindowModelTests {
                 () -> "a healthy saturated sender retained a growing queue: " + result.finalQueuedBytes);
     }
 
+    @Test
+    public void backloggedPacerRetainsBoundedCreditAcrossDelayedSendActivations() {
+        QuantizedSendResult result = simulateQuantizedShortRtt(true, true);
+        Assertions.assertTrue(result.measuredMbps >= 4.5D,
+                () -> "alternating 10/15 ms activations discarded continuously-backlogged pacing credit: "
+                        + result.measuredMbps + " Mbps");
+        Assertions.assertTrue(result.maxBytesSentInTick <= 8 * MTU,
+                "delayed activation credit must retain the absolute eight-MTU burst ceiling");
+        Assertions.assertTrue(result.finalQueuedBytes < 200_000L,
+                () -> "scheduler slippage created a growing application queue: " + result.finalQueuedBytes);
+    }
+
     private static QuantizedSendResult simulateQuantizedShortRtt() {
+        return simulateQuantizedShortRtt(false, false);
+    }
+
+    private static QuantizedSendResult simulateQuantizedShortRtt(boolean delayedActivations,
+                                                                 boolean continuouslyBacklogged) {
         RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED, 10L);
         PriorityQueue<Delivery> deliveries = new PriorityQueue<>(Comparator
                 .comparingLong((Delivery value) -> value.at)
@@ -73,6 +90,8 @@ public class RakSlidingWindowModelTests {
         final double linkBytesPerMillis = 625D;
         final long measurementStartMillis = 2_000L;
         final long measurementEndMillis = 12_000L;
+        long nextSendActivationMillis = 10L;
+        int activationIndex = 0;
 
         try {
             // A small pre-data flight records the true 1 ms propagation minimum. Its serialization is below this
@@ -102,9 +121,11 @@ public class RakSlidingWindowModelTests {
                 }
 
                 offeredCredit += offeredBytesPerSecond;
-                if (now % 10L != 0L) {
+                if (now != nextSendActivationMillis) {
                     continue;
                 }
+                long nextDelay = delayedActivations && (activationIndex++ & 1) == 0 ? 15L : 10L;
+                nextSendActivationMillis += nextDelay;
                 int bytesSentInTick = 0;
                 while (offeredCredit >= payloadBytes * 1_000L) {
                     RakDatagramPacket datagram = datagram(payloadBytes);
@@ -116,7 +137,8 @@ public class RakSlidingWindowModelTests {
                     datagram.setSendOrdinal(sendOrdinal++);
                     datagram.setSendTime(now);
                     offeredCredit -= payloadBytes * 1_000L;
-                    window.onReliableSend(datagram, offeredCredit < payloadBytes * 1_000L);
+                    window.onReliableSend(datagram, !continuouslyBacklogged
+                            && offeredCredit < payloadBytes * 1_000L);
                     bytesSentInTick += datagram.getSize();
 
                     double serviceStartedAt = Math.max(now, nextLinkAvailableMillis);
@@ -929,8 +951,8 @@ public class RakSlidingWindowModelTests {
                 123, 512, 4, 512, 100L, 150D);
         now = completeModelRound(genuinelyInflated, now, 1, 0, 5L, 5D);
         completeModelRound(genuinelyInflated, now, 1, 0, 5L, 5D);
-        Assertions.assertEquals(1L, genuinelyInflated.getDelayLossResponseCount(),
-                "a low boundary ACK cannot erase inflation observed with the lost packets");
+        Assertions.assertEquals(0L, genuinelyInflated.getDelayLossResponseCount(),
+                "a material lower-path boundary invalidates even genuinely inflated old-path loss evidence");
     }
 
     @Test
@@ -980,11 +1002,12 @@ public class RakSlidingWindowModelTests {
                 "after HARD converts to DELAY, continuing five-percent loss cannot count as clear");
         Assertions.assertTrue(Double.isFinite(controller.getInflightLimit()));
 
-        now = completeModelRound(controller, now, 125, 0, 5L, 5D);
+        now = completeModelRound(controller, now, 256, 0, 5L, 5D);
         Assertions.assertTrue(controller.isLossResponseHeld());
-        completeModelRound(controller, now, 125, 0, 5L, 5D);
+        now = completeModelRound(controller, now, 256, 0, 5L, 5D);
+        completeModelRound(controller, now, 1, 0, 5L, 5D);
         Assertions.assertFalse(controller.isLossResponseHeld(),
-                "two mature loss-free buckets release the converted DELAY hold");
+                "two 256-packet loss-free windows release the converted DELAY hold");
     }
 
     @Test
@@ -1042,7 +1065,7 @@ public class RakSlidingWindowModelTests {
     }
 
     @Test
-    public void continuousDelayQualifiedLossCutsExactlyOnceUntilTwoClearBuckets() {
+    public void continuousDelayQualifiedLossCutsExactlyOnceUntilTwoLossFreeClearWindows() {
         RakModelCongestionController controller = learnedController(5L);
         long now = 1_001L;
         double learnedCwnd = controller.getCongestionWindow();
@@ -1062,7 +1085,7 @@ public class RakSlidingWindowModelTests {
     }
 
     @Test
-    public void twoDisjointClearBucketsRearmOneNewLossResponse() {
+    public void twoDisjointLossFreeWindowsRearmOneNewLossResponse() {
         RakModelCongestionController controller = learnedController(5L);
         long now = 1_001L;
 
@@ -1073,13 +1096,14 @@ public class RakSlidingWindowModelTests {
         Assertions.assertTrue(controller.isLossResponseHeld());
         Assertions.assertTrue(Double.isFinite(controller.getInflightLimit()));
 
-        now = completeModelRound(controller, now, 125, 0, 5L, 5D);
+        now = completeModelRound(controller, now, 256, 0, 5L, 5D);
         Assertions.assertTrue(controller.isLossResponseHeld(),
-                "one complete clear bucket cannot rearm the response");
+                "one 256-packet loss-free window cannot rearm the response");
         Assertions.assertTrue(Double.isFinite(controller.getInflightLimit()));
-        now = completeModelRound(controller, now, 125, 0, 5L, 5D);
+        now = completeModelRound(controller, now, 256, 0, 5L, 5D);
+        now = completeModelRound(controller, now, 1, 0, 5L, 5D);
         Assertions.assertFalse(controller.isLossResponseHeld(),
-                "two disjoint clear buckets release the cap and rearm loss response");
+                "two disjoint 256-packet loss-free windows release the cap and rearm loss response");
         Assertions.assertEquals(Double.POSITIVE_INFINITY, controller.getInflightLimit());
 
         for (int round = 0; round < 8; round++) {
@@ -1093,6 +1117,86 @@ public class RakSlidingWindowModelTests {
         Assertions.assertEquals(2L, controller.getLossResponseCount(),
                 "one later congestion epoch gets exactly one new response");
         Assertions.assertTrue(controller.isLossResponseHeld());
+    }
+
+    @Test
+    public void stationaryTwoPercentLossCannotSplitOneDelayLossEpoch() {
+        for (int phase = 0; phase < 16; phase++) {
+            RakModelCongestionController controller = learnedController(5L);
+            java.util.Random random = new java.util.Random(0x5EED_0200L + phase);
+            long now = 1_001L;
+            int observedPackets = 0;
+            int round = 0;
+            while (observedPackets < 20_000) {
+                int packets = 8 + (round++ + phase) % 9;
+                int lost = 0;
+                for (int packet = 0; packet < packets; packet++) {
+                    if (random.nextDouble() < 0.0204D) {
+                        lost++;
+                    }
+                }
+                now = completeModelRound(controller, now, packets, lost, 5L, 10D);
+                observedPackets += packets;
+            }
+            now = completeModelRound(controller, now, 1, 0, 5L, 10D);
+
+            Assertions.assertEquals(1L, controller.getDelayLossResponseCount(),
+                    "stationary near-threshold loss must remain one held episode for phase " + phase);
+            Assertions.assertTrue(controller.isLossResponseHeld(),
+                    "ordinary stochastic dips below two percent cannot rearm phase " + phase);
+
+            now = completeModelRound(controller, now, 256, 0, 5L, 5D);
+            now = completeModelRound(controller, now, 256, 0, 5L, 5D);
+            now = completeModelRound(controller, now, 1, 0, 5L, 5D);
+            Assertions.assertFalse(controller.isLossResponseHeld(),
+                    "512 clean packets must release the held episode for phase " + phase);
+
+            for (int cleanRound = 0; cleanRound < 8; cleanRound++) {
+                now = completeModelRound(controller, now, 125, 0, 5L, 5D);
+            }
+            for (int lossRound = 0; lossRound < 3; lossRound++) {
+                now = completeModelRound(controller, now, 125, 6, 5L, 10D);
+            }
+            completeModelRound(controller, now, 1, 0, 5L, 10D);
+            Assertions.assertEquals(2L, controller.getDelayLossResponseCount(),
+                    "a later distinct episode gets exactly one response for phase " + phase);
+        }
+    }
+
+    @Test
+    public void delayHoldNeeds512ConsecutiveCleanPacketsAcrossLossAndPathBoundaries() {
+        RakModelCongestionController controller = learnedController(5L);
+        long now = 1_001L;
+        for (int round = 0; round < 3; round++) {
+            now = completeModelRound(controller, now, 125, 6, 5L, 10D);
+        }
+        Assertions.assertTrue(controller.isLossResponseHeld());
+
+        now = completeModelRound(controller, now, 511, 0, 5L, 5D);
+        now = completeModelRound(controller, now, 2, 1, 5L, 5D);
+        now = completeModelRound(controller, now, 510, 0, 5L, 5D);
+        now = completeModelRound(controller, now, 1, 0, 5L, 5D);
+        Assertions.assertTrue(controller.isLossResponseHeld(),
+                "one loss between two 511-packet runs resets all clear progress");
+        now = completeModelRound(controller, now, 1, 0, 5L, 5D);
+        Assertions.assertFalse(controller.isLossResponseHeld(),
+                "the 512th consecutive actionable clean packet releases DELAY hold");
+
+        RakModelCongestionController pathChange = learnedController(100L);
+        now = 1_001L;
+        for (int round = 0; round < 3; round++) {
+            now = completeModelRound(pathChange, now, 125, 6, 100L, 150D);
+        }
+        Assertions.assertTrue(pathChange.isLossResponseHeld());
+        now = completeModelRound(pathChange, now, 300, 0, 100L, 100D);
+        now = completeModelRound(pathChange, now, 1, 0, 5L, 5D);
+        Assertions.assertEquals(5L, pathChange.getMinimumRttMillis());
+        now = completeModelRound(pathChange, now, 510, 0, 5L, 5D);
+        now = completeModelRound(pathChange, now, 1, 0, 5L, 5D);
+        Assertions.assertTrue(pathChange.isLossResponseHeld(),
+                "clean evidence from a materially different old path cannot combine with 511 new-path packets");
+        completeModelRound(pathChange, now, 1, 0, 5L, 5D);
+        Assertions.assertFalse(pathChange.isLossResponseHeld());
     }
 
     @Test
@@ -1782,9 +1886,49 @@ public class RakSlidingWindowModelTests {
             for (int i = 0; i < 10; i++) {
                 acknowledgeOne(window, packets, i, 100L + i, 300L);
             }
+            RakDatagramPacket appLimited = datagram(1_000);
+            packets.add(appLimited);
+            appLimited.setSequenceIndex(10);
+            appLimited.setSendOrdinal(10L);
+            appLimited.setSendTime(400L);
+            window.onReliableSend(appLimited, true);
+            window.onAck(500L, appLimited, 11L);
+
             int allowanceAfterLongIdle = window.getTransmissionBandwidth(1_000_000L);
-            Assertions.assertTrue(allowanceAfterLongIdle <= 8 * MTU,
-                    "idle time is capped to one bounded event-loop pacing quantum");
+            int oneQuantumCap = (int) Math.ceil(Math.max(2D * MTU, Math.min(8D * MTU,
+                    window.getModelPacingRateBytesPerMillis() * 10D + MTU)));
+            Assertions.assertTrue(allowanceAfterLongIdle <= oneQuantumCap,
+                    "a genuinely app-limited idle period retains the one-quantum pacing cap");
+        } finally {
+            for (RakDatagramPacket datagram : packets) {
+                releaseIfNeeded(datagram);
+            }
+            window.close();
+        }
+    }
+
+    @Test
+    public void explicitQueueDrainClearsBackloggedCatchUpCredit() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        List<RakDatagramPacket> packets = new ArrayList<>();
+        try {
+            for (int i = 0; i < 10; i++) {
+                acknowledgeOne(window, packets, i, 100L + i, 300L);
+            }
+            RakDatagramPacket backlogged = datagram(1_000);
+            packets.add(backlogged);
+            backlogged.setSequenceIndex(10);
+            backlogged.setSendOrdinal(10L);
+            backlogged.setSendTime(400L);
+            window.onReliableSend(backlogged, false);
+            window.onAck(500L, backlogged, 11L);
+
+            window.onSenderIdle();
+            int allowanceAfterLongIdle = window.getTransmissionBandwidth(1_000_000L);
+            int oneQuantumCap = (int) Math.ceil(Math.max(2D * MTU, Math.min(8D * MTU,
+                    window.getModelPacingRateBytesPerMillis() * 10D + MTU)));
+            Assertions.assertTrue(allowanceAfterLongIdle <= oneQuantumCap,
+                    "draining both transport queues clears stale backlogged pacing credit");
         } finally {
             for (RakDatagramPacket datagram : packets) {
                 releaseIfNeeded(datagram);
