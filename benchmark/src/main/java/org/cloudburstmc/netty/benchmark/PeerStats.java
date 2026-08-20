@@ -464,6 +464,7 @@ public final class PeerStats {
     }
 
     public Snapshot snapshot(boolean channelOpen, boolean channelActive) {
+        CongestionModelState model = this.congestionModelState;
         return new Snapshot(
                 this.id,
                 this.impaired,
@@ -493,7 +494,24 @@ public final class PeerStats {
                 this.disconnects.sum(),
                 this.blackholedDatagramsIn.sum(),
                 this.blackholedDatagramsOut.sum(),
+                this.currentQueuedBytes.get(),
                 this.maxQueuedBytes.get(),
+                this.currentBytesInFlight.get(),
+                this.lifetimeMaxBytesInFlight.get(),
+                this.congestionWindow,
+                this.smoothedRtt,
+                this.retransmissionTimeout,
+                this.retransmittedDatagramsInFlight,
+                model == null ? -1L : model.observedAtMillis(),
+                model == null ? -1.0D : model.estimatedDeliveryRateBytesPerSecond(),
+                model == null ? -1.0D : model.pacingRateBytesPerSecond(),
+                model == null ? -1L : model.minimumRttMillis(),
+                model == null ? -1.0D : model.recentLossRate(),
+                model == null ? -1L : model.packetRound(),
+                model != null && model.startup(),
+                model != null && model.persistentCongestion(),
+                model == null ? -1L : model.hardLossResponseCount(),
+                model == null ? -1L : model.delayLossResponseCount(),
                 this.lastState
         );
     }
@@ -527,7 +545,24 @@ public final class PeerStats {
         public final long disconnects;
         public final long blackholedDatagramsIn;
         public final long blackholedDatagramsOut;
+        public final long currentQueuedBytes;
         public final long maxQueuedBytes;
+        public final long bytesInFlight;
+        public final long maxBytesInFlight;
+        public final double congestionWindow;
+        public final double smoothedRtt;
+        public final long retransmissionTimeout;
+        public final int retransmittedDatagramsInFlight;
+        public final long congestionModelObservedAtMillis;
+        public final double estimatedDeliveryRateBytesPerSecond;
+        public final double pacingRateBytesPerSecond;
+        public final long minimumRttMillis;
+        public final double recentLossRate;
+        public final long packetRound;
+        public final boolean congestionModelStartup;
+        public final boolean persistentCongestion;
+        public final long hardLossResponseCount;
+        public final long delayLossResponseCount;
         public final RakState lastState;
 
         private Snapshot(int id, boolean impaired, InetSocketAddress address, boolean channelOpen, boolean channelActive,
@@ -538,7 +573,13 @@ public final class PeerStats {
                          long bulkReceivedMessages, long bulkReceivedBytes, long logicalPacketsReceived,
                          long probesSent, long probesAcked, long probeAckSpillover, long disconnects,
                          long blackholedDatagramsIn,
-                         long blackholedDatagramsOut, long maxQueuedBytes, RakState lastState) {
+                         long blackholedDatagramsOut, long currentQueuedBytes, long maxQueuedBytes,
+                         long bytesInFlight, long maxBytesInFlight, double congestionWindow,
+                         double smoothedRtt, long retransmissionTimeout, int retransmittedDatagramsInFlight,
+                         long congestionModelObservedAtMillis, double estimatedDeliveryRateBytesPerSecond,
+                         double pacingRateBytesPerSecond, long minimumRttMillis, double recentLossRate,
+                         long packetRound, boolean congestionModelStartup, boolean persistentCongestion,
+                         long hardLossResponseCount, long delayLossResponseCount, RakState lastState) {
             this.id = id;
             this.impaired = impaired;
             this.address = address;
@@ -567,7 +608,24 @@ public final class PeerStats {
             this.disconnects = disconnects;
             this.blackholedDatagramsIn = blackholedDatagramsIn;
             this.blackholedDatagramsOut = blackholedDatagramsOut;
+            this.currentQueuedBytes = currentQueuedBytes;
             this.maxQueuedBytes = maxQueuedBytes;
+            this.bytesInFlight = bytesInFlight;
+            this.maxBytesInFlight = maxBytesInFlight;
+            this.congestionWindow = congestionWindow;
+            this.smoothedRtt = smoothedRtt;
+            this.retransmissionTimeout = retransmissionTimeout;
+            this.retransmittedDatagramsInFlight = retransmittedDatagramsInFlight;
+            this.congestionModelObservedAtMillis = congestionModelObservedAtMillis;
+            this.estimatedDeliveryRateBytesPerSecond = estimatedDeliveryRateBytesPerSecond;
+            this.pacingRateBytesPerSecond = pacingRateBytesPerSecond;
+            this.minimumRttMillis = minimumRttMillis;
+            this.recentLossRate = recentLossRate;
+            this.packetRound = packetRound;
+            this.congestionModelStartup = congestionModelStartup;
+            this.persistentCongestion = persistentCongestion;
+            this.hardLossResponseCount = hardLossResponseCount;
+            this.delayLossResponseCount = delayLossResponseCount;
             this.lastState = lastState;
         }
     }

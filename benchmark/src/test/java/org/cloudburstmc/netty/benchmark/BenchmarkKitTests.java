@@ -4424,6 +4424,11 @@ public class BenchmarkKitTests {
         }
         peer.addBlackholedDatagramIn();
         peer.addBlackholedDatagramOut();
+        peer.queuedBytes(4_096);
+        peer.recoveryState(1_000L, 2_048, 8_192.0D, 0.0D,
+                25.0D, 5.0D, 500L, 1, 900L, 800L);
+        peer.congestionModelState(1_000L, 100_000.0D, 120_000.0D,
+                20L, 0.02D, 42L, false, false, 1L, 2L);
         run.add(new BenchmarkIterationResult(
                 "unit",
                 1,
@@ -4516,6 +4521,17 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(1, summary.path("iterations").get(0).path("peers").get(0).path("blackholedDatagramsIn").asLong());
         Assertions.assertEquals(1, summary.path("iterations").get(0).path("peers").get(0).path("blackholedDatagramsOut").asLong());
         Assertions.assertTrue(summary.path("iterations").get(0).path("peers").get(0).has("serverBytesOut"));
+        JsonNode peerJson = summary.path("iterations").get(0).path("peers").get(0);
+        Assertions.assertEquals(4_096L, peerJson.path("currentQueuedBytes").asLong());
+        Assertions.assertEquals(2_048L, peerJson.path("bytesInFlight").asLong());
+        Assertions.assertEquals(8_192.0D, peerJson.path("congestionWindowBytes").asDouble(), 0.001D);
+        Assertions.assertEquals(20L, peerJson.path("congestionModel").path("minimumRttMillis").asLong());
+        Assertions.assertEquals(120_000.0D,
+                peerJson.path("congestionModel").path("pacingRateBytesPerSecond").asDouble(), 0.001D);
+        Assertions.assertEquals(1L,
+                peerJson.path("congestionModel").path("hardLossResponseCount").asLong());
+        Assertions.assertEquals(2L,
+                peerJson.path("congestionModel").path("delayLossResponseCount").asLong());
 
         List<Map<String, String>> rows = CSV
                 .readerFor(new TypeReference<Map<String, String>>() {

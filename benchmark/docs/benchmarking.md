@@ -28,7 +28,13 @@ Each run writes:
 - `latency.hdr`
 - `report.md`
 
-`summary.json` and `report.md` include per-case stability rows. For curve and matrix scenarios, read stability per rate/payload/reliability case rather than across the whole run.
+`summary.json` and `report.md` include per-case stability rows. Each iteration's
+per-peer summary also retains the point-in-time queue, in-flight, cwnd, RTT,
+and model-based delivery/pacing/minRTT/loss state used to diagnose cohort
+outliers. This is an artifact-local diagnostic keyed by the existing peer ID;
+it does not add peer labels to bounded-cardinality metrics. For curve and
+matrix scenarios, read stability per rate/payload/reliability case rather than
+across the whole run.
 
 ## Local Smoke Runs
 

@@ -1524,7 +1524,15 @@ public final class BenchmarkResultWriter {
             long disconnects,
             long blackholedDatagramsIn,
             long blackholedDatagramsOut,
+            long currentQueuedBytes,
             long maxQueuedBytes,
+            long bytesInFlight,
+            long maxBytesInFlight,
+            double congestionWindowBytes,
+            double smoothedRttMillis,
+            long retransmissionTimeoutMillis,
+            int retransmittedDatagramsInFlight,
+            PeerCongestionModelJson congestionModel,
             String lastState
     ) {
         static PeerJson from(PeerStats.Snapshot peer) {
@@ -1557,8 +1565,47 @@ public final class BenchmarkResultWriter {
                     peer.disconnects,
                     peer.blackholedDatagramsIn,
                     peer.blackholedDatagramsOut,
+                    peer.currentQueuedBytes,
                     peer.maxQueuedBytes,
+                    peer.bytesInFlight,
+                    peer.maxBytesInFlight,
+                    peer.congestionWindow,
+                    peer.smoothedRtt,
+                    peer.retransmissionTimeout,
+                    peer.retransmittedDatagramsInFlight,
+                    PeerCongestionModelJson.from(peer),
                     peer.lastState.name()
+            );
+        }
+    }
+
+    private record PeerCongestionModelJson(
+            long observedAtEpochMillis,
+            double estimatedDeliveryRateBytesPerSecond,
+            double pacingRateBytesPerSecond,
+            long minimumRttMillis,
+            double recentLossRate,
+            long packetRound,
+            boolean startup,
+            boolean persistentCongestion,
+            long hardLossResponseCount,
+            long delayLossResponseCount
+    ) {
+        static PeerCongestionModelJson from(PeerStats.Snapshot peer) {
+            if (peer.congestionModelObservedAtMillis < 0L) {
+                return null;
+            }
+            return new PeerCongestionModelJson(
+                    peer.congestionModelObservedAtMillis,
+                    peer.estimatedDeliveryRateBytesPerSecond,
+                    peer.pacingRateBytesPerSecond,
+                    peer.minimumRttMillis,
+                    peer.recentLossRate,
+                    peer.packetRound,
+                    peer.congestionModelStartup,
+                    peer.persistentCongestion,
+                    peer.hardLossResponseCount,
+                    peer.delayLossResponseCount
             );
         }
     }

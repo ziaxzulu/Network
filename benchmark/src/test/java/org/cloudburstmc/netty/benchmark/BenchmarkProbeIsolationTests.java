@@ -29,7 +29,7 @@ import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.handler.codec.raknet.common.RakSessionCodec;
-import org.cloudburstmc.netty.util.FastBinaryMinHeap;
+import org.cloudburstmc.netty.util.FastWeightedFairQueue;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -96,10 +96,10 @@ public class BenchmarkProbeIsolationTests {
     @Test
     public void highPriorityTelemetryUsesWeightedQueueWithoutReorderingOrStarvingBulk() throws Exception {
         RakSessionCodec codec = codec();
-        FastBinaryMinHeap<EncapsulatedPacket> outgoing = new FastBinaryMinHeap<>(8);
+        FastWeightedFairQueue<EncapsulatedPacket> outgoing = new FastWeightedFairQueue<>(4);
         set(codec, "outgoingPackets", outgoing);
         set(codec, "outgoingPacketNextWeights", new long[4]);
-        invoke(codec, "initHeapWeights");
+        invoke(codec, "initOutgoingPacketWeights");
         set(codec, "state", RakState.CONNECTED);
 
         int initialBulkPackets = 32;
