@@ -431,9 +431,11 @@ prototype therefore applies narrower guardrails:
 - at most three drain attempts suppress moderate delay-qualified loss. The
   suspicion, drain, sample, and first two cooldown stages suppress DELAY
   evidence; the third failed attempt makes DELAY evidence actionable
-  immediately. The at-least-20% HARD and persistent-congestion responses remain
-  active throughout. HARD evidence remains subject to its eight-lost-packet
-  maturity threshold.
+  immediately. Stable path validation continues after the same bounded
+  cooldown, but later retries neither suppress nor clear DELAY evidence until
+  a material path is accepted or the baseline is reset. The at-least-20% HARD
+  and persistent-congestion responses remain active throughout. HARD evidence
+  remains subject to its eight-lost-packet maturity threshold.
 
 Acceptance restores the safe pre-probe window, preserves the filtered
 bandwidth seed and any finite HARD or DELAY loss cap, and restarts startup plateau

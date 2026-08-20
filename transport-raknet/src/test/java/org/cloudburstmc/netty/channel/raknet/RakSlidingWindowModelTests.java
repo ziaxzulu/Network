@@ -1458,6 +1458,43 @@ public class RakSlidingWindowModelTests {
     }
 
     @Test
+    public void exhaustedPathValidationKeepsRetryingWithoutSuppressingDelayLoss() {
+        RakModelCongestionController controller = learnedController(5L);
+        long now = 1_001L;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            now = failPathDrainByTimeout(controller, now, 100L);
+            if (attempt < 2) {
+                now += 251L;
+            }
+        }
+
+        now += 251L;
+        now = completeModelRound(controller, now, 1, 0, 5L, 5D);
+        now = completeModelRound(controller, now, 1, 0, 100L, 100D);
+        now = completeModelRound(controller, now, 1, 0, 100L, 100D);
+        Assertions.assertEquals(3, controller.getPathAttempts(),
+                "a baseline-jitter sample cannot regrant suppression to later validation retries");
+
+        now = completeModelRound(controller, now, 125, 0, 100L, 100D);
+        now = completeModelRound(controller, now, 125, 6, 100L, 100D);
+        now = completeModelRound(controller, now, 1, 0, 100L, 100D);
+        Assertions.assertEquals(1L, controller.getDelayLossResponseCount(),
+                "a retry after exhaustion must not suppress fresh delay-qualified loss");
+        Assertions.assertEquals(5L, controller.getMinimumRttMillis(),
+                "high-flight loss evidence must not itself validate the candidate path");
+        double heldLimit = controller.getInflightLimit();
+
+        controller.transmissionAllowance(now + 2_000L, 0);
+        acceptStablePathStep(controller, now + 2_251L, 100L);
+        Assertions.assertEquals(100L, controller.getMinimumRttMillis(),
+                "loss-suppression exhaustion must not permanently disable later path validation");
+        Assertions.assertEquals(1L, controller.getDelayLossResponseCount(),
+                "a validation retry cannot manufacture another loss response");
+        Assertions.assertEquals(heldLimit, controller.getInflightLimit(),
+                "accepting the path must preserve the installed delay-loss cap");
+    }
+
+    @Test
     public void hardLossCapSurvivesPathTimeoutAndAcceptedRetry() {
         RakModelCongestionController controller = new RakModelCongestionController(MTU);
         long now = 0L;

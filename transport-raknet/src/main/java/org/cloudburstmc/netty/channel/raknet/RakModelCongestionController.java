@@ -139,6 +139,7 @@ final class RakModelCongestionController {
     private long pathDrainHoldMillis;
     private double pathPreProbeCwnd;
     private int pathAttempts;
+    private boolean pathLossSuppressionExhausted;
     private long pathStepMinimumRttMillis = Long.MAX_VALUE;
     private long pathStepMaximumRttMillis = -1L;
     private long pathStepDeliveredAtSend = -1L;
@@ -609,7 +610,7 @@ final class RakModelCongestionController {
                 this.restorePathProbeWindow();
             }
             if (materialLowerPath) {
-                this.invalidateLossEvidenceForPathTransition();
+                this.resetPathScopedLossEvidence();
                 this.minimumRttUsesLowFlightEnvelope = false;
             }
             this.minimumRttMillis = rttSampleMillis;
@@ -627,7 +628,7 @@ final class RakModelCongestionController {
                 this.minimumRttMillis = rttSampleMillis;
                 this.minimumRttTimestampMillis = nowMillis;
             }
-            this.resetPathTransition();
+            this.resetPathTransition(true);
             return;
         }
 
@@ -635,9 +636,6 @@ final class RakModelCongestionController {
             return;
         }
         if (this.pathState == PathState.STEADY) {
-            if (this.pathAttempts >= PATH_MAX_ATTEMPTS) {
-                return;
-            }
             this.beginPathSuspicion(nowMillis, rttSampleMillis, deliveredAtSend, idleLowFlight);
             return;
         }
@@ -697,7 +695,7 @@ final class RakModelCongestionController {
     private void beginPathDrain(long nowMillis) {
         this.invalidateLossEvidenceForPathTransition();
         this.pathState = PathState.DRAIN;
-        this.pathAttempts++;
+        this.pathAttempts = Math.min(PATH_MAX_ATTEMPTS, this.pathAttempts + 1);
         this.pathPreProbeCwnd = this.cwnd;
         this.pathProbeBoundaryDelivered = this.deliveredBytes;
         this.pathProbeDeadlineMillis = saturatingAdd(nowMillis,
@@ -772,7 +770,7 @@ final class RakModelCongestionController {
         this.fullBandwidthRounds = 0;
         // Delay-qualified evidence collected against the old RTT baseline cannot classify the accepted path.
         // Preserve any installed HOLD cap and path-independent HARD evidence.
-        this.resetDelayLossBucket();
+        this.resetPathScopedLossEvidence();
         this.resetPathTransition();
     }
 
@@ -799,6 +797,13 @@ final class RakModelCongestionController {
 
     private void failPathProbe(long nowMillis) {
         this.restorePathProbeWindow();
+        if (this.pathAttempts >= PATH_MAX_ATTEMPTS && !this.pathLossSuppressionExhausted) {
+            // Three complete low-flight drains are enough to stop granting the candidate path immunity from
+            // delay-qualified congestion evidence. Keep retrying the path validation after its bounded cooldown,
+            // but never regain that suppression privilege until a path is accepted or the baseline is reset.
+            this.resetPathScopedLossEvidence();
+            this.pathLossSuppressionExhausted = true;
+        }
         this.enterPathCooldown(nowMillis, this.pathSuspectRttMillis, true);
     }
 
@@ -859,6 +864,13 @@ final class RakModelCongestionController {
     }
 
     private void resetPathTransition() {
+        this.resetPathTransition(false);
+    }
+
+    private void resetPathTransition(boolean preserveLossSuppressionExhaustion) {
+        boolean keepSuppressionExhausted = preserveLossSuppressionExhaustion
+                && this.pathLossSuppressionExhausted;
+        int retainedPathAttempts = this.pathAttempts;
         if (!this.isPathDelayEvidenceActionable()) {
             this.invalidateLossEvidenceForPathTransition();
         }
@@ -870,18 +882,25 @@ final class RakModelCongestionController {
         this.pathLowFlightSinceMillis = -1L;
         this.pathDrainHoldMillis = 0L;
         this.pathPreProbeCwnd = 0D;
-        this.pathAttempts = 0;
+        this.pathAttempts = keepSuppressionExhausted ? retainedPathAttempts : 0;
+        this.pathLossSuppressionExhausted = keepSuppressionExhausted;
         this.pathProbeUsesLowFlightEnvelope = false;
         this.resetPathSuspicion();
         this.resetPathStepCandidate();
     }
 
     private boolean isPathDelayEvidenceActionable() {
-        return this.pathState == PathState.STEADY
-                || (this.pathState == PathState.COOLDOWN && this.pathAttempts >= PATH_MAX_ATTEMPTS);
+        return this.pathLossSuppressionExhausted || this.pathState == PathState.STEADY;
     }
 
     private void invalidateLossEvidenceForPathTransition() {
+        if (this.pathLossSuppressionExhausted) {
+            return;
+        }
+        this.resetPathScopedLossEvidence();
+    }
+
+    private void resetPathScopedLossEvidence() {
         this.resetDelayLossBucket();
         this.resetDelayRoundLossEvidence();
         this.lossClearBuckets = 0;
