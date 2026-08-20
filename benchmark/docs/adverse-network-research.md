@@ -528,11 +528,14 @@ indefinitely while later normal packets are transmitted and acknowledged; the
 receiver correctly waits forever for the older ordering index, which was never
 put on the wire and therefore cannot be recovered by NACK or PTO. The RakNet
 [reference implementation](https://github.com/facebookarchive/RakNet/blob/1a169895a900c9fc4841c556e16514182b75faf8/Source/ReliabilityLayer.cpp#L3880-L3903)
-instead derives the scheduling floor from the actual heap root and advances the
-selected priority on every nonempty enqueue. That prerequisite was repaired
-before `MODEL_BASED` was added, and benchmark probes were moved outside the
-workload's ordered stream. New campaigns must preserve both controls before
-recovery or congestion-control conclusions are drawn.
+instead derives the scheduling floor from the actual least-weighted queue entry
+and advances the selected priority on every nonempty enqueue. That prerequisite
+was repaired before `MODEL_BASED` was added, and benchmark probes were moved
+outside the workload's ordered stream. The sender now stores those monotonic
+weights in four FIFO priority lanes and selects the least-weighted lane head,
+preserving the repaired scheduling rule without a binary-heap operation for
+every queued packet. New campaigns must preserve both controls before recovery
+or congestion-control conclusions are drawn.
 
 The benchmark requires the same launcher-recorded source revision and staged
 distribution manifest for both sides of the A/B comparison and records

@@ -30,6 +30,7 @@ import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
 import org.cloudburstmc.netty.util.FastBinaryMinHeap;
+import org.cloudburstmc.netty.util.FastWeightedFairQueue;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -46,7 +47,7 @@ public class RakSessionCodecPriorityTests {
     private static final int MTU = 1_200;
 
     @Test
-    public void derivesPriorityWeightsFromActualHeapRoot() throws Exception {
+    public void derivesPriorityWeightsFromActualQueueHead() throws Exception {
         Harness harness = harness();
         ByteBuf payload = null;
         try {
@@ -106,7 +107,7 @@ public class RakSessionCodecPriorityTests {
     }
 
     @Test
-    public void splitHighTrafficGetsDistinctWeightsWithoutCorruptingTheHeapRoot() throws Exception {
+    public void splitHighTrafficGetsDistinctWeightsWithoutCorruptingTheQueueHead() throws Exception {
         Harness harness = harness();
         ByteBuf normalPayload = null;
         ByteBuf splitPayload = null;
@@ -221,14 +222,14 @@ public class RakSessionCodecPriorityTests {
                 });
 
         RakSessionCodec codec = new RakSessionCodec(channel, () -> 0L);
-        FastBinaryMinHeap<EncapsulatedPacket> outgoing = new FastBinaryMinHeap<>(8);
+        FastWeightedFairQueue<EncapsulatedPacket> outgoing = new FastWeightedFairQueue<>(RakPriority.values().length);
         set(codec, "outgoingPackets", outgoing);
         set(codec, "outgoingPacketNextWeights", new long[4]);
         set(codec, "orderWriteIndex", new int[16]);
         set(codec, "state", RakState.CONNECTED);
-        Method initHeapWeights = RakSessionCodec.class.getDeclaredMethod("initHeapWeights");
-        initHeapWeights.setAccessible(true);
-        initHeapWeights.invoke(codec);
+        Method initWeights = RakSessionCodec.class.getDeclaredMethod("initOutgoingPacketWeights");
+        initWeights.setAccessible(true);
+        initWeights.invoke(codec);
         return new Harness(codec, outgoing, embeddedChannel, context);
     }
 
@@ -274,12 +275,12 @@ public class RakSessionCodecPriorityTests {
 
     private static final class Harness {
         private final RakSessionCodec codec;
-        private final FastBinaryMinHeap<EncapsulatedPacket> outgoing;
+        private final FastWeightedFairQueue<EncapsulatedPacket> outgoing;
         private final EmbeddedChannel channel;
         private final ChannelHandlerContext context;
         private boolean closed;
 
-        private Harness(RakSessionCodec codec, FastBinaryMinHeap<EncapsulatedPacket> outgoing,
+        private Harness(RakSessionCodec codec, FastWeightedFairQueue<EncapsulatedPacket> outgoing,
                         EmbeddedChannel channel, ChannelHandlerContext context) {
             this.codec = codec;
             this.outgoing = outgoing;

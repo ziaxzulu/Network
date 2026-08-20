@@ -33,7 +33,7 @@ import org.cloudburstmc.netty.channel.raknet.config.RakRecoveryMode;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
-import org.cloudburstmc.netty.util.FastBinaryMinHeap;
+import org.cloudburstmc.netty.util.FastWeightedFairQueue;
 import org.cloudburstmc.netty.util.IntRange;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -357,11 +357,11 @@ public class RakSessionCodecReliabilityBoundaryTests {
         set(codec, "incomingNaks", incomingNaks);
         set(codec, "outgoingAcks", new ArrayDeque<>());
         set(codec, "outgoingNaks", new ArrayDeque<>());
-        set(codec, "outgoingPackets", new FastBinaryMinHeap<EncapsulatedPacket>(8));
+        set(codec, "outgoingPackets", new FastWeightedFairQueue<EncapsulatedPacket>(RakPriority.values().length));
         set(codec, "outgoingPacketNextWeights", new long[4]);
         set(codec, "orderWriteIndex", new int[16]);
         set(codec, "state", RakState.CONNECTED);
-        invoke(codec, "initHeapWeights");
+        invoke(codec, "initOutgoingPacketWeights");
         return new Harness(codec, window, sent, incomingAcks, incomingNaks, embeddedChannel, context, clock,
                 pendingOutboundBytes);
     }

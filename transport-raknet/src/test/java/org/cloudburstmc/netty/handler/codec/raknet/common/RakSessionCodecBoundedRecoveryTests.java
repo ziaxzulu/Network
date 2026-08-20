@@ -38,7 +38,7 @@ import org.cloudburstmc.netty.channel.raknet.config.RakRecoveryMode;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage;
-import org.cloudburstmc.netty.util.FastBinaryMinHeap;
+import org.cloudburstmc.netty.util.FastWeightedFairQueue;
 import org.cloudburstmc.netty.util.IntRange;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -1007,13 +1007,13 @@ public class RakSessionCodecBoundedRecoveryTests {
         set(codec, "outgoingNaks", new ArrayDeque<>());
         set(codec, "datagramWriteIndex", 3);
         set(codec, "datagramSendOrdinal", 3L);
-        set(codec, "outgoingPackets", new FastBinaryMinHeap<EncapsulatedPacket>(8));
+        set(codec, "outgoingPackets", new FastWeightedFairQueue<EncapsulatedPacket>(RakPriority.values().length));
         set(codec, "outgoingPacketNextWeights", new long[4]);
         set(codec, "orderWriteIndex", new int[16]);
         set(codec, "state", RakState.CONNECTED);
-        Method initHeapWeights = RakSessionCodec.class.getDeclaredMethod("initHeapWeights");
-        initHeapWeights.setAccessible(true);
-        initHeapWeights.invoke(codec);
+        Method initWeights = RakSessionCodec.class.getDeclaredMethod("initOutgoingPacketWeights");
+        initWeights.setAccessible(true);
+        initWeights.invoke(codec);
 
         return new Harness(codec, window, recovery, sent, pending, embeddedChannel, embeddedContext);
     }

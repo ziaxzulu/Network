@@ -82,7 +82,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private RoundRobinArray<SplitPacketHelper> splitPackets;
     private BitQueue reliableDatagramQueue;
 
-    private FastBinaryMinHeap<EncapsulatedPacket> outgoingPackets;
+    private FastWeightedFairQueue<EncapsulatedPacket> outgoingPackets;
     private long[] outgoingPacketNextWeights;
     private FastBinaryMinHeap<EncapsulatedPacket>[] orderingHeaps;
     private long currentPingTime = -1;
@@ -124,8 +124,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 ? new RakBoundedRecovery(this.clock) : null;
         this.recoveryMetrics.initialize(this.getMetrics(), this.slidingWindow, this.currentTimeMillis());
 
-        this.outgoingPacketNextWeights = new long[4];
-        this.initHeapWeights();
+        this.outgoingPacketNextWeights = new long[RakPriority.values().length];
+        this.initOutgoingPacketWeights();
 
         int maxChannels = this.channel.config().getOption(RakChannelOption.RAK_ORDERING_CHANNELS);
         this.orderReadIndex = new int[maxChannels];
@@ -137,7 +137,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             orderingHeaps[i] = new FastBinaryMinHeap<>(64);
         }
 
-        this.outgoingPackets = new FastBinaryMinHeap<>(8);
+        this.outgoingPackets = new FastWeightedFairQueue<>(RakPriority.values().length);
         this.sentDatagrams = new IntObjectHashMap<>();
         if (this.recoveryMode.usesModelBasedCongestionControl()) {
             this.modelDatagramSamples = new IntObjectHashMap<>();
@@ -274,7 +274,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             }
         }
 
-        FastBinaryMinHeap<EncapsulatedPacket> outgoingPackets = this.outgoingPackets;
+        FastWeightedFairQueue<EncapsulatedPacket> outgoingPackets = this.outgoingPackets;
         this.outgoingPackets = null;
         if (outgoingPackets != null) {
             EncapsulatedPacket packet;
@@ -290,8 +290,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
     }
 
-    private void initHeapWeights() {
-        for (int priorityLevel = 0; priorityLevel < 4; priorityLevel++) {
+    private void initOutgoingPacketWeights() {
+        for (int priorityLevel = 0; priorityLevel < this.outgoingPacketNextWeights.length; priorityLevel++) {
             this.outgoingPacketNextWeights[priorityLevel] = (1 << priorityLevel) * priorityLevel + priorityLevel;
         }
     }
@@ -1286,7 +1286,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             this.outgoingPacketNextWeights[priorityLevel] = next
                     + (1L << priorityLevel) * (priorityLevel + 1) + priorityLevel;
         } else {
-            this.initHeapWeights();
+            this.initOutgoingPacketWeights();
         }
         return next;
     }
