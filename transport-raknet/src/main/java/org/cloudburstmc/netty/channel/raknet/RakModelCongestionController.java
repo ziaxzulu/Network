@@ -40,8 +40,8 @@ final class RakModelCongestionController {
     private static final double LOSS_BETA = 0.70D;
     private static final int MAX_BURST_DATAGRAMS = 8;
     private static final long MINIMUM_RTT_WINDOW_MILLIS = 10_000L;
-    private static final double PATH_STEP_MULTIPLIER = 4.0D;
-    private static final long PATH_STEP_ABSOLUTE_DELTA_MILLIS = 50L;
+    private static final double PATH_STEP_MULTIPLIER = 2.5D;
+    private static final long PATH_STEP_ABSOLUTE_DELTA_MILLIS = 8L;
     private static final int PATH_SUSPICION_CONFIRMATION_SAMPLES = 2;
     private static final int PATH_STEP_CONFIRMATION_SAMPLES = 2;
     private static final double PATH_STEP_STABILITY_MULTIPLIER = 1.25D;
@@ -609,7 +609,8 @@ final class RakModelCongestionController {
             return;
         }
 
-        long pathStepThreshold = Math.max((long) Math.ceil(this.minimumRttMillis * PATH_STEP_MULTIPLIER),
+        long pathStepThreshold = Math.max(
+                (long) Math.ceil(this.minimumRttMillis * PATH_STEP_MULTIPLIER),
                 this.minimumRttMillis + PATH_STEP_ABSOLUTE_DELTA_MILLIS);
         if (rttSampleMillis < pathStepThreshold) {
             if (probing) {

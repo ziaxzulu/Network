@@ -574,6 +574,20 @@ public class RakSlidingWindowModelTests {
                                                  long measurementEndMillis,
                                                  int payloadBytes,
                                                  LossPattern lossPattern) {
+        return simulateLoss(cleanHandshake, firstLossPacket, firstLossIsAck, measurementStartMillis,
+                measurementEndMillis, payloadBytes, 5L, 625D,
+                (sentDatagrams, sendAt) -> 200L, lossPattern);
+    }
+
+    private static SimulationResult simulateLoss(boolean cleanHandshake,
+                                                 int firstLossPacket, boolean firstLossIsAck,
+                                                 long measurementStartMillis,
+                                                 long measurementEndMillis,
+                                                 int payloadBytes,
+                                                 long handshakeRttMillis,
+                                                 double capacityBytesPerMillis,
+                                                 PathRttPattern pathRttPattern,
+                                                 LossPattern lossPattern) {
         RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
         PriorityQueue<Delivery> deliveries = new PriorityQueue<>(deliveryOrder());
         Queue<RakDatagramPacket> pendingRetries = new ArrayDeque<>();
@@ -585,8 +599,9 @@ public class RakSlidingWindowModelTests {
         int retransmissions = 0;
         int maxPendingRetries = 0;
         int maxBytesSentInTick = 0;
-        final int propagationRttMillis = 200;
-        final double capacityBytesPerMillis = 625D;
+        long pathRebasedAtMillis = -1L;
+        long minimumCwndSinceMillis = -1L;
+        long maximumMinimumCwndDurationMillis = 0L;
         final long offeredBytesPerSecond = 625_000L;
         long nextLinkAvailable = 0L;
 
@@ -597,12 +612,12 @@ public class RakSlidingWindowModelTests {
                 handshake.setSendOrdinal(sendOrdinal++);
                 handshake.setSendTime(0L);
                 window.onReliableSend(handshake, true);
-                window.onAck(5L, handshake, sendOrdinal);
+                window.onAck(handshakeRttMillis, handshake, sendOrdinal);
                 handshake.release();
-                Assertions.assertEquals(5L, window.getModelMinimumRttMillis());
+                Assertions.assertEquals(handshakeRttMillis, window.getModelMinimumRttMillis());
             }
             long simulationStart = cleanHandshake ? 10L : 0L;
-            for (long now = simulationStart; now <= measurementEndMillis + propagationRttMillis + 500L; now++) {
+            for (long now = simulationStart; now <= measurementEndMillis + 1_000L; now++) {
                 while (!deliveries.isEmpty() && deliveries.peek().at <= now) {
                     Delivery delivery = deliveries.poll();
                     if (delivery.deliversPayload && receiverDelivered.add(delivery.datagram.getSequenceIndex())
@@ -619,6 +634,21 @@ public class RakSlidingWindowModelTests {
                         window.onAck(now, delivery.datagram, sendOrdinal);
                         releaseIfNeeded(delivery.datagram);
                     }
+                }
+
+                if (cleanHandshake && pathRebasedAtMillis < 0L
+                        && window.getModelMinimumRttMillis() >= 20L) {
+                    pathRebasedAtMillis = now;
+                }
+                if (!window.isModelPersistentCongestion()
+                        && window.getCongestionWindow() <= 2D * MTU) {
+                    if (minimumCwndSinceMillis < 0L) {
+                        minimumCwndSinceMillis = now;
+                    }
+                    maximumMinimumCwndDurationMillis = Math.max(maximumMinimumCwndDurationMillis,
+                            now - minimumCwndSinceMillis + 1L);
+                } else {
+                    minimumCwndSinceMillis = -1L;
                 }
 
                 if (now >= measurementEndMillis) {
@@ -648,7 +678,8 @@ public class RakSlidingWindowModelTests {
                                 (long) Math.ceil(datagram.getSize() / capacityBytesPerMillis));
                         nextLinkAvailable = serviceStart + serializationMillis;
                         scheduleDelivery(deliveries, window, now,
-                                nextLinkAvailable + propagationRttMillis, datagram, lost, ackLost);
+                                nextLinkAvailable + pathRttPattern.rttMillis(sentDatagrams, now),
+                                datagram, lost, ackLost);
                         retriesThisFlush++;
                     }
                 }
@@ -683,7 +714,8 @@ public class RakSlidingWindowModelTests {
                             (long) Math.ceil(datagram.getSize() / capacityBytesPerMillis));
                     nextLinkAvailable = serviceStart + serializationMillis;
                     scheduleDelivery(deliveries, window, now,
-                            nextLinkAvailable + propagationRttMillis, datagram, lost, ackLost);
+                            nextLinkAvailable + pathRttPattern.rttMillis(sentDatagrams, now),
+                            datagram, lost, ackLost);
                 }
                 maxBytesSentInTick = Math.max(maxBytesSentInTick, bytesSentInTick);
             }
@@ -695,7 +727,8 @@ public class RakSlidingWindowModelTests {
                     window.getModelMinimumRttMillis(), window.getModelLossResponseCount(),
                     window.getModelHardLossResponseCount(), window.getModelDelayLossResponseCount(),
                     window.getModelBandwidthBytesPerMillis(), window.getModelPacingRateBytesPerMillis(),
-                    window.getModelInflightLimit(), window.isModelLossResponseHeld());
+                    window.getModelInflightLimit(), window.isModelLossResponseHeld(),
+                    pathRebasedAtMillis, maximumMinimumCwndDurationMillis);
         } finally {
             while (!deliveries.isEmpty()) {
                 releaseIfNeeded(deliveries.poll().datagram);
@@ -704,6 +737,49 @@ public class RakSlidingWindowModelTests {
                 releaseIfNeeded(pendingRetries.poll());
             }
             window.close();
+        }
+    }
+
+    @Test
+    public void shallowPostHandshakePathStepSustainsSeededLossAcrossPhases() {
+        for (long handshakeRttMillis : new long[]{5L, 11L}) {
+            double sum = 0D;
+            double sumSquares = 0D;
+            for (int phase = 0; phase < 16; phase++) {
+                int lossPhase = phase;
+                SimulationResult result = simulateLoss(true, -1, false, 4_000L, 8_000L,
+                        1_000, handshakeRttMillis, 2_000D,
+                        (sentDatagrams, sendAt) -> handshakeRttMillis + 16L
+                                + Math.floorMod(sentDatagrams * 17 + lossPhase, 9),
+                        (sentDatagrams, sendAt) -> Math.floorMod(sentDatagrams + lossPhase, 50) == 0);
+                long minimumExpectedRtt = handshakeRttMillis + 16L;
+                long maximumExpectedRtt = handshakeRttMillis + 24L;
+                Assertions.assertTrue(result.finalMinimumRttMillis >= minimumExpectedRtt
+                                && result.finalMinimumRttMillis <= maximumExpectedRtt,
+                        () -> "phase " + lossPhase + " retained the " + handshakeRttMillis
+                                + " ms handshake minimum: " + result.finalMinimumRttMillis + " ms");
+                Assertions.assertTrue(result.pathRebasedAtMillis >= 0L && result.pathRebasedAtMillis <= 3_000L,
+                        () -> "phase " + lossPhase + " did not rebase the " + handshakeRttMillis
+                                + " ms shallow path within three seconds: " + result.pathRebasedAtMillis);
+                Assertions.assertTrue(result.measuredMbps >= 3.5D,
+                        () -> "phase " + lossPhase + " collapsed after the " + handshakeRttMillis
+                                + " ms shallow path step: " + result.measuredMbps
+                                + " Mbps, cwnd=" + result.finalCwnd);
+                Assertions.assertTrue(result.finalCwnd >= 8D * MTU,
+                        () -> "phase " + lossPhase + " finished below eight MTUs: " + result.finalCwnd);
+                Assertions.assertTrue(result.maximumMinimumCwndDurationMillis <= 1_000L,
+                        () -> "phase " + lossPhase + " stayed at the two-MTU floor for "
+                                + result.maximumMinimumCwndDurationMillis + " ms");
+                Assertions.assertTrue(result.lossResponses <= 1L);
+                Assertions.assertTrue(result.maxPendingRetries < 100);
+                Assertions.assertTrue(result.maxBytesSentInTick <= 8 * MTU);
+                sum += result.measuredMbps;
+                sumSquares += result.measuredMbps * result.measuredMbps;
+            }
+            double fairness = sum * sum / (16D * sumSquares);
+            Assertions.assertTrue(fairness >= 0.99D,
+                    () -> "loss phase created " + handshakeRttMillis
+                            + " ms shallow-path divergence: " + fairness);
         }
     }
 
@@ -1071,17 +1147,22 @@ public class RakSlidingWindowModelTests {
         double learnedCwnd = controller.getCongestionWindow();
 
         for (int round = 0; round < 12; round++) {
-            now = completeModelRound(controller, now, 125, 6, 5L, 10D);
+            now = completeModelRound(controller, now, 125, 6, 11L, 11D);
         }
         // Close the last flight's evidence without introducing a clear bucket.
-        completeModelRound(controller, now, 125, 6, 5L, 10D);
+        completeModelRound(controller, now, 125, 6, 11L, 11D);
 
         Assertions.assertEquals(1L, controller.getLossResponseCount(),
                 "one continuing delay-qualified epoch must cause exactly one response");
         Assertions.assertEquals(0L, controller.getHardLossResponseCount());
         Assertions.assertEquals(1L, controller.getDelayLossResponseCount());
         Assertions.assertTrue(controller.isLossResponseHeld());
-        Assertions.assertTrue(controller.getCongestionWindow() < learnedCwnd);
+        Assertions.assertTrue(controller.getCongestionWindow() <= learnedCwnd * 0.75D,
+                "genuine delay-qualified loss must still make an immediate material reduction");
+        Assertions.assertTrue(Double.isFinite(controller.getInflightLimit()),
+                "the continuing delay-loss episode must retain its finite cap");
+        Assertions.assertEquals(5L, controller.getMinimumRttMillis(),
+                "moderate raw queue delay below the path-step envelope remains congestion evidence");
     }
 
     @Test
@@ -1391,6 +1472,54 @@ public class RakSlidingWindowModelTests {
         return timeoutAt;
     }
 
+    private static long acceptStablePathStep(RakModelCongestionController controller, long now,
+                                             long pathRttMillis) {
+        now = completeModelRound(controller, now, 1, 0, pathRttMillis, pathRttMillis);
+        now = completeModelRound(controller, now, 1, 0, pathRttMillis, pathRttMillis);
+        now = completeModelRound(controller, now, 1, 0, pathRttMillis, pathRttMillis);
+        now += Math.max(50L, pathRttMillis);
+        now = completeModelRound(controller, now, 1, 0, pathRttMillis, pathRttMillis);
+        now = completeModelRound(controller, now, 1, 0, pathRttMillis, pathRttMillis);
+        Assertions.assertEquals(pathRttMillis, controller.getMinimumRttMillis(),
+                "the fixture must accept the stable drained path step");
+        return now;
+    }
+
+    @Test
+    public void returningAcrossShallowPathBoundaryResetsDelayLossAndClearProvenance() {
+        RakModelCongestionController partialLoss = learnedController(5L);
+        long now = acceptStablePathStep(partialLoss, 1_001L, 25L);
+        for (int round = 0; round < 8; round++) {
+            now = completeModelRound(partialLoss, now, 125, 0, 25L, 25D);
+        }
+        Assertions.assertFalse(partialLoss.isStartup());
+        now = recordMixedModelRound(partialLoss, now, 123, 512, 4, 512, 25L, 40D);
+        now = completeModelRound(partialLoss, now, 1, 0, 5L, 5D);
+        Assertions.assertEquals(5L, partialLoss.getMinimumRttMillis());
+        now = recordMixedModelRound(partialLoss, now, 122, 512, 4, 512, 5L, 10D);
+        completeModelRound(partialLoss, now, 1, 0, 5L, 10D);
+        Assertions.assertEquals(0L, partialLoss.getDelayLossResponseCount(),
+                "partial delay-loss evidence cannot combine across a 5-to-25-to-5 ms path boundary");
+
+        RakModelCongestionController partialClear = learnedController(5L);
+        now = acceptStablePathStep(partialClear, 1_001L, 25L);
+        for (int round = 0; round < 8; round++) {
+            now = completeModelRound(partialClear, now, 125, 0, 25L, 25D);
+        }
+        Assertions.assertFalse(partialClear.isStartup());
+        for (int round = 0; round < 3; round++) {
+            now = completeModelRound(partialClear, now, 125, 6, 25L, 40D);
+        }
+        Assertions.assertTrue(partialClear.isLossResponseHeld());
+        now = completeModelRound(partialClear, now, 255, 0, 25L, 25D);
+        now = completeModelRound(partialClear, now, 1, 0, 5L, 5D);
+        Assertions.assertEquals(5L, partialClear.getMinimumRttMillis());
+        now = completeModelRound(partialClear, now, 256, 0, 5L, 5D);
+        completeModelRound(partialClear, now, 1, 0, 5L, 5D);
+        Assertions.assertTrue(partialClear.isLossResponseHeld(),
+                "255 old-path clean packets cannot combine with 257 new-path packets to release DELAY hold");
+    }
+
     private static long completeModelRound(RakModelCongestionController controller, long sendAt, int packets,
                                            int lostPackets, long rttMillis, double smoothedRttMillis) {
         return completeModelRound(controller, sendAt, packets, lostPackets, rttMillis, smoothedRttMillis, 1_000);
@@ -1444,6 +1573,35 @@ public class RakSlidingWindowModelTests {
             acknowledgeOne(window, packets, 6, 2_500L, 2_505L);
             Assertions.assertEquals(5L, window.getModelMinimumRttMillis(),
                     "path recovery is accepted immediately when lower-delay evidence returns");
+        } finally {
+            for (RakDatagramPacket datagram : packets) {
+                releaseIfNeeded(datagram);
+            }
+            window.close();
+        }
+    }
+
+    @Test
+    public void shallowPostHandshakePathStepRequiresDrainedStableEvidence() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        List<RakDatagramPacket> packets = new ArrayList<>();
+        try {
+            acknowledgeOne(window, packets, 0, 0L, 5L);
+            Assertions.assertEquals(5L, window.getModelMinimumRttMillis());
+
+            acknowledgeOne(window, packets, 1, 100L, 125L);
+            acknowledgeOne(window, packets, 2, 140L, 165L);
+            Assertions.assertEquals(5L, window.getModelMinimumRttMillis(),
+                    "busy-path suspicion alone cannot replace the handshake minimum");
+
+            // The first drained ACK starts the hold. Two later original flights, sent after that hold and from
+            // distinct delivery snapshots, are required to accept the new propagation path.
+            acknowledgeOne(window, packets, 3, 180L, 205L);
+            acknowledgeOne(window, packets, 4, 270L, 295L);
+            Assertions.assertEquals(5L, window.getModelMinimumRttMillis());
+            acknowledgeOne(window, packets, 5, 310L, 335L);
+            Assertions.assertEquals(25L, window.getModelMinimumRttMillis(),
+                    "a stable 5-to-25 ms post-connect step must not retain the shallow handshake minimum");
         } finally {
             for (RakDatagramPacket datagram : packets) {
                 releaseIfNeeded(datagram);
@@ -1740,7 +1898,7 @@ public class RakSlidingWindowModelTests {
                 window.onReliableSend(datagram);
             }
             for (int i = 1; i <= 10; i++) {
-                window.onAck(1_200L, packets.get(i), i + 1L);
+                window.onAck(1_025L, packets.get(i), i + 1L);
             }
 
             for (int i = 11; i <= 20; i++) {
@@ -1752,11 +1910,11 @@ public class RakSlidingWindowModelTests {
                 window.onReliableSend(datagram);
             }
             for (int i = 11; i <= 20; i++) {
-                window.onAck(1_700L, packets.get(i), i + 1L);
+                window.onAck(1_525L, packets.get(i), i + 1L);
             }
 
             Assertions.assertEquals(5L, window.getModelMinimumRttMillis(),
-                    "early packets in a later full flight are not evidence of a drained path");
+                    "stable 25 ms delay from full flights is queue evidence, not a drained path step");
         } finally {
             for (RakDatagramPacket datagram : packets) {
                 releaseIfNeeded(datagram);
@@ -2016,6 +2174,11 @@ public class RakSlidingWindowModelTests {
         boolean isLost(int sentDatagrams, long sendAtMillis);
     }
 
+    @FunctionalInterface
+    private interface PathRttPattern {
+        long rttMillis(int sentDatagrams, long sendAtMillis);
+    }
+
     private static final class MixedDelivery {
         private final long at;
         private final RakDatagramPacket datagram;
@@ -2055,6 +2218,8 @@ public class RakSlidingWindowModelTests {
         private final double finalPacingBytesPerMillis;
         private final double finalInflightLimit;
         private final boolean lossResponseHeld;
+        private final long pathRebasedAtMillis;
+        private final long maximumMinimumCwndDurationMillis;
 
         private SimulationResult(double measuredMbps, double finalCwnd, int maxBytesSentInTick, long rounds,
                                  int retransmissions, int maxPendingRetries) {
@@ -2088,6 +2253,18 @@ public class RakSlidingWindowModelTests {
                                  long lossResponses, long hardLossResponses, long delayLossResponses,
                                  double finalBandwidthBytesPerMillis, double finalPacingBytesPerMillis,
                                  double finalInflightLimit, boolean lossResponseHeld) {
+            this(measuredMbps, finalCwnd, maxBytesSentInTick, rounds, retransmissions, maxPendingRetries,
+                    finalMinimumRttMillis, lossResponses, hardLossResponses, delayLossResponses,
+                    finalBandwidthBytesPerMillis, finalPacingBytesPerMillis, finalInflightLimit,
+                    lossResponseHeld, -1L, 0L);
+        }
+
+        private SimulationResult(double measuredMbps, double finalCwnd, int maxBytesSentInTick, long rounds,
+                                 int retransmissions, int maxPendingRetries, long finalMinimumRttMillis,
+                                 long lossResponses, long hardLossResponses, long delayLossResponses,
+                                 double finalBandwidthBytesPerMillis, double finalPacingBytesPerMillis,
+                                 double finalInflightLimit, boolean lossResponseHeld,
+                                 long pathRebasedAtMillis, long maximumMinimumCwndDurationMillis) {
             this.measuredMbps = measuredMbps;
             this.finalCwnd = finalCwnd;
             this.maxBytesSentInTick = maxBytesSentInTick;
@@ -2102,6 +2279,8 @@ public class RakSlidingWindowModelTests {
             this.finalPacingBytesPerMillis = finalPacingBytesPerMillis;
             this.finalInflightLimit = finalInflightLimit;
             this.lossResponseHeld = lossResponseHeld;
+            this.pathRebasedAtMillis = pathRebasedAtMillis;
+            this.maximumMinimumCwndDurationMillis = maximumMinimumCwndDurationMillis;
         }
     }
 

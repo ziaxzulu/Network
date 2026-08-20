@@ -392,9 +392,14 @@ accepting that queued RTT would inflate both BDP and the allowed queue. The
 prototype therefore applies narrower guardrails:
 
 - an aged minRTT can refresh normally only from flight at or below two MTUs;
-- an apparent upward step must meet the greater of four times the old minRTT
-  and the old minRTT plus 50 ms, and needs two stable observations from
+- an apparent upward step must meet the greater of 2.5 times the old minRTT
+  and the old minRTT plus 8 ms. This admits shallow post-connect path changes
+  without treating ordinary variation around an established high-RTT path as
+  a transition. It still needs two stable observations from
   distinct delivery progress and observation times;
+- the same 2.5-times/8-ms envelope marks a material downward path boundary for
+  invalidating path-scoped DELAY loss and clear evidence. Any eligible lower
+  original RTT may still improve minRTT immediately;
 - the sender then saves its useful pre-probe window and delivered boundary and
   drains to the two-MTU floor. A candidate must be an original, Karn-safe
   attempt sent after that boundary and after
