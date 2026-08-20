@@ -392,14 +392,22 @@ accepting that queued RTT would inflate both BDP and the allowed queue. The
 prototype therefore applies narrower guardrails:
 
 - an aged minRTT can refresh normally only from flight at or below two MTUs;
-- an apparent upward step must meet the greater of 2.5 times the old minRTT
-  and the old minRTT plus 8 ms. This admits shallow post-connect path changes
-  without treating ordinary variation around an established high-RTT path as
-  a transition. It still needs two stable observations from
-  distinct delivery progress and observation times;
-- the same 2.5-times/8-ms envelope marks a material downward path boundary for
-  invalidating path-scoped DELAY loss and clear evidence. Any eligible lower
-  original RTT may still improve minRTT immediately;
+- under load, an apparent upward step must meet the greater of 2.5 times the
+  old minRTT and the old minRTT plus 8 ms. When the sending sample was
+  app-limited and both the send-time and ACK-time flight snapshots are already
+  at or below two MTUs, the sender may instead enter validation at the greater
+  of 1.5 times minRTT and minRTT plus 4 ms. Every later observation in that
+  attempt must remain app-limited. The classification requires the session's
+  original and recovery queues and the child-to-parent handoff to be empty.
+  This lower envelope handles a route change
+  observed by the idle probe stream; a backlogged sender at the two-MTU floor
+  cannot use it. Both paths still need distinct delivery progress and
+  observation times. Low-flight candidate spread is bounded by the greater of
+  1.25 times its minimum and its minimum plus 4 ms, so low-millisecond jitter
+  is tolerated without scaling the extra allowance at high RTT;
+- the envelope that accepted the current minimum also marks a material downward
+  path boundary for invalidating path-scoped DELAY loss and clear evidence.
+  Any eligible lower original RTT may still improve minRTT immediately;
 - the sender then saves its useful pre-probe window and delivered boundary and
   drains to the two-MTU floor. A candidate must be an original, Karn-safe
   attempt sent after that boundary and after

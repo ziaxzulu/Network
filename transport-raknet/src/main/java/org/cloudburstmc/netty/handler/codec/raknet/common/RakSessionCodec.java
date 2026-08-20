@@ -1127,8 +1127,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 reliable = true;
                 datagram.setNextSend(time + this.slidingWindow.getRtoForRetransmission());
                 if (oldIndex == -1) {
-                    this.slidingWindow.onReliableSend(datagram,
-                            this.outgoingPackets.isEmpty() && this.pendingRetransmissions.isEmpty());
+                    this.slidingWindow.onReliableSend(datagram, this.isModelAppLimited());
                 }
                 sent.put(datagram.getSequenceIndex(), datagram.retain()); // Keep for resending
                 if (oldIndex == -1 && this.boundedRecovery != null) {
@@ -1139,8 +1138,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
         if (!reliable) {
             unreliableSample = this.slidingWindow.onUnreliableSendTracked(
-                    datagram.getSize(), time,
-                    this.outgoingPackets.isEmpty() && this.pendingRetransmissions.isEmpty());
+                    datagram.getSize(), time, this.isModelAppLimited());
             if (unreliableSample != null) {
                 this.modelDatagramSamples.put(datagram.getSequenceIndex(), unreliableSample);
                 long expiresAt = time + Math.max(1_000L, this.slidingWindow.getRtoForRetransmission());
@@ -1185,6 +1183,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             }
             throw throwable;
         }
+    }
+
+    private boolean isModelAppLimited() {
+        return this.outgoingPackets.isEmpty() && this.pendingRetransmissions.isEmpty()
+                && this.channel.pendingRakNetOutboundBytes() == 0;
     }
 
     private ChannelHandlerContext ctx() {

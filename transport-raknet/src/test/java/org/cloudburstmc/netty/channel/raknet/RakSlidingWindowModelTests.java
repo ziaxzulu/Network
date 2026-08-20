@@ -1485,6 +1485,19 @@ public class RakSlidingWindowModelTests {
         return now;
     }
 
+    private static long acceptStableIdlePathStep(RakModelCongestionController controller, long now,
+                                                 long pathRttMillis) {
+        now = completeAppLimitedModelRound(controller, now, pathRttMillis);
+        now = completeAppLimitedModelRound(controller, now, pathRttMillis);
+        now = completeAppLimitedModelRound(controller, now, pathRttMillis);
+        now += Math.max(50L, pathRttMillis);
+        now = completeAppLimitedModelRound(controller, now, pathRttMillis);
+        now = completeAppLimitedModelRound(controller, now, pathRttMillis);
+        Assertions.assertEquals(pathRttMillis, controller.getMinimumRttMillis(),
+                "the fixture must accept the stable app-limited path step");
+        return now;
+    }
+
     @Test
     public void returningAcrossShallowPathBoundaryResetsDelayLossAndClearProvenance() {
         RakModelCongestionController partialLoss = learnedController(5L);
@@ -1520,6 +1533,25 @@ public class RakSlidingWindowModelTests {
                 "255 old-path clean packets cannot combine with 257 new-path packets to release DELAY hold");
     }
 
+    @Test
+    public void returningAcrossIdleShallowPathBoundaryResetsDelayLossProvenance() {
+        RakModelCongestionController controller = learnedController(11L);
+        long now = acceptStableIdlePathStep(controller, 1_001L, 20L);
+        for (int round = 0; round < 8; round++) {
+            now = completeModelRound(controller, now, 125, 0, 20L, 20D);
+        }
+        Assertions.assertFalse(controller.isStartup());
+
+        now = recordMixedModelRound(controller, now, 123, 512, 4, 512, 20L, 35D);
+        now = completeModelRound(controller, now, 1, 0, 11L, 11D);
+        Assertions.assertEquals(11L, controller.getMinimumRttMillis());
+        now = recordMixedModelRound(controller, now, 122, 512, 4, 512, 11L, 20D);
+        completeModelRound(controller, now, 1, 0, 11L, 20D);
+
+        Assertions.assertEquals(0L, controller.getDelayLossResponseCount(),
+                "loss evidence cannot combine across a low-flight 11-to-20-to-11 ms path boundary");
+    }
+
     private static long completeModelRound(RakModelCongestionController controller, long sendAt, int packets,
                                            int lostPackets, long rttMillis, double smoothedRttMillis) {
         return completeModelRound(controller, sendAt, packets, lostPackets, rttMillis, smoothedRttMillis, 1_000);
@@ -1550,6 +1582,19 @@ public class RakSlidingWindowModelTests {
             datagram.release();
         }
         return ackAt + 1L;
+    }
+
+    private static long completeAppLimitedModelRound(RakModelCongestionController controller, long sendAt,
+                                                     long rttMillis) {
+        RakDatagramPacket datagram = datagram(1_000);
+        try {
+            datagram.setSendTime(sendAt);
+            controller.onPacketSent(datagram, sendAt, datagram.getSize(), true);
+            controller.onAcknowledged(datagram, sendAt + rttMillis, rttMillis, rttMillis, 0);
+            return sendAt + rttMillis + 1L;
+        } finally {
+            datagram.release();
+        }
     }
 
     @Test
@@ -1602,6 +1647,141 @@ public class RakSlidingWindowModelTests {
             acknowledgeOne(window, packets, 5, 310L, 335L);
             Assertions.assertEquals(25L, window.getModelMinimumRttMillis(),
                     "a stable 5-to-25 ms post-connect step must not retain the shallow handshake minimum");
+        } finally {
+            for (RakDatagramPacket datagram : packets) {
+                releaseIfNeeded(datagram);
+            }
+            window.close();
+        }
+    }
+
+    @Test
+    public void idleOneWayTenMillisecondPathStepReplacesElevatedHandshakeMinimum() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        List<RakDatagramPacket> packets = new ArrayList<>();
+        try {
+            acknowledgeOne(window, packets, 0, 0L, 11L);
+            Assertions.assertEquals(11L, window.getModelMinimumRttMillis());
+
+            // This is the production netns shape: the route changes while only the low-rate probe stream is
+            // active, adding about ten milliseconds one way with two milliseconds of jitter. The 19-22 ms
+            // samples are a real propagation step but remain below the busy-path 2.5x threshold from 11 ms.
+            acknowledgeUnreliable(window, 100L, 119L);
+            acknowledgeUnreliable(window, 220L, 241L);
+            acknowledgeUnreliable(window, 340L, 360L);
+            acknowledgeUnreliable(window, 460L, 482L);
+            acknowledgeUnreliable(window, 580L, 600L);
+
+            Assertions.assertTrue(window.getModelMinimumRttMillis() >= 19L
+                            && window.getModelMinimumRttMillis() <= 22L,
+                    "stable low-flight samples must replace the pre-route-change handshake minimum");
+        } finally {
+            for (RakDatagramPacket datagram : packets) {
+                releaseIfNeeded(datagram);
+            }
+            window.close();
+        }
+    }
+
+    @Test
+    public void idleLowMillisecondPathStepToleratesAbsoluteNetemJitter() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        List<RakDatagramPacket> packets = new ArrayList<>();
+        try {
+            acknowledgeOne(window, packets, 0, 0L, 1L);
+
+            // Four milliseconds of peak-to-peak jitter is a large ratio at this baseline, but every sample is
+            // still low-flight and remains well above the old route. This exact 9-13 ms envelope occurred in the
+            // external 10ms/2ms netns profile and must not exhaust the validator at the stale 1 ms minimum.
+            acknowledgeUnreliable(window, 100L, 109L);
+            acknowledgeUnreliable(window, 220L, 233L);
+            acknowledgeUnreliable(window, 340L, 350L);
+            acknowledgeUnreliable(window, 460L, 472L);
+            acknowledgeUnreliable(window, 580L, 591L);
+
+            Assertions.assertTrue(window.getModelMinimumRttMillis() >= 9L
+                            && window.getModelMinimumRttMillis() <= 13L,
+                    "absolute low-millisecond jitter must not strand the pre-impairment minimum");
+        } finally {
+            for (RakDatagramPacket datagram : packets) {
+                releaseIfNeeded(datagram);
+            }
+            window.close();
+        }
+    }
+
+    @Test
+    public void backloggedTwoMtuSenderCannotUseIdlePathAdmission() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        List<RakDatagramPacket> packets = new ArrayList<>();
+        try {
+            acknowledgeOne(window, packets, 0, 0L, 11L);
+
+            // Every send is physically low-flight, but appLimited=false records that more work was queued behind
+            // it. Such a cwnd-limited sender must use the loaded-path threshold rather than treating its standing
+            // queue as the idle probe stream.
+            acknowledgeOne(window, packets, 1, 100L, 119L);
+            acknowledgeOne(window, packets, 2, 220L, 241L);
+            acknowledgeOne(window, packets, 3, 340L, 360L);
+            acknowledgeOne(window, packets, 4, 460L, 482L);
+            acknowledgeOne(window, packets, 5, 580L, 600L);
+
+            Assertions.assertEquals(11L, window.getModelMinimumRttMillis(),
+                    "backlogged low-flight traffic cannot enter the app-limited path envelope");
+        } finally {
+            for (RakDatagramPacket datagram : packets) {
+                releaseIfNeeded(datagram);
+            }
+            window.close();
+        }
+    }
+
+    @Test
+    public void idleHighRttVariationCannotMasqueradeAsAStablePathStep() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        List<RakDatagramPacket> packets = new ArrayList<>();
+        try {
+            acknowledgeOne(window, packets, 0, 0L, 60L);
+
+            long sendAt = 200L;
+            for (int attempt = 0; attempt < 3; attempt++) {
+                acknowledgeUnreliable(window, sendAt, sendAt + 100L);
+                sendAt += 400L;
+                acknowledgeUnreliable(window, sendAt, sendAt + 149L);
+                sendAt += 500L;
+            }
+
+            Assertions.assertEquals(60L, window.getModelMinimumRttMillis(),
+                    "a 100-149 ms low-flight spread is not stable propagation evidence");
+        } finally {
+            for (RakDatagramPacket datagram : packets) {
+                releaseIfNeeded(datagram);
+            }
+            window.close();
+        }
+    }
+
+    @Test
+    public void busyOneWayTenMillisecondDelayCannotUseIdlePathAdmission() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        List<RakDatagramPacket> packets = new ArrayList<>();
+        try {
+            acknowledgeOne(window, packets, 0, 0L, 11L);
+
+            for (int i = 1; i <= 8; i++) {
+                RakDatagramPacket datagram = datagram(1_000);
+                packets.add(datagram);
+                datagram.setSequenceIndex(i);
+                datagram.setSendOrdinal(i);
+                datagram.setSendTime(100L);
+                window.onReliableSend(datagram);
+            }
+            for (int i = 1; i <= 8; i++) {
+                window.onAck(120L, packets.get(i), i + 1L);
+            }
+
+            Assertions.assertEquals(11L, window.getModelMinimumRttMillis(),
+                    "a full-flight queue delay must not enter the low-flight path-step path");
         } finally {
             for (RakDatagramPacket datagram : packets) {
                 releaseIfNeeded(datagram);
@@ -2114,6 +2294,11 @@ public class RakSlidingWindowModelTests {
         datagram.setSendTime(sendAt);
         window.onReliableSend(datagram);
         window.onAck(ackAt, datagram, index + 1L);
+    }
+
+    private static void acknowledgeUnreliable(RakSlidingWindow window, long sendAt, long ackAt) {
+        RakSlidingWindow.ModelDatagramSample sample = window.onUnreliableSendTracked(1_000, sendAt, true);
+        window.onUnreliableAck(sample, ackAt);
     }
 
     private static RakDatagramPacket datagram(int payloadBytes) {

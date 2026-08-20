@@ -42,6 +42,8 @@ final class RakModelCongestionController {
     private static final long MINIMUM_RTT_WINDOW_MILLIS = 10_000L;
     private static final double PATH_STEP_MULTIPLIER = 2.5D;
     private static final long PATH_STEP_ABSOLUTE_DELTA_MILLIS = 8L;
+    private static final double LOW_FLIGHT_PATH_STEP_MULTIPLIER = 1.5D;
+    private static final long LOW_FLIGHT_PATH_STEP_ABSOLUTE_DELTA_MILLIS = 4L;
     private static final int PATH_SUSPICION_CONFIRMATION_SAMPLES = 2;
     private static final int PATH_STEP_CONFIRMATION_SAMPLES = 2;
     private static final double PATH_STEP_STABILITY_MULTIPLIER = 1.25D;
@@ -140,6 +142,8 @@ final class RakModelCongestionController {
     private long pathStepDeliveredAtSend = -1L;
     private long pathStepObservedAtMillis = -1L;
     private int pathStepSamples;
+    private boolean pathProbeUsesLowFlightEnvelope;
+    private boolean minimumRttUsesLowFlightEnvelope;
 
     private double pacingTokens;
     private long pacingUpdatedAtMillis = -1L;
@@ -245,7 +249,7 @@ final class RakModelCongestionController {
 
         if (rttSampleMillis >= 0L) {
             this.updateMinimumRtt(nowMillis, Math.max(1L, rttSampleMillis), txInFlight,
-                    currentBytesInFlight, priorDelivered, modelSendTime);
+                    currentBytesInFlight, priorDelivered, modelSendTime, appLimited);
         }
         long ackElapsed = nowMillis - deliveredTimeAtSend;
         long sendElapsed = modelSendTime - packetFirstSendTime;
@@ -580,7 +584,8 @@ final class RakModelCongestionController {
     }
 
     private void updateMinimumRtt(long nowMillis, long rttSampleMillis, int txInFlight,
-                                  int currentBytesInFlight, long deliveredAtSend, long sendTimeMillis) {
+                                  int currentBytesInFlight, long deliveredAtSend, long sendTimeMillis,
+                                  boolean appLimited) {
         this.advancePathState(nowMillis);
         if (this.pathAttempts > 0 && deliveredAtSend <= this.pathProbeBoundaryDelivered) {
             // Keep the completed-attempt boundary through cooldown and retry. Otherwise an ACK that arrives at
@@ -589,19 +594,20 @@ final class RakModelCongestionController {
         }
         boolean probing = this.pathState == PathState.DRAIN || this.pathState == PathState.SAMPLE;
         boolean lowFlight = txInFlight <= this.minimumCwnd && currentBytesInFlight <= this.minimumCwnd;
+        boolean idleLowFlight = lowFlight && appLimited;
         boolean lowFlightRefresh = this.minimumRttTimestampMillis >= 0L
                 && nowMillis - this.minimumRttTimestampMillis >= MINIMUM_RTT_WINDOW_MILLIS
                 && lowFlight;
         if (this.minimumRttMillis == Long.MAX_VALUE || rttSampleMillis < this.minimumRttMillis) {
             boolean materialLowerPath = this.minimumRttMillis != Long.MAX_VALUE
-                    && this.minimumRttMillis >= Math.max(
-                    (long) Math.ceil(rttSampleMillis * PATH_STEP_MULTIPLIER),
-                    rttSampleMillis + PATH_STEP_ABSOLUTE_DELTA_MILLIS);
+                    && this.minimumRttMillis >= pathStepThreshold(rttSampleMillis,
+                    this.minimumRttUsesLowFlightEnvelope);
             if (probing) {
                 this.restorePathProbeWindow();
             }
             if (materialLowerPath) {
                 this.invalidateLossEvidenceForPathTransition();
+                this.minimumRttUsesLowFlightEnvelope = false;
             }
             this.minimumRttMillis = rttSampleMillis;
             this.minimumRttTimestampMillis = nowMillis;
@@ -609,9 +615,7 @@ final class RakModelCongestionController {
             return;
         }
 
-        long pathStepThreshold = Math.max(
-                (long) Math.ceil(this.minimumRttMillis * PATH_STEP_MULTIPLIER),
-                this.minimumRttMillis + PATH_STEP_ABSOLUTE_DELTA_MILLIS);
+        long pathStepThreshold = pathStepThreshold(this.minimumRttMillis, idleLowFlight);
         if (rttSampleMillis < pathStepThreshold) {
             if (probing) {
                 this.restorePathProbeWindow();
@@ -631,11 +635,11 @@ final class RakModelCongestionController {
             if (this.pathAttempts >= PATH_MAX_ATTEMPTS) {
                 return;
             }
-            this.beginPathSuspicion(nowMillis, rttSampleMillis, deliveredAtSend);
+            this.beginPathSuspicion(nowMillis, rttSampleMillis, deliveredAtSend, idleLowFlight);
             return;
         }
         if (this.pathState == PathState.SUSPECT) {
-            if (!this.observePathSuspicion(nowMillis, rttSampleMillis, deliveredAtSend)) {
+            if (!this.observePathSuspicion(nowMillis, rttSampleMillis, deliveredAtSend, idleLowFlight)) {
                 this.enterPathCooldown(nowMillis, rttSampleMillis, false);
                 return;
             }
@@ -646,12 +650,14 @@ final class RakModelCongestionController {
         }
 
         this.observePathCandidate(nowMillis, rttSampleMillis, txInFlight, currentBytesInFlight,
-                deliveredAtSend, sendTimeMillis);
+                deliveredAtSend, sendTimeMillis, appLimited);
     }
 
-    private void beginPathSuspicion(long nowMillis, long rttSampleMillis, long deliveredAtSend) {
+    private void beginPathSuspicion(long nowMillis, long rttSampleMillis, long deliveredAtSend,
+                                    boolean lowFlight) {
         this.invalidateLossEvidenceForPathTransition();
         this.pathState = PathState.SUSPECT;
+        this.pathProbeUsesLowFlightEnvelope = lowFlight;
         this.pathSuspicionMinimumRttMillis = rttSampleMillis;
         this.pathSuspicionMaximumRttMillis = rttSampleMillis;
         this.pathSuspicionDeliveredAtSend = deliveredAtSend;
@@ -661,12 +667,16 @@ final class RakModelCongestionController {
         this.pathProbeDeadlineMillis = saturatingAdd(nowMillis, pathProbeTimeoutMillis(rttSampleMillis));
     }
 
-    private boolean observePathSuspicion(long nowMillis, long rttSampleMillis, long deliveredAtSend) {
+    private boolean observePathSuspicion(long nowMillis, long rttSampleMillis, long deliveredAtSend,
+                                         boolean lowFlight) {
+        if (this.pathProbeUsesLowFlightEnvelope && !lowFlight) {
+            return false;
+        }
         long previousDeliveredAtSend = this.pathSuspicionDeliveredAtSend;
         long previousObservedAtMillis = this.pathSuspicionObservedAtMillis;
         long minimum = Math.min(this.pathSuspicionMinimumRttMillis, rttSampleMillis);
         long maximum = Math.max(this.pathSuspicionMaximumRttMillis, rttSampleMillis);
-        if (maximum > minimum * PATH_STEP_STABILITY_MULTIPLIER) {
+        if (!this.pathSamplesAreStable(minimum, maximum)) {
             return false;
         }
         if (deliveredAtSend <= previousDeliveredAtSend || nowMillis <= previousObservedAtMillis) {
@@ -698,8 +708,10 @@ final class RakModelCongestionController {
     }
 
     private void observePathCandidate(long nowMillis, long rttSampleMillis, int txInFlight,
-                                      int currentBytesInFlight, long deliveredAtSend, long sendTimeMillis) {
-        if (txInFlight > this.minimumCwnd || currentBytesInFlight > this.minimumCwnd) {
+                                      int currentBytesInFlight, long deliveredAtSend, long sendTimeMillis,
+                                      boolean appLimited) {
+        if (txInFlight > this.minimumCwnd || currentBytesInFlight > this.minimumCwnd
+                || (this.pathProbeUsesLowFlightEnvelope && !appLimited)) {
             this.pathLowFlightSinceMillis = -1L;
             if (this.pathState == PathState.SAMPLE) {
                 this.invalidateLossEvidenceForPathTransition();
@@ -734,8 +746,7 @@ final class RakModelCongestionController {
         this.pathStepDeliveredAtSend = deliveredAtSend;
         this.pathStepObservedAtMillis = nowMillis;
         this.pathStepSamples++;
-        if (this.pathStepMaximumRttMillis
-                > this.pathStepMinimumRttMillis * PATH_STEP_STABILITY_MULTIPLIER) {
+        if (!this.pathSamplesAreStable(this.pathStepMinimumRttMillis, this.pathStepMaximumRttMillis)) {
             this.failPathProbe(nowMillis);
             return;
         }
@@ -750,6 +761,7 @@ final class RakModelCongestionController {
         this.restorePathProbeWindow();
         this.minimumRttMillis = this.pathStepMinimumRttMillis;
         this.minimumRttTimestampMillis = nowMillis;
+        this.minimumRttUsesLowFlightEnvelope = this.pathProbeUsesLowFlightEnvelope;
         // The new propagation delay changes the BDP. Retain the bandwidth seed and any loss cap, but restart
         // full-bandwidth discovery so a clean-handshake sample cannot declare the impaired path full prematurely.
         this.startup = true;
@@ -767,6 +779,7 @@ final class RakModelCongestionController {
             if (this.pathState == PathState.SUSPECT) {
                 this.invalidateLossEvidenceForPathTransition();
                 this.pathState = PathState.STEADY;
+                this.pathProbeUsesLowFlightEnvelope = false;
                 this.resetPathSuspicion();
                 this.pathProbeDeadlineMillis = -1L;
             } else {
@@ -810,6 +823,22 @@ final class RakModelCongestionController {
         }
         this.resetPathSuspicion();
         this.resetPathStepCandidate();
+        this.pathProbeUsesLowFlightEnvelope = false;
+    }
+
+    private boolean pathSamplesAreStable(long minimum, long maximum) {
+        double upperBound = Math.ceil(minimum * PATH_STEP_STABILITY_MULTIPLIER);
+        if (this.pathProbeUsesLowFlightEnvelope) {
+            upperBound = Math.max(upperBound, minimum + LOW_FLIGHT_PATH_STEP_ABSOLUTE_DELTA_MILLIS);
+        }
+        return maximum <= upperBound;
+    }
+
+    private static long pathStepThreshold(long minimumRttMillis, boolean lowFlight) {
+        double multiplier = lowFlight ? LOW_FLIGHT_PATH_STEP_MULTIPLIER : PATH_STEP_MULTIPLIER;
+        long absoluteDelta = lowFlight
+                ? LOW_FLIGHT_PATH_STEP_ABSOLUTE_DELTA_MILLIS : PATH_STEP_ABSOLUTE_DELTA_MILLIS;
+        return Math.max((long) Math.ceil(minimumRttMillis * multiplier), minimumRttMillis + absoluteDelta);
     }
 
     private void resetPathSuspicion() {
@@ -841,6 +870,7 @@ final class RakModelCongestionController {
         this.pathDrainHoldMillis = 0L;
         this.pathPreProbeCwnd = 0D;
         this.pathAttempts = 0;
+        this.pathProbeUsesLowFlightEnvelope = false;
         this.resetPathSuspicion();
         this.resetPathStepCandidate();
     }

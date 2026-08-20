@@ -180,6 +180,41 @@ public class RakSessionCodecReliabilityBoundaryTests {
     }
 
     @Test
+    public void modelProbeIsNotAppLimitedWhileParentHandoffStillHasBacklog() throws Exception {
+        Harness harness = harness(RakRecoveryMode.MODEL_BASED);
+        try {
+            harness.pendingOutboundBytes.set(4_096L);
+            harness.enqueue(UNRELIABLE_PAYLOAD, RakReliability.UNRELIABLE, RakPriority.HIGH);
+            List<RakDatagramPacket> datagrams = harness.sendOriginals();
+            int sequenceIndex = datagrams.get(0).getSequenceIndex();
+
+            IntObjectMap<?> samples = (IntObjectMap<?>) get(harness.codec, "modelDatagramSamples");
+            Object sample = samples.get(sequenceIndex);
+            Object controllerState = get(sample, "controllerState");
+            Assertions.assertFalse((Boolean) get(controllerState, "appLimited"),
+                    "retained work in the child-to-parent handoff is part of model backlog");
+
+            harness.releaseOutbound(datagrams);
+            harness.pendingOutboundBytes.set(0L);
+            harness.clock.set(200L);
+            harness.ack(sequenceIndex);
+
+            harness.enqueue(UNRELIABLE_PAYLOAD + 1, RakReliability.UNRELIABLE, RakPriority.HIGH);
+            List<RakDatagramPacket> idleDatagrams = harness.sendOriginals();
+            int idleSequenceIndex = idleDatagrams.get(0).getSequenceIndex();
+            Object idleSample = samples.get(idleSequenceIndex);
+            Object idleControllerState = get(idleSample, "controllerState");
+            Assertions.assertTrue((Boolean) get(idleControllerState, "appLimited"),
+                    "an empty session and parent handoff remain app-limited");
+            harness.releaseOutbound(idleDatagrams);
+            harness.clock.set(400L);
+            harness.ack(idleSequenceIndex);
+        } finally {
+            harness.closeAndAssertPayloadsReleased();
+        }
+    }
+
+    @Test
     public void sequenceReuseRetiresOldUnreliableSampleBeforeReliableAccounting() throws Exception {
         Harness harness = harness(RakRecoveryMode.MODEL_BASED);
         try {
@@ -278,6 +313,7 @@ public class RakSessionCodecReliabilityBoundaryTests {
                     }
                     return defaultValue(method.getReturnType());
                 });
+        AtomicLong pendingOutboundBytes = new AtomicLong();
         RakChannel channel = (RakChannel) Proxy.newProxyInstance(
                 RakChannel.class.getClassLoader(), new Class<?>[]{RakChannel.class},
                 (proxy, method, args) -> {
@@ -292,6 +328,9 @@ public class RakSessionCodecReliabilityBoundaryTests {
                     }
                     if (method.getName().equals("remoteAddress") || method.getName().equals("localAddress")) {
                         return new InetSocketAddress("127.0.0.1", 19132);
+                    }
+                    if (method.getName().equals("pendingRakNetOutboundBytes")) {
+                        return (int) Math.min(Integer.MAX_VALUE, pendingOutboundBytes.get());
                     }
                     return defaultValue(method.getReturnType());
                 });
@@ -323,7 +362,8 @@ public class RakSessionCodecReliabilityBoundaryTests {
         set(codec, "orderWriteIndex", new int[16]);
         set(codec, "state", RakState.CONNECTED);
         invoke(codec, "initHeapWeights");
-        return new Harness(codec, window, sent, incomingAcks, incomingNaks, embeddedChannel, context, clock);
+        return new Harness(codec, window, sent, incomingAcks, incomingNaks, embeddedChannel, context, clock,
+                pendingOutboundBytes);
     }
 
     private static Object invoke(Object target, String name) throws Exception {
@@ -391,12 +431,13 @@ public class RakSessionCodecReliabilityBoundaryTests {
         private final EmbeddedChannel channel;
         private final ChannelHandlerContext context;
         private final AtomicLong clock;
+        private final AtomicLong pendingOutboundBytes;
         private final List<ByteBuf> payloads = new ArrayList<>();
         private boolean closed;
 
         private Harness(RakSessionCodec codec, RakSlidingWindow window, IntObjectMap<RakDatagramPacket> sent,
                         Queue<IntRange> incomingAcks, Queue<IntRange> incomingNaks, EmbeddedChannel channel,
-                        ChannelHandlerContext context, AtomicLong clock) {
+                        ChannelHandlerContext context, AtomicLong clock, AtomicLong pendingOutboundBytes) {
             this.codec = codec;
             this.window = window;
             this.sent = sent;
@@ -405,6 +446,7 @@ public class RakSessionCodecReliabilityBoundaryTests {
             this.channel = channel;
             this.context = context;
             this.clock = clock;
+            this.pendingOutboundBytes = pendingOutboundBytes;
         }
 
         private void enqueue(int id, RakReliability reliability, RakPriority priority) throws Exception {
