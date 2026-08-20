@@ -24,6 +24,7 @@ import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
+import io.netty.util.concurrent.ScheduledFuture;
 import org.cloudburstmc.netty.channel.raknet.RakChannel;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
@@ -53,12 +54,90 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Queue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.ID_DISCONNECTION_NOTIFICATION;
 
 public class RakSessionCodecBoundedRecoveryTests {
     private static final int MTU = 1_200;
+
+    @Test
+    public void queueTelemetryIncludesParentHandoffAndSaturatesSafely() {
+        Assertions.assertEquals(6_144, RakSessionCodec.totalQueuedBytes(4_096, 2_048));
+        Assertions.assertEquals(Integer.MAX_VALUE,
+                RakSessionCodec.totalQueuedBytes(Integer.MAX_VALUE, Integer.MAX_VALUE));
+        Assertions.assertEquals(4_096, RakSessionCodec.totalQueuedBytes(4_096, -1));
+    }
+
+    @Test
+    public void throwingTerminalMetricsCannotPreventSessionResourceRelease() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RakChannelMetrics throwingMetrics = new RakChannelMetrics() {
+            @Override
+            public void rakRecoveryState(long observedAtMillis, int bytesInFlight, double congestionWindow,
+                                         double slowStartThreshold, double smoothedRtt, double rttVariance,
+                                         long retransmissionTimeout, int retransmittedDatagramsInFlight,
+                                         long lastAckProgressAtMillis, long recoveryStartedAtMillis) {
+                throw new IllegalStateException("terminal metrics failure");
+            }
+        };
+        Harness harness = harness(clock, throwingMetrics, RakRecoveryMode.MODEL_BASED);
+        TestDatagram datagram = datagram(100, 0);
+        ScheduledFuture<?> tick = harness.channel.eventLoop().schedule(() -> { }, 1L, TimeUnit.DAYS);
+        try {
+            harness.add(datagram.packet);
+            set(harness.codec, "tickFuture", tick);
+
+            IllegalStateException failure = Assertions.assertThrows(IllegalStateException.class,
+                    harness.codec::closeAfterEventLoopTermination);
+            Assertions.assertEquals("terminal metrics failure", failure.getMessage());
+            harness.codecClosed = true;
+            Assertions.assertEquals(0, datagram.payload.refCnt());
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+            Assertions.assertEquals(0, harness.window.getUnackedBytes());
+            Assertions.assertNull(get(harness.codec, "sentDatagrams"));
+            Assertions.assertTrue(tick.isCancelled());
+            Assertions.assertNull(get(harness.codec, "tickFuture"));
+        } finally {
+            harness.close();
+            releaseIfNeeded(datagram.payload);
+        }
+    }
+
+    @Test
+    public void throwingTerminalStateCallbackCannotPreventSessionResourceRelease() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RakChannelMetrics throwingMetrics = new RakChannelMetrics() {
+            @Override
+            public void stateChange(RakState state) {
+                if (state == RakState.DISCONNECTED) {
+                    throw new IllegalStateException("terminal state failure");
+                }
+            }
+        };
+        Harness harness = harness(clock, throwingMetrics, RakRecoveryMode.MODEL_BASED);
+        TestDatagram datagram = datagram(100, 0);
+        ScheduledFuture<?> tick = harness.channel.eventLoop().schedule(() -> { }, 1L, TimeUnit.DAYS);
+        try {
+            harness.add(datagram.packet);
+            set(harness.codec, "tickFuture", tick);
+
+            IllegalStateException failure = Assertions.assertThrows(IllegalStateException.class,
+                    harness.codec::closeAfterEventLoopTermination);
+            Assertions.assertEquals("terminal state failure", failure.getMessage());
+            harness.codecClosed = true;
+            Assertions.assertEquals(0, datagram.payload.refCnt());
+            Assertions.assertEquals(0, harness.window.getBytesInFlight());
+            Assertions.assertEquals(0, harness.window.getUnackedBytes());
+            Assertions.assertNull(get(harness.codec, "sentDatagrams"));
+            Assertions.assertTrue(tick.isCancelled());
+            Assertions.assertNull(get(harness.codec, "tickFuture"));
+        } finally {
+            harness.close();
+            releaseIfNeeded(datagram.payload);
+        }
+    }
 
     @Test
     public void boundsNacksPromotesOnePtoAndReclaimsAcknowledgedDatagram() throws Exception {
@@ -1123,9 +1202,7 @@ public class RakSessionCodecBoundedRecoveryTests {
             if (this.codecClosed) {
                 return;
             }
-            Method method = RakSessionCodec.class.getDeclaredMethod("releaseSessionResources");
-            method.setAccessible(true);
-            method.invoke(this.codec);
+            this.codec.closeAfterEventLoopTermination();
             this.codecClosed = true;
         }
 

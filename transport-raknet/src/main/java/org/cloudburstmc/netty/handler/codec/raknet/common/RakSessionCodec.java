@@ -170,25 +170,55 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         super.channelInactive(ctx);
+        this.closeSession();
+    }
+
+    /** Releases session-owned state after the parent event loop has terminated and can no longer fire lifecycle. */
+    public void closeAfterEventLoopTermination() {
+        this.closeSession();
+    }
+
+    private void closeSession() {
         if (this.state == RakState.DISCONNECTED && this.tickFuture == null) {
             // Already deinitialized
             return;
         }
-        this.setState(RakState.DISCONNECTED);
-        this.tickFuture.cancel(false);
-        this.tickFuture = null;
-
-        RakChannelMetrics metrics = this.getMetrics();
+        Throwable failure = null;
         try {
-            if (metrics != null) {
+            this.setState(RakState.DISCONNECTED);
+        } catch (Throwable throwable) {
+            failure = throwable;
+        }
+        if (this.tickFuture != null) {
+            try {
+                this.tickFuture.cancel(false);
+            } catch (Throwable throwable) {
+                failure = appendFailure(failure, throwable);
+            } finally {
+                this.tickFuture = null;
+            }
+        }
+
+        try {
+            RakChannelMetrics metrics = this.getMetrics();
+            if (metrics != null && this.slidingWindow != null) {
                 this.recoveryMetrics.close(metrics, this.slidingWindow, this.currentTimeMillis());
             }
+        } catch (Throwable throwable) {
+            failure = appendFailure(failure, throwable);
         } finally {
-            this.releaseSessionResources();
+            try {
+                this.releaseSessionResources();
+            } catch (Throwable throwable) {
+                failure = appendFailure(failure, throwable);
+            }
         }
 
         if (log.isTraceEnabled()) {
             log.trace("RakNet Session ({} => {}) closed!", this.channel.localAddress(), this.getRemoteAddress());
+        }
+        if (failure != null) {
+            throwUnchecked(failure);
         }
     }
 
@@ -521,14 +551,16 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         int maxQueuedBytes = this.channel.config().getOption(RakChannelOption.RAK_MAX_QUEUED_BYTES);
 
-        if (maxQueuedBytes > 0 && this.queuedBytes > maxQueuedBytes) {
+        int totalQueuedBytes = totalQueuedBytes(this.queuedBytes, this.channel.pendingRakNetOutboundBytes());
+
+        if (maxQueuedBytes > 0 && totalQueuedBytes > maxQueuedBytes) {
             this.disconnect(RakDisconnectReason.QUEUE_TOO_LONG);
             return;
         }
 
         RakChannelMetrics metrics = this.getMetrics();
         if (metrics != null) {
-            metrics.queuedPacketBytes(this.queuedBytes);
+            metrics.queuedPacketBytes(totalQueuedBytes);
         }
 
         if (this.state == RakState.UNCONNECTED) {
@@ -554,6 +586,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
 
          this.internalFlush(ctx);
+    }
+
+    static int totalQueuedBytes(int sessionQueuedBytes, int handoffQueuedBytes) {
+        return (int) Math.min(Integer.MAX_VALUE,
+                Math.max(0L, (long) sessionQueuedBytes) + Math.max(0L, (long) handoffQueuedBytes));
     }
 
     private void internalFlush(ChannelHandlerContext ctx) {
@@ -1325,6 +1362,24 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         if (metrics != null) {
             metrics.stateChange(state);
         }
+    }
+
+    private static Throwable appendFailure(Throwable existing, Throwable additional) {
+        if (existing == null) {
+            return additional;
+        }
+        existing.addSuppressed(additional);
+        return existing;
+    }
+
+    private static void throwUnchecked(Throwable throwable) {
+        if (throwable instanceof RuntimeException) {
+            throw (RuntimeException) throwable;
+        }
+        if (throwable instanceof Error) {
+            throw (Error) throwable;
+        }
+        throw new IllegalStateException("RakNet session cleanup failed", throwable);
     }
 
     public void recalculatePongTime(long pingTime) {
