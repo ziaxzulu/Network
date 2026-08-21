@@ -52,19 +52,19 @@ public class RakSessionCodecFlushIntervalTests {
     }
 
     @Test
-    public void nextTickPreservesPhaseWhenThePreviousTickFinishesNormally() {
-        Assertions.assertEquals(20L,
-                RakSessionCodec.nextTickDeadlineNanos(10L, 10L, 11L));
-        Assertions.assertEquals(20L,
-                RakSessionCodec.nextTickDeadlineNanos(10L, 10L, 19L));
+    public void nextTickCompensatesForOrdinaryExecutionTime() {
+        Assertions.assertEquals(9L,
+                RakSessionCodec.nextTickDelayNanos(10L, 10L, 11L));
+        Assertions.assertEquals(1L,
+                RakSessionCodec.nextTickDelayNanos(10L, 10L, 19L));
     }
 
     @Test
-    public void nextTickSkipsEveryElapsedDeadlineWithoutChangingPhase() {
-        Assertions.assertEquals(60L,
-                RakSessionCodec.nextTickDeadlineNanos(10L, 10L, 50L));
-        Assertions.assertEquals(60L,
-                RakSessionCodec.nextTickDeadlineNanos(10L, 10L, 59L));
+    public void nextTickWaitsAFreshIntervalAfterAnOverrun() {
+        Assertions.assertEquals(10L,
+                RakSessionCodec.nextTickDelayNanos(10L, 10L, 20L));
+        Assertions.assertEquals(10L,
+                RakSessionCodec.nextTickDelayNanos(10L, 10L, 50L));
     }
 
     private static RakChannelConfig config(AtomicBoolean autoFlush, AtomicInteger flushInterval) {

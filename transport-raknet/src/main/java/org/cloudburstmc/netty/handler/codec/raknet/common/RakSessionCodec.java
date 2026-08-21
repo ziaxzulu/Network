@@ -60,7 +60,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private final LongSupplier clock;
     private ScheduledFuture<?> tickFuture;
     private long tickIntervalNanos;
-    private long nextTickDeadlineNanos;
     private volatile boolean tickStopped = true;
 
     private volatile RakState state;
@@ -159,11 +158,10 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.splitPackets = new RoundRobinArray<>(256);
 
         // After session is fully initialized, start the configured auto-flush cadence or the 10 ms maintenance
-        // tick. Schedule against an absolute phase so ordinary tick work does not reduce the service rate, but
-        // skip deadlines that passed while the parent loop was delayed instead of replaying fixed-rate catch-up
-        // ticks for every session. The model pacer already grants bounded credit for delayed activations.
+        // tick. Compensate the next delay for ordinary tick work so it does not reduce the service rate, but wait a
+        // fresh interval after an overrun instead of replaying fixed-rate catch-up ticks for every session. The model
+        // pacer already grants bounded credit for delayed activations.
         this.tickIntervalNanos = TimeUnit.MILLISECONDS.toNanos(flushInterval);
-        this.nextTickDeadlineNanos = System.nanoTime();
         this.tickStopped = false;
         this.tickFuture = ctx.channel().eventLoop().schedule(this::tryTick, 0, TimeUnit.NANOSECONDS);
 
@@ -548,34 +546,30 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private void tryTick() {
+        long tickStartedNanos = System.nanoTime();
         try {
             this.onTick();
         } catch (Throwable t) {
             log.error("[{}] Error while ticking RakSessionCodec state={} channelActive={}", this.getRemoteAddress(), this.state, this.channel.isActive(), t);
             this.channel.close();
         } finally {
-            this.scheduleNextTick();
+            this.scheduleNextTick(tickStartedNanos);
         }
     }
 
-    private void scheduleNextTick() {
+    private void scheduleNextTick(long tickStartedNanos) {
         if (this.tickStopped) {
             return;
         }
         long nowNanos = System.nanoTime();
-        this.nextTickDeadlineNanos = nextTickDeadlineNanos(
-                this.nextTickDeadlineNanos, this.tickIntervalNanos, nowNanos);
+        long delayNanos = nextTickDelayNanos(this.tickIntervalNanos, tickStartedNanos, nowNanos);
         this.tickFuture = this.channel.eventLoop().schedule(
-                this::tryTick, this.nextTickDeadlineNanos - nowNanos, TimeUnit.NANOSECONDS);
+                this::tryTick, delayNanos, TimeUnit.NANOSECONDS);
     }
 
-    static long nextTickDeadlineNanos(long previousDeadlineNanos, long intervalNanos, long nowNanos) {
-        long nextDeadlineNanos = previousDeadlineNanos + intervalNanos;
-        if (nextDeadlineNanos <= nowNanos) {
-            long missedDeadlines = ((nowNanos - nextDeadlineNanos) / intervalNanos) + 1;
-            nextDeadlineNanos += missedDeadlines * intervalNanos;
-        }
-        return nextDeadlineNanos;
+    static long nextTickDelayNanos(long intervalNanos, long tickStartedNanos, long nowNanos) {
+        long elapsedNanos = nowNanos - tickStartedNanos;
+        return elapsedNanos >= intervalNanos ? intervalNanos : intervalNanos - elapsedNanos;
     }
 
     private void onTick() {
