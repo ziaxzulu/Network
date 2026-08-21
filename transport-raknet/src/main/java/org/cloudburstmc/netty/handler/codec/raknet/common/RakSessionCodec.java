@@ -22,7 +22,6 @@ import io.netty.channel.*;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
-import io.netty.util.concurrent.ScheduledFuture;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import org.cloudburstmc.netty.channel.raknet.*;
@@ -58,7 +57,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     private final RakChannel channel;
     private final LongSupplier clock;
-    private ScheduledFuture<?> tickFuture;
+    private RakSessionTicker.Registration tickRegistration;
 
     private volatile RakState state;
 
@@ -156,7 +155,8 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.splitPackets = new RoundRobinArray<>(256);
 
         // After session is fully initialized, start the configured auto-flush cadence or the 10 ms maintenance tick.
-        this.tickFuture = ctx.channel().eventLoop().scheduleAtFixedRate(this::tryTick, 0, flushInterval, TimeUnit.MILLISECONDS);
+        this.tickRegistration = RakSessionTicker.register(
+                ctx.channel().eventLoop(), flushInterval, this::tryTick);
 
         ctx.fireChannelActive(); // fire channel active on rakPipeline()
     }
@@ -179,7 +179,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private void closeSession() {
-        if (this.state == RakState.DISCONNECTED && this.tickFuture == null) {
+        if (this.state == RakState.DISCONNECTED && this.tickRegistration == null) {
             // Already deinitialized
             return;
         }
@@ -189,13 +189,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         } catch (Throwable throwable) {
             failure = throwable;
         }
-        if (this.tickFuture != null) {
+        if (this.tickRegistration != null) {
             try {
-                this.tickFuture.cancel(false);
+                this.tickRegistration.cancel();
             } catch (Throwable throwable) {
                 failure = appendFailure(failure, throwable);
             } finally {
-                this.tickFuture = null;
+                this.tickRegistration = null;
             }
         }
 

@@ -24,7 +24,6 @@ import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
-import io.netty.util.concurrent.ScheduledFuture;
 import org.cloudburstmc.netty.channel.raknet.RakChannel;
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason;
 import org.cloudburstmc.netty.channel.raknet.RakPriority;
@@ -55,6 +54,7 @@ import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.ID_DISCONNECTION_NOTIFICATION;
@@ -84,10 +84,11 @@ public class RakSessionCodecBoundedRecoveryTests {
         };
         Harness harness = harness(clock, throwingMetrics, RakRecoveryMode.MODEL_BASED);
         TestDatagram datagram = datagram(100, 0);
-        ScheduledFuture<?> tick = harness.channel.eventLoop().schedule(() -> { }, 1L, TimeUnit.DAYS);
+        AtomicBoolean tickCancelled = new AtomicBoolean();
+        RakSessionTicker.Registration tick = () -> tickCancelled.set(true);
         try {
             harness.add(datagram.packet);
-            set(harness.codec, "tickFuture", tick);
+            set(harness.codec, "tickRegistration", tick);
 
             IllegalStateException failure = Assertions.assertThrows(IllegalStateException.class,
                     harness.codec::closeAfterEventLoopTermination);
@@ -97,8 +98,8 @@ public class RakSessionCodecBoundedRecoveryTests {
             Assertions.assertEquals(0, harness.window.getBytesInFlight());
             Assertions.assertEquals(0, harness.window.getUnackedBytes());
             Assertions.assertNull(get(harness.codec, "sentDatagrams"));
-            Assertions.assertTrue(tick.isCancelled());
-            Assertions.assertNull(get(harness.codec, "tickFuture"));
+            Assertions.assertTrue(tickCancelled.get());
+            Assertions.assertNull(get(harness.codec, "tickRegistration"));
         } finally {
             harness.close();
             releaseIfNeeded(datagram.payload);
@@ -118,10 +119,11 @@ public class RakSessionCodecBoundedRecoveryTests {
         };
         Harness harness = harness(clock, throwingMetrics, RakRecoveryMode.MODEL_BASED);
         TestDatagram datagram = datagram(100, 0);
-        ScheduledFuture<?> tick = harness.channel.eventLoop().schedule(() -> { }, 1L, TimeUnit.DAYS);
+        AtomicBoolean tickCancelled = new AtomicBoolean();
+        RakSessionTicker.Registration tick = () -> tickCancelled.set(true);
         try {
             harness.add(datagram.packet);
-            set(harness.codec, "tickFuture", tick);
+            set(harness.codec, "tickRegistration", tick);
 
             IllegalStateException failure = Assertions.assertThrows(IllegalStateException.class,
                     harness.codec::closeAfterEventLoopTermination);
@@ -131,8 +133,8 @@ public class RakSessionCodecBoundedRecoveryTests {
             Assertions.assertEquals(0, harness.window.getBytesInFlight());
             Assertions.assertEquals(0, harness.window.getUnackedBytes());
             Assertions.assertNull(get(harness.codec, "sentDatagrams"));
-            Assertions.assertTrue(tick.isCancelled());
-            Assertions.assertNull(get(harness.codec, "tickFuture"));
+            Assertions.assertTrue(tickCancelled.get());
+            Assertions.assertNull(get(harness.codec, "tickRegistration"));
         } finally {
             harness.close();
             releaseIfNeeded(datagram.payload);
