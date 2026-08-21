@@ -72,7 +72,6 @@ final class RakSessionTicker {
         private boolean retired;
         private int nextRegistration;
         private int pulseIndex;
-        private long nextPulseNanos;
 
         private Coordinator(Key key) {
             this.key = key;
@@ -133,7 +132,6 @@ final class RakSessionTicker {
             }
             this.pulsesPerInterval = requiredPulses;
             this.pulseIndex = 0;
-            this.nextPulseNanos = 0L;
             long periodNanos = this.periodNanos(requiredPulses);
             this.future = this.key.eventLoop.scheduleAtFixedRate(
                     this, 0L, periodNanos, TimeUnit.NANOSECONDS);
@@ -151,12 +149,6 @@ final class RakSessionTicker {
             if (length == 0 || pulses == 0) {
                 return;
             }
-
-            long now = System.nanoTime();
-            if (now < this.nextPulseNanos) {
-                return;
-            }
-            this.nextPulseNanos = now + this.periodNanos(pulses);
 
             int pulse = Math.floorMod(this.pulseIndex++, pulses);
             int quota = length / pulses + (pulse < length % pulses ? 1 : 0);
