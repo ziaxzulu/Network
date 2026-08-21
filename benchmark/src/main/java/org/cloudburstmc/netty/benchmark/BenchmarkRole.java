@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 CloudburstMC
+ * Copyright 2026 CloudburstMC
  *
  * CloudburstMC licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
@@ -14,11 +14,19 @@
  * under the License.
  */
 
-rootProject.name = "network"
+package org.cloudburstmc.netty.benchmark;
 
-plugins {
-    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+public enum BenchmarkRole {
+    LOCAL,
+    SERVER,
+    CLIENT;
+
+    public static BenchmarkRole parse(String value) {
+        for (BenchmarkRole role : values()) {
+            if (role.name().equalsIgnoreCase(value)) {
+                return role;
+            }
+        }
+        throw new IllegalArgumentException("Unknown benchmark role: " + value);
+    }
 }
-
-include("transport-raknet")
-include("benchmark")

@@ -1,0 +1,65 @@
+{
+  "kind": "raknet-netns-pilot-campaign",
+  "generatedAt": "20260818T235447Z",
+  "execute": true,
+  "outputRoot": "/var/lib/raknet-netns-benchmark/runs/netns-pilot-20260818T235447Z-PmWwPY",
+  "profiles": [
+    {
+      "profile": "perfect",
+      "caseType": "fanout",
+      "latency": "0ms",
+      "jitter": "0ms",
+      "loss": "0%"
+    },
+    {
+      "profile": "near-loss",
+      "caseType": "fairness",
+      "latency": "10ms",
+      "jitter": "2ms",
+      "loss": "2%"
+    },
+    {
+      "profile": "regional-loss",
+      "caseType": "fairness",
+      "latency": "50ms",
+      "jitter": "5ms",
+      "loss": "2%"
+    },
+    {
+      "profile": "poor",
+      "caseType": "fairness",
+      "latency": "100ms",
+      "jitter": "10ms",
+      "loss": "5%"
+    },
+    {
+      "profile": "severe",
+      "caseType": "fairness",
+      "latency": "200ms",
+      "jitter": "20ms",
+      "loss": "10%"
+    },
+    {
+      "profile": "blackhole",
+      "caseType": "blackhole",
+      "latency": "0ms",
+      "jitter": "0ms",
+      "loss": "0%"
+    }
+  ],
+  "parameters": {
+    "clients": "100",
+    "affectedClients": "10",
+    "payloadSize": "512",
+    "perClientMbps": "5",
+    "warmup": "5s",
+    "duration": "10s",
+    "iterations": "3",
+    "startDelay": "20s",
+    "startOffset": "45s",
+    "netemBeforeStart": "5s",
+    "blackholeAfter": "5s",
+    "direction": "server-to-client",
+    "reliability": "reliable_ordered"
+  }
+}

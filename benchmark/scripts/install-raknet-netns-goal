@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+unset BASH_ENV ENV CDPATH GLOBIGNORE
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+if [[ "$#" -ne 0 ]]; then
+  echo "This installer does not accept arguments" >&2
+  exit 64
+fi
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "Run this installer once with sudo" >&2
+  exit 77
+fi
+
+repo_root="/home/zulu/development/ziax/Network"
+source_root="$repo_root/benchmark/scripts"
+install_root="/usr/local/libexec/raknet-netns-benchmark"
+installed_scripts="$install_root/benchmark/scripts"
+launcher_target="/usr/local/sbin/raknet-netns-pilot"
+state_root="/var/lib/raknet-netns-benchmark"
+mode_file="$state_root/goal-mode"
+recovery_mode_file="$state_root/recovery-mode"
+result_owner="zulu"
+result_group="zulu"
+
+if ! id "$result_owner" >/dev/null 2>&1; then
+  echo "Result owner does not exist: $result_owner" >&2
+  exit 69
+fi
+if ! getent group "$result_group" >/dev/null 2>&1; then
+  echo "Result group does not exist: $result_group" >&2
+  exit 69
+fi
+
+sources=(
+  raknet-netns-goal-root
+  run-netns-pilot-campaign.sh
+  run-netns-worker-smoke.sh
+  merge-worker-results.sh
+  raknet-netem.sh
+  validate-qdisc-timeseries.sh
+)
+for source_name in "${sources[@]}"; do
+  source_path="$source_root/$source_name"
+  if [[ ! -f "$source_path" || -L "$source_path" ]]; then
+    echo "Installer source must be a regular non-symlink file: $source_path" >&2
+    exit 69
+  fi
+  bash -n "$source_path"
+done
+
+install -d -o root -g root -m 0755 "$install_root"
+install -d -o root -g root -m 0755 "$install_root/benchmark"
+install -d -o root -g root -m 0755 "$installed_scripts"
+install -d -o root -g root -m 0755 "$state_root"
+install -d -o root -g root -m 0755 "$state_root/runs"
+install -d -o root -g root -m 0755 "$state_root/staging"
+
+install -o root -g root -m 0755 \
+  "$source_root/run-netns-pilot-campaign.sh" \
+  "$installed_scripts/run-netns-pilot-campaign.sh"
+install -o root -g root -m 0755 \
+  "$source_root/run-netns-worker-smoke.sh" \
+  "$installed_scripts/run-netns-worker-smoke.sh"
+install -o root -g root -m 0755 \
+  "$source_root/merge-worker-results.sh" \
+  "$installed_scripts/merge-worker-results.sh"
+install -o root -g root -m 0755 \
+  "$source_root/raknet-netem.sh" \
+  "$installed_scripts/raknet-netem.sh"
+install -o root -g root -m 0755 \
+  "$source_root/validate-qdisc-timeseries.sh" \
+  "$installed_scripts/validate-qdisc-timeseries.sh"
+install -o root -g root -m 0755 \
+  "$source_root/raknet-netns-goal-root" \
+  "$launcher_target"
+
+if [[ -L "$mode_file" ]]; then
+  echo "Refusing symlinked goal mode path: $mode_file" >&2
+  exit 77
+elif [[ ! -e "$mode_file" ]]; then
+  install -o "$result_owner" -g "$result_group" -m 0644 /dev/null "$mode_file"
+  printf 'pilot\n' >"$mode_file"
+elif [[ ! -f "$mode_file" ]]; then
+  echo "Refusing non-regular goal mode path: $mode_file" >&2
+  exit 77
+else
+  chown "$result_owner:$result_group" "$mode_file"
+  chmod 0644 "$mode_file"
+fi
+
+mode="$(<"$mode_file")"
+case "$mode" in
+  pilot|transition|long-hold|cap-sweep|cohort-sweep|all)
+    ;;
+  *)
+    printf 'pilot\n' >"$mode_file"
+    ;;
+esac
+
+if [[ -L "$recovery_mode_file" ]]; then
+  echo "Refusing symlinked recovery mode path: $recovery_mode_file" >&2
+  exit 77
+elif [[ ! -e "$recovery_mode_file" ]]; then
+  install -o "$result_owner" -g "$result_group" -m 0644 /dev/null "$recovery_mode_file"
+  printf 'legacy\n' >"$recovery_mode_file"
+elif [[ ! -f "$recovery_mode_file" ]]; then
+  echo "Refusing non-regular recovery mode path: $recovery_mode_file" >&2
+  exit 77
+else
+  chown "$result_owner:$result_group" "$recovery_mode_file"
+  chmod 0644 "$recovery_mode_file"
+fi
+
+recovery_mode="$(<"$recovery_mode_file")"
+case "$recovery_mode" in
+  legacy|bounded|model_based)
+    ;;
+  *)
+    printf 'legacy\n' >"$recovery_mode_file"
+    ;;
+esac
+
+echo "Installed autonomous launcher: $launcher_target"
+echo "Installed root-owned orchestration: $installed_scripts"
+echo "Benchmark JVM and result account: $result_owner"
+echo "Goal mode file: $mode_file"
+echo "Recovery mode file: $recovery_mode_file"
+printf '%s\n' "Select legacy recovery: printf '%s\\n' legacy > $recovery_mode_file"
+printf '%s\n' "Select bounded recovery: printf '%s\\n' bounded > $recovery_mode_file"
+printf '%s\n' "Select model-based recovery: printf '%s\\n' model_based > $recovery_mode_file"
+echo "Existing exact sudoers authorization for $launcher_target with no arguments can be retained."

@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 CloudburstMC
+ * Copyright 2026 CloudburstMC
  *
  * CloudburstMC licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
@@ -14,11 +14,17 @@
  * under the License.
  */
 
-rootProject.name = "network"
+package org.cloudburstmc.netty.benchmark;
 
-plugins {
-    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+final class BenchmarkResourceSafetyException extends RuntimeException {
+    private final BenchmarkRunResult result;
+
+    BenchmarkResourceSafetyException(BenchmarkRunResult result, BenchmarkTimeline.ResourceSafetyAbort abort) {
+        super("resource safety watchdog aborted benchmark: " + String.join(",", abort.reasons()));
+        this.result = result;
+    }
+
+    BenchmarkRunResult result() {
+        return this.result;
+    }
 }
-
-include("transport-raknet")
-include("benchmark")

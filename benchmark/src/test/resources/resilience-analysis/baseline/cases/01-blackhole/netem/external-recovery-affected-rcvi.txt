@@ -1,0 +1,13 @@
+# Netem Apply
+namespace=affected
+interface=rcvi
+action=restore
+latency=0ms
+jitter=0ms
+loss=0%
+limit=10000
+applyStartedAtEpochMillis=105005
++ tc qdisc del dev rcvi root
+applyCompletedAtEpochMillis=105020
++ tc qdisc show dev rcvi
+qdisc noqueue 0: root refcnt 2

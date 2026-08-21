@@ -1,0 +1,42 @@
+{
+  "aggregate": {
+    "clients": 10,
+    "affectedClients": 2,
+    "measuredIterations": 1,
+    "elapsedMillis": 20000,
+    "payloadSize": 512,
+    "targetClientMbps": 5,
+    "reliability": "RELIABLE_ORDERED",
+    "configuredMaxQueuedBytes": null,
+    "resourceSafetyMaxAggregateQueuedBytes": 402653184,
+    "resourceSafetyMaxDirectMemoryUsedBytes": 805306368,
+    "resourceSafetyStatus": "completed-no-abort",
+    "healthyClientMbpsP50": 4.99,
+    "healthyFairnessIndex": 0.9999,
+    "healthySentToDeliveredBytesRatio": 1.02,
+    "affectedClientMbpsP50": 0.5,
+    "affectedSentToDeliveredBytesRatio": 4.0,
+    "affectedUndeliveredServerBytesOut": 500000,
+    "affectedUndeliveredServerGbps": 0.004,
+    "maxQueuedBytes": 5500
+  },
+  "server": {
+    "runId": "netns-blackhole-10c",
+    "role": "server",
+    "gitRevision": "fixture-revision"
+  },
+  "receivers": [
+    {
+      "runId": "netns-blackhole-10c-healthy",
+      "role": "client",
+      "clients": 8,
+      "gitRevision": "fixture-revision"
+    },
+    {
+      "runId": "netns-blackhole-10c-affected",
+      "role": "client",
+      "clients": 2,
+      "gitRevision": "fixture-revision"
+    }
+  ]
+}

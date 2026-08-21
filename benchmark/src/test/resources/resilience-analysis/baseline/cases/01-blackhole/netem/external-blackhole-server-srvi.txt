@@ -1,0 +1,13 @@
+# Netem Apply
+namespace=server
+interface=srvi
+action=blackhole
+latency=0ms
+jitter=0ms
+loss=100%
+limit=10000
+applyStartedAtEpochMillis=102000
++ tc qdisc replace dev srvi root netem loss 100% limit 10000
+applyCompletedAtEpochMillis=102010
++ tc qdisc show dev srvi
+qdisc netem 8001: root refcnt 2 limit 10000 loss 100%

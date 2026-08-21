@@ -1,0 +1,373 @@
+# Baseline Status
+
+This is the current handoff state for the established RakNet performance baseline. It records what is ready to use for performance engineering, what local evidence exists, and what still has to run in the lab before a result becomes the baseline of record.
+
+## Current Answer
+
+The benchmark is a good synthetic for established-channel transport pressure:
+
+- primary `RELIABLE_ORDERED` channel `0` server-to-client traffic
+- one-client bandwidth-latency curves for best-case transport capacity
+- multi-client fanout, immediate small-packet fanout, fairness, disappearing-client, and batched-game-traffic cases
+- queue, ACK/NACK, stale datagram, disconnect, open/active peer, final channel-state, fairness, per-client throughput, send/deliver, undelivered send-work, healthy/affected datagram-rate, and probe-latency indicators
+- local loopback runs for regression and remote worker runs for separate-host lab evidence
+
+Candidate comparisons now fail on more than aggregate throughput, p99 latency, and queue growth. They also gate healthy-client throughput, healthy-client fairness, send-work growth, and retry-pressure growth, so a change that preserves total delivered Gbps while starving healthy clients or burning server send work on bad links is treated as a regression.
+
+It is not a full Bedrock production emulator yet. The main remaining workload gaps are compression modeling, captured logical packet distributions, pass-through versus re-encode batch behavior, proxy pass-through, and captured host/NIC-level impairment results. Source evidence and the gap list are in [`production-usage-evidence.md`](production-usage-evidence.md).
+
+## Base Matrix
+
+Use [`baseline-matrix.md`](baseline-matrix.md) as the source of truth. The first recurring matrix should include:
+
+- best-case one-client curves with payloads `64`, `256`, `512`, `1200`, `1340`, `1400`, and split-heavy payloads
+- default-limiter and raised-limiter one-client curves
+- `100+` client contention rows at `5Mbps` per client
+- fanout, immediate small-packet fanout, fairness, and disappearing-client rows
+- `10ms`, `20ms`, and `50ms` batched-game-traffic rows
+- paced resource-pack rows for `8KiB` and `256KiB` chunks
+- host-level impairment campaigns for selected curve and contention rows
+
+The executable local/lab profiles in `benchmark/scripts/run-baseline-matrix.sh` and the remote lab planner in `benchmark/scripts/plan-lab-baseline.sh` are aligned with that matrix.
+
+## Local Development Evidence
+
+Local loopback artifacts are useful for regression shape only. They should not be used for line-rate claims. Use `benchmark/scripts/run-baseline-matrix.sh --profile pilot` when you need a short three-iteration local development comparison without running the full local matrix.
+
+For a stronger single-host smoke path, use `benchmark/scripts/run-netns-worker-smoke.sh`. It runs the normal server/receiver worker roles through Linux network namespaces and veth pairs so `tc netem` and blackhole behavior are applied outside the JVM. This is useful for local retry-pressure and external-qdisc regression checks, but it is still not accepted as line-rate or baseline-of-record evidence.
+
+Current executed netns resilience baseline:
+
+```text
+benchmark/baselines/zulubox-netns-100c-20260819/
+```
+
+Two complete campaigns exercised `100` established clients at `5Mbps` each,
+with `90` healthy clients and `10` clients behind external `tc netem`. The six
+profiles were perfect, near-loss (`10ms/2ms/2%`), regional-loss
+(`50ms/5ms/2%`), poor (`100ms/10ms/5%`), severe (`200ms/20ms/10%`), and a
+timed server-to-client 100% blackhole. All 36 measured windows completed.
+
+The main product result is strong client isolation: healthy-client p50 stayed
+between `4.975` and `5.056Mbps`, healthy Jain fairness stayed above `0.999936`,
+and healthy send/deliver cost stayed near `1.02-1.03` under every impairment.
+Low single-digit loss remained serviceable. Poor links were degraded and
+variable, while severe links delivered almost nothing to affected clients and
+consumed `42-45Mbps` of undelivered affected-path work with roughly `22MB`
+maximum observed single-peer queue growth. The severe result is confounded by
+netem's implicit 1,000-packet limit. In the one-way blackhole, all ten affected
+peers were no longer open by the second window and affected retries stopped,
+but counter resets hid the exact transition time. This is good evidence that
+bad peers do not poison healthy peers and partial evidence of cleanup; it does
+not yet prove precise event-aligned or long-duration resource bounds.
+
+See [`../baselines/zulubox-netns-100c-20260819/RESULTS.md`](../baselines/zulubox-netns-100c-20260819/RESULTS.md)
+for the resilience scorecard, cross-campaign table, caveats, raw artifact paths,
+and recommended next measurements. This package is intentionally classified as
+a development resilience baseline rather than the separate-host baseline of
+record: all rows exceeded the current p99-spread threshold, and the topology is
+still a single physical host using namespaces and veth pairs.
+
+Latest current-branch smoke artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-branch-smoke-20260622T061238Z/
+```
+
+This run completed the current smoke profile and produced `10` aggregate rows across best-case, two curve rate points, fanout, immediate small-packet fanout, fairness, stop-reading disappearance, blackhole disappearance, batched game traffic, and resource-pack transfer cases. Every aggregate row includes the current retry-pressure send-work fields: `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`. Treat it as output-schema and instrumentation proof only; it uses one measured iteration per case and all rows are intentionally marked unstable by the default stability policy:
+
+| Case | Delivered Gbps | p99 RTT ms | Max queue bytes | Undelivered Gbps | Affected undelivered Gbps | Affected datagram out/s | Retry signal |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `immediate-10x0_1-p256` | `0.000997376` | `10.481245` | `273` | `0.000083408` | `0` | `0` | none |
+| `fanout-10x0_2` | `0.001994752` | `9.912738` | `529` | `0.000083504` | `0` | `0` | none |
+| `disappear-10-blackhole` | `0.001892352` | `12.106768` | `10820` | `0.000203104` | `0.000127936` | `57` | `25` stale datagrams/s |
+| `fairness-10-2poor` | `0.001961984` | `476.258398` | `2065` | `0.000158544` | `0.000091920` | `109` | `2` NACK out/s |
+
+The smoke capacity selector did not choose a stable point, which is expected for a one-iteration smoke. Its best observed curve row was `curve-100_0mbps` at `0.097824Gbps`, rejected for `insufficient-iterations`.
+
+Latest local pilot artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-bae9ef3-local-pilot-20260622T123226Z/
+```
+
+This run completed the representative pilot profile in git revision `bae9ef3749d2`. It produced parseable suite, aggregate, and capacity-selector artifacts. It is branch-local loopback evidence that the benchmark shape executes and emits the retry-pressure fields, but it is still not a baseline-of-record result. Six of the nine aggregate rows were unstable under the default stability policy, mostly because the short loopback run had p99 probe-latency spread. The selected local capacity row, the low-rate curve row, and the immediate small-packet fanout row were stable locally; the table below lists the selected curve row plus the 100-client pilot workload rows:
+
+| Case | Delivered Gbps | Healthy Gbps | Affected Gbps | Client p50 Mbps | Healthy p50 Mbps | Affected p50 Mbps | Healthy fairness | p99 RTT ms | Max queue bytes | Undelivered Gbps | Affected undelivered Gbps | Affected datagram out/s | Retry signal | Unstable reason |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `pilot-curve-1c-mtu` / `curve-100_0mbps` | `0.09997248` | `0.09997248` | `0` | `99.97248` | `99.97248` | `0` | `1.0` | `10.62424` | `148800` | `0.0011693504` | `0` | `0` | none | none |
+| `pilot-fanout-100x5` | `0.4990377984` | `0.4990377984` | `0` | `4.9905664` | `4.9905664` | `0` | `0.9999996319800738` | `18.139339` | `266325` | `0.0120689024` | `0` | `0` | none | `p99-spread` |
+| `pilot-immediate-100x1-p256` | `0.0999481344` | `0.0999481344` | `0` | `0.999424` | `0.999424` | `0` | `0.9999997446544687` | `10.046832` | `1809` | `0.004521656` | `0` | `0` | none | none |
+| `pilot-fairness-100-10poor` | `0.4497974613333333` | `0.449773568` | `0.000027306666666666667` | `4.99712` | `4.997802666666667` | `0.002048` | `0.9999997698132459` | `12.021658` | `4232192` | `0.014955638666666667` | `0.004112421333333334` | `633.6666666666666` | `19.833333333333332` stale datagrams/s, `4.833333333333333` NACK out/s | `p99-spread` |
+| `pilot-disappear-100-blackhole` | `0.4663118506666667` | `0.4497353386666667` | `0.016576512` | `4.996437333333333` | `4.99712` | `1.6575146666666667` | `0.9999997781229638` | `29.63269` | `2481815` | `0.04616913066666666` | `0.034520788` | `6521.666666666667` | `4357.666666666667` stale datagrams/s | `p99-spread` |
+| `pilot-batch-100-20ms` | `0.51136` | `0.51136` | `0` | `5.1008` | `5.1008` | `0` | `0.9999812033902818` | `21.30098` | `228353` | `0.0106394368` | `0` | `0` | none | `p99-spread` |
+| `pilot-resource-100-8k-200ms` | `0.032768` | `0.032768` | `0` | `0.32768` | `0.32768` | `0` | `1.0` | `10.863943` | `8209` | `0.0010006864` | `0` | `0` | none | `p99-spread` |
+
+The capacity selector chose `curve-100_0mbps` at `0.09997248Gbps` as the stable local pilot capacity point. The best observed curve row was `curve-250_0mbps` at `0.2494464Gbps`, rejected because unstable rows are not allowed. This is useful as a current developer regression fixture and artifact-shape proof, but capacity selection for the baseline of record still requires separate-host lab evidence.
+
+Latest raised-limiter local best-case curve artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-bae9ef3-raised-bestcase-mtu1340-bounded-20260622T124301Z/raised-bestcase-mtu1340-bounded/
+```
+
+This run used payload `1340`, three measured iterations, raised packet limits (`--packet-limit 100000 --global-packet-limit 1000000`), `64MiB` max queued bytes, and git revision `bae9ef3749d2`. It did not select a stable local capacity row because every candidate exceeded the default p99 spread threshold. The best observed local row was `curve-750_0mbps` at `0.747046784Gbps`; `curve-1000_0mbps` showed the overload knee with disconnects, roughly full queue growth, and high send/deliver ratio. A wider 250/500/750/1000/1500/2000/unlimited sweep was intentionally interrupted after more than five minutes without producing an artifact because the overloaded high-rate points did not return promptly on this workstation.
+
+| Candidate | Target Mbps | Delivered Gbps | p99 RTT ms | Max queue bytes | Send/deliver | Rejection |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `curve-250_0mbps` | `250` | `0.24943296` | `11.038146` | `22139480` | `1.012493271137864` | `p99-spread` |
+| `curve-500_0mbps` | `500` | `0.498874496` | `13.290376` | `794620` | `1.0583977781965135` | `p99-spread` |
+| `curve-750_0mbps` | `750` | `0.747046784` | `36.93579` | `4802560` | `1.139175251439139` | `p99-spread` |
+| `curve-1000_0mbps` | `1000` | `0.036731008` | `1442.113599` | `66114311` | `3.91235516324518` | `throughput-spread`, `p99-spread`, `disconnects` |
+
+This is the strongest current local capacity observation, but it is still loopback-only. Treat it as an overload-knee clue, not as line-rate evidence. The absence of a selected stable row is also useful: on this host, short local runs can preserve throughput while p99 probe latency varies enough to fail the default baseline stability gate.
+
+Previous focused current-branch 100-client fanout artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-local-fanout-100-20260622T072219Z/
+```
+
+This run used `100` established healthy clients, payload `512`, `5Mbps` per client, `2s` warmup, `10s` measurement, and `3` measured iterations. It is the clean local contention reference for the impaired-client rows below. It passed execution, delivered the expected aggregate load, and had near-perfect per-client fairness, but it is still local loopback evidence and was unstable on p99 probe RTT spread:
+
+| Case | Delivered Gbps | Client p50 Mbps | Client p99 Mbps | Fairness | p99 RTT ms | Max queue bytes | Undelivered Gbps | Datagram out/s | Retry signal | Unstable reason |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `fanout-100x5` | `0.49545584639999996` | `4.9545216` | `4.95616` | `0.9999843765777217` | `325.667429` | `274449` | `0.011588379199999999` | `61988.0` | none | `p99-spread` |
+
+Previous focused current-branch 100-client fairness artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-local-fairness-100-20260622T071941Z/
+```
+
+This run used `100` established clients, `10` impaired clients, payload `512`, `5Mbps` per client, `100ms` latency, `10ms` jitter, `5%` packet loss, `2s` warmup, `15s` measurement, and `3` measured iterations. Healthy clients held the intended local throughput, while impaired clients received almost no useful traffic. It passed execution and emitted current send-work fields, but it is still local loopback evidence and was unstable on p99 probe RTT spread:
+
+| Case | Delivered Gbps | Healthy Gbps | Affected Gbps | Healthy client p50 Mbps | Affected client p50 Mbps | Healthy fairness | Affected fairness | p99 RTT ms | Max queue bytes | Affected undelivered Gbps | Affected datagram out/s | Retry signal | Unstable reason |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `fairness-100-10poor` | `0.449581056` | `0.4495805098666667` | `0.0000016384` | `4.995208533333333` | `0` | `0.9999999480568666` | `0.2790943396226415` | `161.770849` | `10082816` | `0.0035025002666666666` | `539.3333333333334` | `19.266666666666666` stale datagrams/s, `6.6` NACK out/s | `p99-spread` |
+
+Previous focused current-branch 100-client blackhole artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/current-local-disappear-blackhole-100-20260622T071700Z/
+```
+
+This run used `100` established clients, `10` blackholed clients, payload `512`, `5Mbps` per client, `2s` warmup, `15s` measurement, and `3` measured iterations. It passed execution and emitted current retry-pressure fields, but it is still local loopback evidence and was unstable on p99 probe RTT spread:
+
+| Case | Delivered Gbps | Healthy Gbps | Affected Gbps | Healthy client p50 Mbps | Affected client p50 Mbps | p99 RTT ms | Max queue bytes | Affected undelivered Gbps | Affected datagram out/s | Retry signal | Unstable reason |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `disappear-100-blackhole` | `0.46292609706666665` | `0.4463916373333333` | `0.016534459733333333` | `4.958890666666667` | `1.6534186666666668` | `275.023124` | `6145683` | `0.03576692213333333` | `6356.8` | `4242.866666666667` stale datagrams/s | `p99-spread` |
+
+Previous broader local 100-client contention artifact in this worktree:
+
+```text
+benchmark/build/benchmark-results/local-contention-100-20260621T225857Z/
+```
+
+The local 100-client rows delivered roughly the expected aggregate load, but every row was unstable on p99 probe RTT spread. Treat these as development observations, not baseline candidates:
+
+| Case | Delivered Gbps | Client p50 Mbps | p99 RTT ms | Max queue bytes | Unstable reason |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `fanout-100x5` | `0.49625088` | `4.962304` | `695.90741` | `1593890` | `p99-spread` |
+| `fairness-100-10poor` | `0.44868608` | `4.984832` | `59.137674` | `4225024` | `p99-spread` |
+| `disappear-100-close` | `0.4727862613333333` | `4.988245333333333` | `212.572783` | `812253` | `p99-spread` |
+| `disappear-100-stopread` | `0.4719602346666667` | `4.971861333333333` | `151.940389` | `1865197` | `p99-spread` |
+| `disappear-100-blackhole` | `0.4718906026666667` | `4.969130666666667` | `146.109212` | `1819117` | `p99-spread` |
+| `batch-100-20ms` | `0.51136` | `5.1008` | `54.356412` | `1035265` | `p99-spread` |
+
+## Lab Baseline Of Record
+
+The baseline of record is not complete until a separate-host lab run is captured, validated, and promoted. Generate and preflight the current recommended handoff with:
+
+```bash
+benchmark/scripts/prepare-fresh-lab-handoff.sh \
+  --out benchmark/build/benchmark-results/lab-handoff-current \
+  --artifact-root benchmark/build/benchmark-results/lab-run-current \
+  --source-audit-out benchmark/build/benchmark-results/production-evidence-current \
+  --server-host <server-ip> \
+  --interface <nic> \
+  --expect-mtu <mtu> \
+  --expect-min-cpus <min-cpus> \
+  --curve-receiver receiver-a=1 \
+  --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
+  --sudo-netem
+```
+
+This wrapper refreshes `source-audit.json`, generates the perfect-network plan and impairment campaign plan, runs `check-lab-handoff.sh --require-source-audit --require-current-revision`, and runs the generated freshness checks. The handoff writes the top-level run order, `prereq-commands.sh`, promotion commands, readiness-gate command, and `fresh-handoff-summary.json` for automation. That summary includes the Network revision, clean/dirty tracked-file state, source-audit readiness, required/optional source availability, preflight readiness, combined and per-stage issue counts, planned row counts, and the preflight requirements for reliability, worker command argument consistency, payload/rate/profile coverage, contention gates, minimum measured iterations, batch/resource-pack rows, blackhole coverage, source-audit, and current-revision checks.
+
+Each handoff also includes `promote-and-check.sh`. After lab workers finish, receiver artifacts are copied back, `perfect-plan/merge-all.sh` runs, and `impairment-plan/summarize-campaign.sh` completes, run that helper to rerun handoff preflight, promote both baseline packages, and run the final readiness gate with the handoff's exact manifest and artifact paths.
+
+That preflight checks handoff structure, generated scripts, the prereq helper, profile plans, the production-evidence fingerprint, optional source-audit fingerprint/readiness, optional source-audit revision match against the current checkout, curve matrix coverage, contention scenario coverage, required `blackhole` disappearance mode, and whether contention plan rows keep the handoff's receiver-total client count and per-client Mbps target. The immediate small-packet row uses its own lower `immediatePerClientMbps` target and is not used to satisfy the main `5Mbps` contention gate. By default the preflight rejects handoffs below `500` contention clients or below `5Mbps` for the main contention target, matching the baseline readiness gate. It also checks that generated contention plans include the production-shape batch/resource rows and blackhole disappearance row before operators spend lab time on them. The underlying perfect-network baseline plan is equivalent to:
+
+```bash
+benchmark/scripts/plan-lab-baseline.sh \
+  --out benchmark/build/benchmark-results/lab-baseline-plan-current \
+  --artifact-root benchmark/build/benchmark-results/lab-baseline-current \
+  --server-host <server-ip> \
+  --interface <nic> \
+  --curve-receiver receiver-a=1 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
+  --contention-cases fanout,immediate,fairness,disappear-blackhole,batched,resource-pack \
+  --contention-payload-size 512 \
+  --per-client-mbps 5 \
+  --raised-packet-limit 100000 \
+  --raised-global-packet-limit 1000000 \
+  --max-queued-bytes 67108864 \
+  --warmup 10s \
+  --duration 60s \
+  --iterations 3 \
+  --start-delay 90s
+```
+
+The generated plan schedules:
+
+- `56` default-limiter curve rows across payloads `64,256,512,1200,1340,1400,262144`
+- `56` raised-limiter curve rows across the same payloads
+- `9` contention/workload rows at `500` clients split across two receiver hosts: fanout, immediate small-packet fanout, fairness, blackhole disappearance, three batched cadences, and two resource-pack transfers
+
+Fresh structural handoff audits should pass `check-lab-handoff.sh --require-source-audit --require-current-revision` with `ready=true` and `0` issues. The expected generated shape is `56` default-limiter curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, at least `3` measured iterations, and five impairment profiles (`perfect`, `near-loss`, `regional-loss`, `poor`, `severe`) each with the same `56/56/9` row shape. The perfect contention plan includes `lab-perfect-contention-immediate-500x1-p256` at payload `256` and `1Mbps` per client, plus the main `5Mbps` fanout, fairness, blackhole disappearance, batched, and resource-pack rows.
+
+Current-revision structural handoffs are generated artifacts, not durable committed references. Any commit changes the Network revision fingerprint embedded in the source audit and handoff manifest, so a handoff generated before a documentation or script commit can become stale for `--require-current-revision`.
+
+Before lab operators distribute commands, regenerate a fresh handoff from the exact checkout that will be used for lab execution. A valid handoff should report `ready=true`, `issueCount=0`, `sourceAuditIssueCount=0`, `handoffIssueCount=0`, no dirty tracked Network files, and the expected `56` default curve, `56` raised-limiter curve, and `9` contention rows for the perfect-network plan. The impairment campaign should contain `perfect`, `near-loss`, `regional-loss`, `poor`, and `severe` profiles, each with the same `56/56/9` row shape. The refreshed source audit should also be `ready=true` with `0` issues and confirm the required Geyser, Cloudburst Protocol, Cloudburst Nukkit, and private CubeCraft checkouts are available. TeamZiax eBPF availability is captured in the same summary as optional companion evidence unless the operator explicitly includes `teamziax-ebpf` in `--require-sources`.
+
+Fresh structural handoff summaries are local generated artifacts, not durable committed references. After generating a handoff, inspect the wrapper summary and plan freshness artifacts:
+
+```bash
+jq '{ready, issueCount, networkRevision, networkDirtyTrackedFiles, sourceAuditIssueCount, handoffIssueCount, plannedRows, requirements}' \
+  benchmark/build/benchmark-results/<handoff>/fresh-handoff-summary.json
+
+jq '{kind, passed, manifests}' \
+  benchmark/build/benchmark-results/<handoff>/perfect-plan/plan-freshness.json
+
+jq '{kind, passed, profiles}' \
+  benchmark/build/benchmark-results/<handoff>/impairment-plan/plan-freshness.json
+```
+
+A current-revision handoff should report `ready=true`, `issueCount=0`, source-audit ready, preflight ready, no dirty tracked Network files, `56` default curve rows, `56` raised-limiter curve rows, `9` perfect-network contention rows, and five impairment profiles each with `56/56/9` rows. The expected, manifest, and generated helper prereq roles should match: `receiver-a`, `receiver-b`, and `server`. Source audit should confirm Geyser, Cloudburst Protocol, Cloudburst Nukkit, and private CubeCraft checkouts are available with no dirty tracked files. Optional TeamZiax eBPF evidence may also be present. Because any subsequent commit changes the source-audit revision fingerprint, regenerate the handoff again from the exact checkout used for lab execution.
+
+The readiness report's `proofChecklist` JSON and Markdown sections show the required evidence chain: fresh handoff, perfect-network execution, impairment execution, and promotion. It remains intentionally `ready=false` until separate-host lab execution produces promoted perfect-network and impairment baselines.
+
+Older generated handoffs are intentionally not reusable after source or plan commits. Rerunning `check-lab-handoff.sh --require-source-audit --require-current-revision` against an older generated handoff can report `not-ready` with `handoff-source-audit-revision-mismatch` or `handoff-source-audit-sha-mismatch`, because the handoff embeds the source-audit revision and fingerprint from the checkout that created it. This is expected and useful. Before lab operators distribute commands, rerun `prepare-fresh-lab-handoff.sh` from the current checkout so source evidence, handoff generation, required preflight, freshness checks, and `fresh-handoff-summary.json` are produced together.
+
+Local placeholder host values (`127.0.0.1`, `lo`) prove planner/preflight structure only. They are not reusable lab execution handoffs, not separate-host line-rate evidence, and do not replace the lab baseline run.
+
+Before promotion, the lab output must include:
+
+- ready server and receiver prereq reports
+- strict prereq gates for clock sync, expected MTU, minimum CPU count, and no pre-existing netem qdisc
+- server and receiver host reports
+- at least two distinct captured hostnames
+- topology metadata
+- complete server and receiver artifacts
+- merged `suite-aggregate.jsonl`
+- selected `bandwidth-capacity.*` rows
+- passing `validation.json`
+- matching handoff and plan-manifest reliability metadata
+
+Promote only after validation passes:
+
+```bash
+benchmark/scripts/promote-lab-baseline.sh \
+  --input benchmark/build/benchmark-results/lab-baseline-current/combined \
+  --handoff-manifest benchmark/build/benchmark-results/lab-handoff-current/handoff-manifest.json \
+  --manifest benchmark/build/benchmark-results/lab-baseline-plan-current/curve-plan/manifest.jsonl \
+  --manifest benchmark/build/benchmark-results/lab-baseline-plan-current/curve-raised-plan/manifest.jsonl \
+  --manifest benchmark/build/benchmark-results/lab-baseline-plan-current/contention-plan/manifest.jsonl \
+  --out benchmark/build/benchmark-baselines \
+  --name lab-<date>-<topology> \
+  -- \
+  --min-iterations 3 \
+  --min-healthy-fairness 0.95 \
+  --max-healthy-send-deliver-ratio 1.2 \
+  --max-affected-send-deliver-ratio 5 \
+  --min-contention-clients 500 \
+  --min-contention-target-client-mbps 5
+```
+
+Use the promoted directory, or `benchmark/build/benchmark-baselines/latest`, as the baseline input for candidate comparisons with `--require-validation`.
+
+After the perfect-network baseline and adverse-network campaign are both promoted, run the final readiness gate:
+
+```bash
+benchmark/scripts/check-baseline-readiness.sh \
+  --handoff benchmark/build/benchmark-results/lab-handoff-<date>-<topology> \
+  --lab-baseline benchmark/build/benchmark-baselines/lab-<date>-<topology> \
+  --impairment-baseline benchmark/build/benchmark-baselines/lab-impairment-<date>-<topology> \
+  --required-min-contention-clients 500 \
+  --required-min-contention-target-client-mbps 5 \
+  --required-disappearance-modes blackhole \
+  --out benchmark/build/benchmark-results/baseline-readiness
+```
+
+The baseline is not accepted as the comparison baseline until this readiness check passes.
+Readiness also checks that the promoted artifacts have no validation or missing retry-pressure-field bypass markers, that the perfect-network baseline retained its copied handoff manifest with matching production-evidence and source-audit fingerprints, that the promoted perfect-network package still contains copied curve, raised-curve, and contention manifests plus host reports and strict ready prereq reports from separate hosts, that the promoted impairment package still contains its copied campaign manifest plus per-profile validation, aggregate, capacity, and netem status evidence, that the perfect-network validation enforced the requested measured-iteration count, contention scale, and per-client Mbps target, and that both perfect-network and impairment packages include `blackhole` disappearing-client coverage. The recommended handoff uses `3` measured iterations and `500` clients split across two receiver hosts, so keep the explicit readiness arguments above when checking the promoted baseline of record.
+It also requires the production-shape contention rows from the source audit: immediate small-packet fanout at payload `256` and `1Mbps` per client, `10ms`, `20ms`, and `50ms` batched-game-traffic rows, plus `8192` and `262144` byte resource-pack rows at `200ms`. Promoted aggregate rows must include retry-pressure send-work fields such as `undeliveredServerGbps`, `affectedUndeliveredServerGbps`, and `affectedServerDatagramsOutPerSecond`, so future candidate comparisons can detect send work consumed by impaired or disappeared clients.
+
+Current readiness audit command before lab promotion:
+
+```bash
+benchmark/scripts/check-baseline-readiness.sh \
+  --handoff benchmark/build/benchmark-results/lab-handoff-current \
+  --out benchmark/build/benchmark-results/readiness-current
+```
+
+Before separate-host lab execution and promotion, the audit should report `not-ready` with the expected missing-promoted-artifact issues: promoted lab baseline manifest, `validation.json`, `suite-aggregate.jsonl`, `bandwidth-capacity.jsonl`, impairment baseline manifest, and impairment campaign summary. After the lab campaign has been run, validated, and promoted, those issues should disappear and the same readiness gate should become the acceptance check for the baseline of record.
+
+TeamZiax VM/eBPF replay artifacts are optional companion evidence for lab captures. They help validate filter and capture-replay behavior, but they do not replace active established-channel RakNet throughput, latency, fairness, and retry-pressure measurements. See [`teamziax-vm-bench.md`](teamziax-vm-bench.md) before attaching those artifacts to a baseline package.
+
+## Adverse-Network Lab Plan
+
+The current host/NIC-level impairment campaign is generated with:
+
+```bash
+benchmark/scripts/plan-lab-impairment.sh \
+  --out benchmark/build/benchmark-results/lab-impairment-plan-current \
+  --artifact-root benchmark/build/benchmark-results/lab-impairment-current \
+  --interface <nic> \
+  --profiles perfect,near-loss,regional-loss,poor,severe \
+  --target-host-role receiver-a \
+  -- \
+  --server-host <server-ip> \
+  --curve-receiver receiver-a=1 \
+  --curve-payload-sizes 64,256,512,1200,1340,1400,262144 \
+  --contention-receiver receiver-a=250 \
+  --contention-receiver receiver-b=250 \
+  --contention-cases fanout,immediate,fairness,disappear-blackhole,batched,resource-pack \
+  --contention-payload-size 512 \
+  --per-client-mbps 5 \
+  --raised-packet-limit 100000 \
+  --raised-global-packet-limit 1000000 \
+  --max-queued-bytes 67108864 \
+  --warmup 10s \
+  --duration 60s \
+  --iterations 3 \
+  --start-delay 90s
+```
+
+The current generated artifact in this worktree is:
+
+```text
+benchmark/build/benchmark-results/lab-impairment-plan-current/
+```
+
+That plan contains five profiles:
+
+| Profile | Latency | Jitter | Loss |
+| --- | ---: | ---: | ---: |
+| `perfect` | `0ms` | `0ms` | `0%` |
+| `near-loss` | `10ms` | `2ms` | `2%` |
+| `regional-loss` | `50ms` | `5ms` | `2%` |
+| `poor` | `100ms` | `10ms` | `5%` |
+| `severe` | `200ms` | `20ms` | `10%` |
+
+Each profile schedules:
+
+- `56` default-limiter one-client bandwidth curve rows
+- `56` raised-limiter one-client bandwidth curve rows
+- `9` contention/workload rows at `500` clients split across two receiver hosts
+
+The impairment planner also writes `check-plan-freshness.sh`, `netem/<profile>-apply.sh`, `netem/<profile>-status.sh`, `netem/<profile>-clear.sh`, and `summarize-campaign.sh`. Run the campaign freshness check before starting profile workers; it now writes campaign-level `plan-freshness.json`, and each profile plan writes its own `plan-freshness.json`. Then run the netem scripts on the shaped receiver host or network namespace before and after the matching profile plan. Keep the generated `<profile>-status-*.txt` files with the copied benchmark artifacts; `validate-all.sh` requires that evidence by default. After profile merge and validation, keep `campaign-summary/impairment-summary.json`, `impairment-summary.jsonl`, and `impairment-summary.md` with the baseline package so adverse-network capacity and contention behavior are reviewed as one campaign. Campaign summary and promotion reject profile validation bypass flags and missing retry-pressure-field bypasses by default; `--allow-validation-bypasses` and `--allow-missing-retry-pressure-fields` are only for non-baseline smoke packages. Promote that campaign with `benchmark/scripts/promote-lab-impairment.sh`, then compare future candidate campaigns with `benchmark/scripts/compare-lab-impairment.sh`. The `perfect` profile is the no-impairment companion and should still capture qdisc status so later comparisons can prove the baseline host was unshaped.

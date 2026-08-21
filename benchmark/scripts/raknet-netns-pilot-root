@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ne 0 ]]; then
+  echo "This privileged pilot launcher does not accept arguments" >&2
+  exit 64
+fi
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "This launcher must run as root" >&2
+  exit 77
+fi
+
+install_root="/usr/local/libexec/raknet-netns-benchmark"
+state_root="/var/lib/raknet-netns-benchmark/runs"
+campaign="$install_root/benchmark/scripts/run-netns-pilot-campaign.sh"
+revision_file="$install_root/NETWORK_REVISION"
+result_owner="zulu"
+result_group="zulu"
+
+if [[ ! -x "$campaign" ]]; then
+  echo "Installed campaign runner is missing: $campaign" >&2
+  exit 69
+fi
+if [[ ! -s "$revision_file" ]]; then
+  echo "Installed Network revision stamp is missing: $revision_file" >&2
+  exit 69
+fi
+if ! id "$result_owner" >/dev/null 2>&1; then
+  echo "Result owner does not exist: $result_owner" >&2
+  exit 69
+fi
+
+install -d -o root -g root -m 0755 "$state_root"
+run_root="$(mktemp -d "$state_root/netns-pilot-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
+chmod 0700 "$run_root"
+
+status=0
+BENCHMARK_RUN_USER=root BENCHMARK_GIT_REVISION="$(<"$revision_file")" "$campaign" \
+  --execute \
+  --out "$run_root" \
+  --profiles perfect,near-loss,regional-loss,poor,severe,blackhole \
+  --clients 100 \
+  --affected-clients 10 \
+  --payload-size 512 \
+  --per-client-mbps 5 \
+  --warmup 5s \
+  --duration 10s \
+  --iterations 3 \
+  --start-delay 20s \
+  --start-offset 45s \
+  --netem-before-start 5s \
+  --blackhole-after 5s \
+  --direction server-to-client \
+  --reliability reliable_ordered || status=$?
+
+chown -R "$result_owner:$result_group" "$run_root"
+chmod 0755 "$run_root"
+
+echo "Pilot result root: $run_root"
+exit "$status"

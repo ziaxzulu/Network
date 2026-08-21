@@ -1,0 +1,379 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+handoff_out=""
+artifact_root=""
+source_audit_out=""
+require_sources="geyser,cloudburst-protocol,cloudburst-nukkit,cubecraft"
+include_paths=false
+dry_run=false
+skip_freshness_checks=false
+capture_args=()
+handoff_args=()
+preflight_args=()
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  benchmark/scripts/prepare-fresh-lab-handoff.sh --server-host HOST --interface NIC --expect-mtu N --expect-min-cpus N [options]
+
+Refreshes production source evidence, generates a lab handoff from that exact
+source-audit artifact, runs handoff preflight with --require-source-audit and
+--require-current-revision, and runs the generated freshness checks.
+
+Wrapper options:
+  --out DIR                         Handoff output directory.
+  --artifact-root DIR               Artifact root used by generated benchmark commands.
+  --source-audit-out DIR            Directory for source-audit.json. Default: <handoff>/production-evidence.
+  --require-sources CSV             Required source ids for capture-production-evidence.sh.
+                                    Default: geyser,cloudburst-protocol,cloudburst-nukkit,cubecraft.
+  --geyser DIR                      Geyser checkout passed to capture-production-evidence.sh.
+  --cloudburst-protocol DIR         Cloudburst Protocol checkout passed to capture-production-evidence.sh.
+  --cloudburst-nukkit DIR           Cloudburst Nukkit checkout passed to capture-production-evidence.sh.
+  --cubecraft DIR                   CubeCraft checkout passed to capture-production-evidence.sh.
+  --teamziax-ebpf DIR               TeamZiax eBPF checkout passed to capture-production-evidence.sh.
+  --include-paths                   Include local source paths in the private source audit artifact.
+  --required-min-contention-clients N       Preflight minimum contention clients. Default: check-lab-handoff default.
+  --required-min-contention-target-client-mbps N Preflight minimum per-client Mbps. Default: check-lab-handoff default.
+  --required-min-iterations N               Preflight minimum measured iterations. Default: check-lab-handoff default.
+  --required-batch-intervals-ms CSV          Preflight required batch intervals.
+  --required-resource-pack-chunk-sizes CSV   Preflight required resource-pack chunk sizes.
+  --required-resource-pack-intervals-ms CSV  Preflight required resource-pack intervals.
+  --required-disappearance-modes CSV         Preflight required disappearing-client modes.
+  --skip-freshness-checks           Do not run generated check-plan-freshness.sh scripts.
+  --dry-run                         Print the command sequence without executing it.
+  --help                            Show this help.
+
+All other options are passed through to prepare-lab-baseline-handoff.sh.
+
+Do not pass --source-audit directly; this wrapper creates it and wires it into
+the handoff so the source-audit fingerprint cannot be stale at generation time.
+USAGE
+}
+
+print_command() {
+  printf '+'
+  for arg in "$@"; do
+    printf ' %q' "$arg"
+  done
+  printf '\n'
+}
+
+run_command() {
+  print_command "$@"
+  "$@"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --out)
+      handoff_out="$2"
+      shift 2
+      ;;
+    --artifact-root)
+      artifact_root="$2"
+      shift 2
+      ;;
+    --source-audit-out)
+      source_audit_out="$2"
+      shift 2
+      ;;
+    --require-sources)
+      require_sources="$2"
+      shift 2
+      ;;
+    --geyser|--cloudburst-protocol|--cloudburst-nukkit|--cubecraft|--teamziax-ebpf|--teamziax-bedrock-ebpf-filter)
+      capture_args+=("$1" "$2")
+      shift 2
+      ;;
+    --include-paths)
+      include_paths=true
+      shift
+      ;;
+    --required-min-contention-clients|--required-min-contention-target-client-mbps|--required-min-iterations|--required-batch-intervals-ms|--required-resource-pack-chunk-sizes|--required-resource-pack-intervals-ms|--required-disappearance-modes)
+      preflight_args+=("$1" "$2")
+      shift 2
+      ;;
+    --skip-freshness-checks)
+      skip_freshness_checks=true
+      shift
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --source-audit)
+      echo "--source-audit is managed by prepare-fresh-lab-handoff.sh; use --source-audit-out if you need to control its directory" >&2
+      exit 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      handoff_args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+
+resolve_path() {
+  local path="$1"
+  if [[ "$path" == /* ]]; then
+    printf '%s\n' "$path"
+  else
+    printf '%s\n' "$repo_root/$path"
+  fi
+}
+
+if [[ -z "$handoff_out" ]]; then
+  handoff_out="$repo_root/benchmark/build/benchmark-results/lab-handoff-fresh-$timestamp"
+else
+  handoff_out="$(resolve_path "$handoff_out")"
+fi
+if [[ -z "$artifact_root" ]]; then
+  artifact_root="$repo_root/benchmark/build/benchmark-results/lab-run-fresh-$timestamp"
+else
+  artifact_root="$(resolve_path "$artifact_root")"
+fi
+if [[ -z "$source_audit_out" ]]; then
+  source_audit_out="$handoff_out/production-evidence"
+else
+  source_audit_out="$(resolve_path "$source_audit_out")"
+fi
+
+source_audit_json="$source_audit_out/source-audit.json"
+handoff_manifest_json="$handoff_out/handoff-manifest.json"
+preflight_out="$handoff_out/preflight"
+summary_json="$handoff_out/fresh-handoff-summary.json"
+
+capture_cmd=(
+  "$script_dir/capture-production-evidence.sh"
+  --out "$source_audit_out"
+  --require-sources "$require_sources"
+)
+if "$include_paths"; then
+  capture_cmd+=(--include-paths)
+fi
+capture_cmd+=("${capture_args[@]}")
+
+handoff_cmd=(
+  "$script_dir/prepare-lab-baseline-handoff.sh"
+  --out "$handoff_out"
+  --artifact-root "$artifact_root"
+  --source-audit "$source_audit_json"
+)
+handoff_cmd+=("${handoff_args[@]}")
+
+preflight_cmd=(
+  "$script_dir/check-lab-handoff.sh"
+  --handoff "$handoff_out"
+  --out "$preflight_out"
+  --require-source-audit
+  --require-current-revision
+)
+preflight_cmd+=("${preflight_args[@]}")
+
+perfect_freshness="$handoff_out/perfect-plan/check-plan-freshness.sh"
+impairment_freshness="$handoff_out/impairment-plan/check-plan-freshness.sh"
+
+if "$dry_run"; then
+  print_command "${capture_cmd[@]}"
+  print_command "${handoff_cmd[@]}"
+  print_command "${preflight_cmd[@]}"
+  if ! "$skip_freshness_checks"; then
+    print_command "$perfect_freshness"
+    print_command "$impairment_freshness"
+  fi
+  echo "Dry-run only. Re-run without --dry-run to generate and preflight the handoff."
+  exit 0
+fi
+
+mkdir -p "$handoff_out"
+run_command "${capture_cmd[@]}"
+run_command "${handoff_cmd[@]}"
+run_command "${preflight_cmd[@]}"
+
+if ! "$skip_freshness_checks"; then
+  run_command "$perfect_freshness"
+  run_command "$impairment_freshness"
+fi
+
+jq -n \
+  --arg kind "raknet-fresh-lab-handoff" \
+  --arg generatedAt "$(date -u +%Y%m%dT%H%M%SZ)" \
+  --arg handoff "$handoff_out" \
+  --arg artifactRoot "$artifact_root" \
+  --arg sourceAuditPath "$source_audit_json" \
+  --arg handoffManifestPath "$handoff_manifest_json" \
+  --arg preflightPath "$preflight_out/handoff-check.json" \
+  --arg summary "$summary_json" \
+  --slurpfile sourceAuditData "$source_audit_json" \
+  --slurpfile handoffManifestData "$handoff_manifest_json" \
+  --slurpfile preflightData "$preflight_out/handoff-check.json" \
+  '
+    ($sourceAuditData[0] // {}) as $sourceAudit |
+    ($handoffManifestData[0] // {}) as $manifest |
+    ($preflightData[0] // {}) as $preflight |
+    ($manifest.serverHost // "") as $serverHost |
+    ($manifest.interface // "") as $interface |
+    (($serverHost | test("^(localhost|127\\.|::1$)")) or ($serverHost == "")) as $loopbackServerHost |
+    (($interface == "lo") or ($interface == "lo0") or ($interface == "")) as $loopbackInterface |
+    ([]
+      + (if $loopbackServerHost then ["loopback-server-host"] else [] end)
+      + (if $loopbackInterface then ["loopback-interface"] else [] end)
+    ) as $labExecutableIssues |
+    {
+      kind: $kind,
+      generatedAt: $generatedAt,
+      ready: (($sourceAudit.ready == true) and ($preflight.ready == true)),
+      issueCount: (($sourceAudit.issueCount // 0) + ($preflight.issueCount // 0)),
+      networkRevision: ($sourceAudit.networkRevision // ""),
+      networkShortRevision: ($sourceAudit.networkShortRevision // ""),
+      networkDirtyTrackedFiles: (
+        if $sourceAudit | has("networkDirtyTrackedFiles") then
+          $sourceAudit.networkDirtyTrackedFiles
+        else
+          null
+        end
+      ),
+      sourceAuditIssueCount: ($sourceAudit.issueCount // null),
+      handoffIssueCount: ($preflight.issueCount // null),
+      productionEvidence: {
+        document: (
+          $preflight.productionEvidence.document //
+          $sourceAudit.evidenceDocument.document //
+          ""
+        ),
+        sha256: (
+          $preflight.productionEvidenceActualSha256 //
+          $preflight.productionEvidence.sha256 //
+          $sourceAudit.evidenceDocument.sha256 //
+          ""
+        )
+      },
+      plannedRows: {
+        perfectCurve: ($preflight.actualPerfectCurveRows // null),
+        perfectRaisedCurve: ($preflight.actualPerfectRaisedCurveRows // null),
+        perfectContention: ($preflight.actualPerfectContentionRows // null),
+        impairmentProfiles: ($preflight.actualImpairmentProfileRows // [])
+      },
+      requirements: {
+        expectedReliability: ($preflight.expectedReliability // ""),
+        expectedCurvePayloadSizes: ($preflight.expectedCurvePayloadSizes // []),
+        expectedCurveRatesMbps: ($preflight.expectedCurveRatesMbps // []),
+        expectedProfiles: ($preflight.expectedProfiles // []),
+        expectedContentionScenarios: ($preflight.expectedContentionScenarios // []),
+        expectedContentionClients: ($preflight.expectedContentionClients // null),
+        expectedPerClientMbps: ($preflight.expectedPerClientMbps // null),
+        expectedImmediatePerClientMbps: ($preflight.expectedImmediatePerClientMbps // null),
+        expectedIterations: ($preflight.expectedIterations // null),
+        requiredMinIterations: ($preflight.requiredMinIterations // null),
+        requiredBatchIntervalsMillis: ($preflight.requiredBatchIntervalsMillis // []),
+        requiredResourcePackPayloadSizes: ($preflight.requiredResourcePackPayloadSizes // []),
+        requiredResourcePackIntervalsMillis: ($preflight.requiredResourcePackIntervalsMillis // []),
+        requiredDisappearanceModes: ($preflight.requiredDisappearanceModes // []),
+        requiredMinContentionClients: ($preflight.requiredMinContentionClients // null),
+        requiredMinContentionTargetClientMbps: ($preflight.requiredMinContentionTargetClientMbps // null),
+        expectedMtu: ($preflight.expectedMtu // null),
+        expectedMinCpus: ($preflight.expectedMinCpus // null),
+        expectedPrereqRoles: ($preflight.expectedPrereqRoles // []),
+        helperPrereqRoles: ($preflight.helperPrereqRoles // []),
+        requireSourceAudit: ($preflight.requireSourceAudit == true),
+        requireCurrentRevision: ($preflight.requireCurrentRevision == true),
+        requireCpuPerformance: ($preflight.requireCpuPerformance == true)
+      },
+      handoff: $handoff,
+      artifactRoot: $artifactRoot,
+      executionEnvironment: {
+        serverHost: $serverHost,
+        bindHost: ($manifest.bindHost // ""),
+        port: ($manifest.port // null),
+        interface: $interface,
+        labExecutable: (($labExecutableIssues | length) == 0),
+        advisoryReasons: $labExecutableIssues,
+        advisory: (
+          if ($labExecutableIssues | length) == 0 then
+            "Handoff uses non-loopback server host and interface values; still run host prereq checks before lab execution."
+          else
+            "Handoff is structurally ready but uses local placeholder topology values; regenerate with the real server host and lab NIC before separate-host execution."
+          end
+        )
+      },
+      execution: {
+        handoffManifest: $handoffManifestPath,
+        readme: ($manifest.readme // ""),
+        artifactCollectionJson: ($manifest.artifactCollectionJson // ""),
+        artifactCollectionMd: ($manifest.artifactCollectionMd // ""),
+        prereqScript: ($manifest.prereqScript // ""),
+        promoteScript: ($manifest.promoteScript // ""),
+        perfectPlan: ($manifest.perfectPlan // ""),
+        impairmentPlan: ($manifest.impairmentPlan // ""),
+        perfectArtifacts: ($manifest.perfectArtifacts // ""),
+        impairmentArtifacts: ($manifest.impairmentArtifacts // "")
+      },
+      sourceAudit: {
+        path: $sourceAuditPath,
+        sha256: (
+          $preflight.sourceAuditActualSha256 //
+          $preflight.sourceAudit.sha256 //
+          ""
+        ),
+        ready: ($sourceAudit.ready == true),
+        issueCount: ($sourceAudit.issueCount // null),
+        networkRevision: ($sourceAudit.networkRevision // ""),
+        networkShortRevision: ($sourceAudit.networkShortRevision // ""),
+        networkDirtyTrackedFiles: (
+          if $sourceAudit | has("networkDirtyTrackedFiles") then
+            $sourceAudit.networkDirtyTrackedFiles
+          else
+            null
+          end
+        ),
+        requiredSources: ($sourceAudit.requiredSources // []),
+        sourceCount: (($sourceAudit.sources // []) | length),
+        evidenceDocument: {
+          document: (
+            $sourceAudit.evidenceDocument.document //
+            $preflight.productionEvidence.document //
+            ""
+          ),
+          sha256: (
+            $sourceAudit.evidenceDocument.sha256 //
+            $preflight.productionEvidenceActualSha256 //
+            $preflight.productionEvidence.sha256 //
+            ""
+          )
+        },
+        sources: (
+          ($sourceAudit.requiredSources // []) as $requiredSources |
+          ($sourceAudit.sources // []) | map(. as $source | {
+            id: ($source.id // ""),
+            visibility: ($source.visibility // ""),
+            role: ($source.role // ""),
+            available: ($source.available == true),
+            required: (($requiredSources | index($source.id // "")) != null),
+            shortRevision: ($source.shortRevision // ""),
+            dirtyTrackedFiles: ($source.dirtyTrackedFiles == true),
+            matrixSignal: ($source.matrixSignal // "")
+          })
+        )
+      },
+      preflight: {
+        path: $preflightPath,
+        ready: ($preflight.ready == true),
+        issueCount: ($preflight.issueCount // null),
+        issues: ($preflight.issues // [])
+      },
+      summary: $summary
+    }
+  ' >"$summary_json"
+
+echo "Fresh lab handoff: $handoff_out"
+echo "Source audit: $source_audit_json"
+echo "Preflight: $preflight_out/handoff-check.json"
+echo "Summary: $summary_json"
