@@ -319,9 +319,10 @@ but not its complete state machine:
   once over eight rounds through gains 1.25, 0.75, then 1.0. At session
   activation the controller captures the same fixed interval used by the
   scheduled send task (`RAK_FLUSH_INTERVAL` with auto-flush, otherwise the
-  10 ms maintenance tick). That task uses fixed-delay scheduling so a stalled
-  shared parent loop coalesces missed opportunities instead of replaying a
-  fixed-rate catch-up tick for every session. An idle or application-limited sender has burst
+  10 ms maintenance tick). That task schedules one absolute-phase deadline at a time: ordinary
+  tick work does not reduce the configured service rate, while a stalled shared parent loop skips
+  elapsed deadlines instead of replaying a fixed-rate catch-up tick for every session. An idle or
+  application-limited sender has burst
   capacity `max(2*MTU, min(8*MTU, pacingRate*capturedSendQuantum + MTU))`.
   While work remains continuously queued, one delayed activation may retain
   at most two send quanta of credit, still under the same absolute eight-MTU
