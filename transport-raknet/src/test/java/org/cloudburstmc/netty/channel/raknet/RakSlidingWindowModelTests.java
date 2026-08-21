@@ -1346,6 +1346,31 @@ public class RakSlidingWindowModelTests {
     }
 
     @Test
+    public void heldDelayResponseCannotApplyASecondModelOnlyWindowCollapse() {
+        RakModelCongestionController controller = learnedController(5L);
+        long now = 1_001L;
+        for (int round = 0; round < 3; round++) {
+            now = completeModelRound(controller, now, 125, 6, 5L, 10D);
+        }
+
+        Assertions.assertEquals(1L, controller.getDelayLossResponseCount());
+        Assertions.assertTrue(controller.isLossResponseHeld());
+        double heldFlight = controller.getInflightLimit();
+        Assertions.assertTrue(Double.isFinite(heldFlight));
+
+        // Age all pre-response delivery samples out of the ten-round filter using a self-clocked trickle. This
+        // used to pull cwnd to the two-MTU model target even though the DELAY epoch allowed only one 0.90 cut.
+        for (int round = 0; round < 12; round++) {
+            now = completeModelRound(controller, now, 1, 0, 5L, 5D);
+        }
+
+        Assertions.assertTrue(controller.isLossResponseHeld(),
+                "twelve clean packets are not enough to release a DELAY hold");
+        Assertions.assertEquals(heldFlight, controller.getCongestionWindow(), 0.001D,
+                "bandwidth-filter decay cannot impose a second reduction during the held DELAY epoch");
+    }
+
+    @Test
     public void delayHoldNeeds512ConsecutiveCleanPacketsAcrossLossAndPathBoundaries() {
         RakModelCongestionController controller = learnedController(5L);
         long now = 1_001L;

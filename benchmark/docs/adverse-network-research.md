@@ -357,7 +357,11 @@ Simultaneous signals use the HARD response. The controller then enters HOLD:
 further signals in the same epoch cannot reduce the window again. A DELAY
 signal seen during a HARD hold upgrades the hold to DELAY clearing semantics
 only when the bucket does not also carry a HARD signal; simultaneous signals
-retain HARD precedence.
+retain HARD precedence. While a DELAY hold remains active, its finite
+beta-reduced flight is also the model target floor: aging the pre-response
+delivery samples out of the short bandwidth filter cannot silently apply a
+second reduction. Deliberate path validation and persistent-congestion
+handling may still drain below that floor.
 Rearming is deliberately asymmetric. A HARD hold needs two complete,
 disjoint, actionable clear buckets; a generic clear bucket is either 128
 packets or 64 loss-free packets, and stable non-inflated sub-hard random loss

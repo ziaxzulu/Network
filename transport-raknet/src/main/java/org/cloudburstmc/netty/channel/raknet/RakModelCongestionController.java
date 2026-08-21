@@ -983,6 +983,14 @@ final class RakModelCongestionController {
         double target = Math.max(this.minimumCwnd, Math.min(this.maximumCwnd,
                 this.maxBandwidthBytesPerMillis * Math.max(this.minimumRttMillis, this.sendQuantumMillis)
                         * CWND_GAIN));
+        if (this.lossState == LossState.HOLD && this.lossHoldKind == LossHoldKind.DELAY
+                && Double.isFinite(this.inflightLimit)) {
+            // DELAY installs one explicit beta-reduced flight for the continuing congestion epoch. Letting the
+            // short bandwidth filter decay against that smaller self-clocked flight applies a second, hidden
+            // reduction even though HOLD deliberately forbids another loss response. Retain the installed flight
+            // as the epoch's model floor; deliberate path drains and persistent congestion still collapse below it.
+            target = Math.max(target, this.inflightLimit);
+        }
         if (this.pathState == PathState.DRAIN || this.pathState == PathState.SAMPLE) {
             target = this.minimumCwnd;
         }
