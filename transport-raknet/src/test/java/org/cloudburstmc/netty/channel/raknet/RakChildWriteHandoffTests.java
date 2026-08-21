@@ -37,6 +37,34 @@ import java.lang.reflect.Proxy;
 
 public class RakChildWriteHandoffTests {
     @Test
+    public void voidPromiseStyleWriteDrainsWithoutListenerRegistration() throws Exception {
+        EmbeddedChannel parent = new EmbeddedChannel();
+        AtomicInteger writes = new AtomicInteger();
+        AtomicInteger flushes = new AtomicInteger();
+        AtomicInteger failures = new AtomicInteger();
+        RakChildWriteHandoff handoff = handoff(parent, message -> {
+            writes.incrementAndGet();
+            ReferenceCountUtil.release(message);
+            return null;
+        }, flushes, ignored -> { }, ignored -> failures.incrementAndGet(), 16, 32);
+        try {
+            ByteBuf buffer = Unpooled.buffer(8).writeZero(8);
+            handoff.enqueue(buffer);
+            buffer.release();
+            parent.runPendingTasks();
+
+            Assertions.assertEquals(1, writes.get());
+            Assertions.assertEquals(1, flushes.get());
+            Assertions.assertEquals(0, failures.get());
+            Assertions.assertEquals(0, handoff.pendingBytes());
+        } finally {
+            handoff.close();
+            parent.runPendingTasks();
+            parent.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void largeChildQueueYieldsAfterBoundedTurnsAndPreservesOrder() throws Exception {
         EmbeddedChannel parent = new EmbeddedChannel();
         List<Integer> written = new ArrayList<>();

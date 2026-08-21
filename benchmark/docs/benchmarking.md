@@ -10,6 +10,12 @@ propagate through the channel pipeline, while the single synthetic producer can
 actually offer the configured rate instead of allocating an ignored promise for
 every payload.
 
+The transport uses the same rule for event-loop-confined RakNet session,
+datagram, and parent-handoff writes. Those internal completions are not exposed
+as application delivery acknowledgements, so allocating one promise per packet
+adds work without strengthening delivery semantics. Asynchronous failures still
+travel through Netty's `exceptionCaught` path.
+
 See [`baseline-status.md`](baseline-status.md) for the current baseline handoff state, [`baseline-matrix.md`](baseline-matrix.md) for the recommended recurring baseline matrix and current production-synthetic gaps, [`production-usage-evidence.md`](production-usage-evidence.md) for the source evidence behind the synthetic, and [`lab-baseline-runbook.md`](lab-baseline-runbook.md) for the lab workflow that captures host state, remote-worker topology, impairment profiles, and baseline-versus-candidate comparison artifacts.
 
 ## Build

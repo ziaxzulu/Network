@@ -618,7 +618,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             ByteBuf buffer = ctx.alloc().ioBuffer(ackMtu);
             buffer.writeByte(FLAG_VALID | FLAG_ACK);
             writtenAcks += RakUtils.writeAckEntries(buffer, this.outgoingAcks, ackMtu - 1);
-            ctx.write(buffer);
+            ctx.write(buffer, ctx.voidPromise());
             this.slidingWindow.onSendAck();
         }
         // }
@@ -627,7 +627,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
             ByteBuf buffer = ctx.alloc().ioBuffer(ackMtu);
             buffer.writeByte(FLAG_VALID | FLAG_NACK);
             writtenNacks += RakUtils.writeAckEntries(buffer, this.outgoingNaks, ackMtu - 1);
-            ctx.write(buffer);
+            ctx.write(buffer, ctx.voidPromise());
         }
 
         // Send packets that are stale first
@@ -1163,7 +1163,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 metrics.rakDatagramsOut(1);
             }
             this.recoveryMetrics.onDatagramSent(metrics, this.slidingWindow, datagram, sendType, time);
-            ctx.write(datagram);
+            ctx.write(datagram, ctx.voidPromise());
         } catch (RuntimeException | Error throwable) {
             if (oldIndex == -1 && reliable) {
                 RakDatagramPacket retained = sent.remove(datagram.getSequenceIndex());

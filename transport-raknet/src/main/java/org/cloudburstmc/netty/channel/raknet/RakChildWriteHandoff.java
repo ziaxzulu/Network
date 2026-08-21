@@ -161,6 +161,11 @@ final class RakChildWriteHandoff {
                 // must not cause this handoff to release the current message a second time.
                 ChannelFuture future = this.write.apply(pending.message);
                 wrote = true;
+                // A null future denotes a write made with the pipeline's reusable void promise. Such failures are
+                // propagated through exceptionCaught instead of being observed by this handoff.
+                if (future == null) {
+                    continue;
+                }
                 if (future.isDone()) {
                     if (!future.isSuccess()) {
                         failure = future.cause();

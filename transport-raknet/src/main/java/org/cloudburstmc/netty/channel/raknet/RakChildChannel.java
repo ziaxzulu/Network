@@ -87,8 +87,10 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
         this.rakPipeline.addLast(DisconnectNotificationHandler.NAME, DisconnectNotificationHandler.INSTANCE);
         this.rakPipeline.addLast(RakServerOnlineInitialHandler.NAME, new RakServerOnlineInitialHandler(this));
         this.rakPipeline.addLast(RakUnhandledMessagesQueue.NAME, new RakUnhandledMessagesQueue(this));
-        this.writeHandoff = new RakChildWriteHandoff(parent.eventLoop(),
-                message -> this.rakPipeline.write(message), this.rakPipeline::flush,
+        this.writeHandoff = new RakChildWriteHandoff(parent.eventLoop(), message -> {
+            this.rakPipeline.write(message, parent.voidPromise());
+            return null;
+        }, this.rakPipeline::flush,
                 () -> this.open && this.active && parent.isOpen(),
                 () -> this.config.getWriteBufferLowWaterMark(),
                 () -> this.config.getWriteBufferHighWaterMark(),
@@ -190,9 +192,8 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
             }
             try {
                 if (this.parent().isOpen()) {
-                    ChannelFuture future = this.rakPipeline.write(ReferenceCountUtil.retain(msg));
+                    this.rakPipeline.write(ReferenceCountUtil.retain(msg), this.parent().voidPromise());
                     in.remove();
-                    this.observeRakWrite(future);
                 } else {
                     if (exception == null) {
                         exception = new ClosedChannelException();
@@ -204,20 +205,6 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
             }
         }
         this.rakPipeline.flush();
-    }
-
-    private void observeRakWrite(ChannelFuture future) {
-        if (future.isDone()) {
-            if (!future.isSuccess()) {
-                this.handleRakWriteFailure(future.cause());
-            }
-            return;
-        }
-        future.addListener(completed -> {
-            if (!completed.isSuccess()) {
-                this.handleRakWriteFailure(completed.cause());
-            }
-        });
     }
 
     private void handleRakWriteFailure(Throwable cause) {
