@@ -321,8 +321,8 @@ but not its complete state machine:
   scheduled send task (`RAK_FLUSH_INTERVAL` with auto-flush, otherwise the
   10 ms maintenance tick). Sessions with the same event loop and interval share
   one allocation-stable scheduled task. The coordinator rotates the first
-  session each round and coalesces delayed fixed-rate callbacks once per loop,
-  rather than replaying a separate catch-up task for every session. An idle or
+  session each round and consolidates fixed-rate and catch-up scheduling at the
+  loop level, rather than maintaining a separate scheduled task per session. An idle or
   application-limited sender has burst
   capacity `max(2*MTU, min(8*MTU, pacingRate*capturedSendQuantum + MTU))`.
   While work remains continuously queued, one delayed activation may retain

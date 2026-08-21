@@ -60,17 +60,13 @@ final class RakSessionTicker {
 
     private static final class Coordinator implements Runnable {
         private final Key key;
-        private final long intervalNanos;
         private final CopyOnWriteArrayList<RegistrationImpl> registrations = new CopyOnWriteArrayList<>();
         private ScheduledFuture<?> future;
         private boolean retired;
-        private boolean hasRun;
-        private long lastRunStartedNanos;
         private int firstRegistration;
 
         private Coordinator(Key key) {
             this.key = key;
-            this.intervalNanos = TimeUnit.MILLISECONDS.toNanos(key.intervalMillis);
             key.eventLoop.terminationFuture().addListener(ignored -> this.retire());
         }
 
@@ -116,13 +112,6 @@ final class RakSessionTicker {
 
         @Override
         public void run() {
-            long startedNanos = System.nanoTime();
-            if (this.hasRun && startedNanos - this.lastRunStartedNanos < this.intervalNanos) {
-                return;
-            }
-            this.hasRun = true;
-            this.lastRunStartedNanos = startedNanos;
-
             RegistrationImpl[] snapshot = this.registrations.toArray(new RegistrationImpl[0]);
             int length = snapshot.length;
             int start = length == 0 ? 0 : Math.floorMod(this.firstRegistration++, length);
@@ -138,11 +127,6 @@ final class RakSessionTicker {
                 }
             }
 
-            long completedNanos = System.nanoTime();
-            if (completedNanos - startedNanos >= this.intervalNanos) {
-                // An overrun starts a fresh cadence. Fixed-rate catch-up callbacks remain cheap no-ops.
-                this.lastRunStartedNanos = completedNanos;
-            }
         }
     }
 
