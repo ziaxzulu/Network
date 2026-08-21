@@ -828,7 +828,8 @@ public final class RakNetBenchmarkRunner {
             return sequence;
         }
         ByteBuf payload = BenchmarkPayload.bulk(peer.channel().alloc(), benchmarkCase.payloadSize(), sequence);
-        peer.channel().writeAndFlush(BenchmarkMessages.bulk(payload, benchmarkCase.reliability()));
+        peer.channel().writeAndFlush(
+                BenchmarkMessages.bulk(payload, benchmarkCase.reliability()), peer.channel().voidPromise());
         peer.stats().addBulkSent(benchmarkCase.payloadSize());
         return sequence + 1L;
     }
@@ -843,7 +844,8 @@ public final class RakNetBenchmarkRunner {
                 sequence,
                 benchmarkCase.logicalPacketsPerBatch()
         );
-        peer.channel().writeAndFlush(BenchmarkMessages.batch(payload, benchmarkCase.reliability()));
+        peer.channel().writeAndFlush(
+                BenchmarkMessages.batch(payload, benchmarkCase.reliability()), peer.channel().voidPromise());
         peer.stats().addBulkSent(payloadSize, benchmarkCase.logicalPacketsPerBatch());
         return sequence + 1L;
     }

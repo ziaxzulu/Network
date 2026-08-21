@@ -4,6 +4,12 @@ This benchmark kit measures established RakNet channel behavior. It does not mea
 
 The primary benchmark shape is server-to-client bulk traffic with a separate small probe stream. Bulk messages retain the configured workload reliability at normal priority. Probe requests and ACKs use exactly `UNRELIABLE/HIGH` through the weighted scheduler, are isolated from reliable messages at the physical datagram boundary, and therefore consume no reliable/ordering index and are never retransmitted. The server tracks globally unique probe IDs in one active measurement window; warmup, duplicate, wrong-peer, and late prior-window ACKs cannot enter the RTT histogram.
 
+Bulk and batch producers use the channel's reusable void promise because the
+harness does not consume individual write completions. Transport failures still
+propagate through the channel pipeline, while the single synthetic producer can
+actually offer the configured rate instead of allocating an ignored promise for
+every payload.
+
 See [`baseline-status.md`](baseline-status.md) for the current baseline handoff state, [`baseline-matrix.md`](baseline-matrix.md) for the recommended recurring baseline matrix and current production-synthetic gaps, [`production-usage-evidence.md`](production-usage-evidence.md) for the source evidence behind the synthetic, and [`lab-baseline-runbook.md`](lab-baseline-runbook.md) for the lab workflow that captures host state, remote-worker topology, impairment profiles, and baseline-versus-candidate comparison artifacts.
 
 ## Build
