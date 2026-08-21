@@ -1185,6 +1185,9 @@ public class RakSlidingWindowModelTests {
         Assertions.assertTrue(controller.getCongestionWindow() >= 9D * MTU,
                 () -> "a clean accepted path must restart with a useful initial window: "
                         + controller.getCongestionWindow());
+        Assertions.assertTrue(controller.getPacingRateBytesPerMillis() >= 9D * MTU / 10D,
+                () -> "accepted-path startup must pace a useful initial flight per send quantum: "
+                        + controller.getPacingRateBytesPerMillis());
     }
 
     @Test
@@ -1974,8 +1977,8 @@ public class RakSlidingWindowModelTests {
         }
         Assertions.assertTrue(controller.isStartup(),
                 "sub-four-MTU handshake rounds cannot exhaust full-bandwidth discovery");
-        Assertions.assertTrue(controller.getPacingRateBytesPerMillis() >= 2D * MTU / 10D,
-                "startup must retain the two-MTU minimum window per send opportunity");
+        Assertions.assertTrue(controller.getPacingRateBytesPerMillis() >= 9D * MTU / 10D,
+                "startup must be able to exercise the standards-sized initial window per send opportunity");
     }
 
     @Test

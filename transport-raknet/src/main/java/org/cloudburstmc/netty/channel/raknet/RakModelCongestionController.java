@@ -1022,7 +1022,10 @@ final class RakModelCongestionController {
             rate = this.cwnd / INITIAL_RTT_MILLIS * STARTUP_PACING_GAIN;
         }
         if (this.startup || this.pathState != PathState.STEADY) {
-            rate = Math.max(rate, this.minimumCwnd / this.sendQuantumMillis);
+            // Discovery must be able to exercise the standards-sized initial window within one event-loop send
+            // quantum. The congestion window still bounds path drains and persistent congestion at two MTUs,
+            // while maximumBurstBytes independently caps any one activation at eight MTUs.
+            rate = Math.max(rate, this.initialCwnd / this.sendQuantumMillis);
         }
         return rate;
     }
