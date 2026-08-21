@@ -59,8 +59,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private final RakChannel channel;
     private final LongSupplier clock;
     private ScheduledFuture<?> tickFuture;
-    private long tickIntervalNanos;
-    private volatile boolean tickStopped = true;
 
     private volatile RakState state;
 
@@ -157,19 +155,14 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.reliableDatagramQueue = new BitQueue(512);
         this.splitPackets = new RoundRobinArray<>(256);
 
-        // After session is fully initialized, start the configured auto-flush cadence or the 10 ms maintenance
-        // tick. Compensate the next delay for ordinary tick work so it does not reduce the service rate, but wait a
-        // fresh interval after an overrun instead of replaying fixed-rate catch-up ticks for every session. The model
-        // pacer already grants bounded credit for delayed activations.
-        this.tickIntervalNanos = TimeUnit.MILLISECONDS.toNanos(flushInterval);
-        this.tickStopped = false;
-        this.tickFuture = ctx.channel().eventLoop().schedule(this::tryTick, 0, TimeUnit.NANOSECONDS);
+        // After session is fully initialized, start the configured auto-flush cadence or the 10 ms maintenance tick.
+        this.tickFuture = ctx.channel().eventLoop().scheduleAtFixedRate(this::tryTick, 0, flushInterval, TimeUnit.MILLISECONDS);
 
         ctx.fireChannelActive(); // fire channel active on rakPipeline()
     }
 
     static int captureFlushInterval(RakChannelConfig config) {
-        // channelActive captures one value for both the periodic task and controller. Later option changes do not
+        // channelActive captures one value for both the fixed-rate task and controller. Later option changes do not
         // reschedule the task and therefore must not change the controller's accounting quantum either.
         return config.isAutoFlush() ? config.getFlushInterval() : 10;
     }
@@ -186,7 +179,6 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private void closeSession() {
-        this.tickStopped = true;
         if (this.state == RakState.DISCONNECTED && this.tickFuture == null) {
             // Already deinitialized
             return;
@@ -546,30 +538,12 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     }
 
     private void tryTick() {
-        long tickStartedNanos = System.nanoTime();
         try {
             this.onTick();
         } catch (Throwable t) {
             log.error("[{}] Error while ticking RakSessionCodec state={} channelActive={}", this.getRemoteAddress(), this.state, this.channel.isActive(), t);
             this.channel.close();
-        } finally {
-            this.scheduleNextTick(tickStartedNanos);
         }
-    }
-
-    private void scheduleNextTick(long tickStartedNanos) {
-        if (this.tickStopped) {
-            return;
-        }
-        long nowNanos = System.nanoTime();
-        long delayNanos = nextTickDelayNanos(this.tickIntervalNanos, tickStartedNanos, nowNanos);
-        this.tickFuture = this.channel.eventLoop().schedule(
-                this::tryTick, delayNanos, TimeUnit.NANOSECONDS);
-    }
-
-    static long nextTickDelayNanos(long intervalNanos, long tickStartedNanos, long nowNanos) {
-        long elapsedNanos = nowNanos - tickStartedNanos;
-        return elapsedNanos >= intervalNanos ? intervalNanos : intervalNanos - elapsedNanos;
     }
 
     private void onTick() {
