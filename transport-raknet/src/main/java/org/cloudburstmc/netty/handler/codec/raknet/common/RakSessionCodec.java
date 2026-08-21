@@ -100,6 +100,9 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private int queuedBytes = 0;
     private boolean terminalDisconnectWrite;
     private final RakRecoveryMetrics recoveryMetrics = new RakRecoveryMetrics();
+    // Payload bytes retained by inbound split reassembly and ordered-reorder buffering respectively.
+    private long splitQueuedBytes = 0;
+    private long orderingQueuedBytes = 0;
 
     public RakSessionCodec(RakChannel channel) {
         this(channel, System::currentTimeMillis);
@@ -287,8 +290,13 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         }
 
         this.queuedBytes = 0;
+        this.splitQueuedBytes = 0;
+        this.orderingQueuedBytes = 0;
         if (this.slidingWindow != null) {
             this.slidingWindow.close();
+        }
+        if (log.isTraceEnabled()) {
+            log.trace("RakNet Session ({} => {}) closed!", this.channel.localAddress(), this.getRemoteAddress());
         }
         this.originalSendRollbackState = null;
     }
@@ -494,6 +502,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         if (this.orderReadIndex[packet.getOrderingChannel()] < packet.getOrderingIndex()) {
             // Not next in line so add to queue.
             binaryHeap.insert(packet.getOrderingIndex(), packet.retain());
+            this.orderingQueuedBytes += packet.getBuffer().readableBytes();
             return;
         } else if (this.orderReadIndex[packet.getOrderingChannel()] > packet.getOrderingIndex()) {
             // We already have this
@@ -510,6 +519,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 try {
                     // We got the expected packet
                     binaryHeap.remove();
+                    this.orderingQueuedBytes -= queuedPacket.getBuffer().readableBytes();
                     this.orderReadIndex[packet.getOrderingChannel()]++;
                     ctx.fireChannelRead(queuedPacket.retain());
                 } finally {
@@ -525,19 +535,47 @@ public class RakSessionCodec extends ChannelDuplexHandler {
     private EncapsulatedPacket getReassembledPacket(EncapsulatedPacket splitPacket, ByteBufAllocator alloc) {
         this.checkForClosed();
 
-        SplitPacketHelper helper = this.splitPackets.get(splitPacket.getPartId());
-        if (helper == null) {
-            this.splitPackets.set(splitPacket.getPartId(), helper = new SplitPacketHelper(splitPacket.getPartCount()));
+        int partId = splitPacket.getPartId();
+        SplitPacketHelper helper = this.splitPackets.get(partId);
+        if (helper != null && !helper.matches(splitPacket)) {
+            // Part IDs are only unique modulo the size of this array, so an unrelated split packet may
+            // hold the slot. Drop the part rather than corrupt a reassembly that is still in progress.
+            if (!helper.expired()) {
+                return null;
+            }
+            helper = null; // Released below when set() overwrites it.
         }
 
-        // Try reassembling the packet.
+        if (helper == null) {
+            this.splitPackets.set(partId, helper = new SplitPacketHelper(partId, splitPacket.getPartCount()));
+        }
+
+        // Try reassembling the packet, tracking how many bytes this session now retains for split reassembly.
+        int sizeBefore = helper.getReassembledSize();
         EncapsulatedPacket result = helper.add(splitPacket, alloc);
+        this.splitQueuedBytes += helper.getReassembledSize() - sizeBefore;
         if (result != null) {
-            // Packet reassembled. Remove the helper
-            this.splitPackets.remove(splitPacket.getPartId(), helper);
+            // Packet reassembled. Remove the helper and reclaim the bytes it held.
+            this.splitQueuedBytes -= helper.getReassembledSize();
+            this.splitPackets.remove(partId, helper);
         }
 
         return result;
+    }
+
+    /**
+     * Drops split reassemblies that have been waiting too long for their remaining parts. Without this a peer can
+     * hold parts in reassembly indefinitely: {@link SplitPacketHelper#expired()} has otherwise never been called.
+     */
+    private void evictExpiredSplitPackets() {
+        Iterator<SplitPacketHelper> iterator = this.splitPackets.iterator();
+        while (iterator.hasNext()) {
+            SplitPacketHelper helper = iterator.next();
+            if (helper != null && helper.expired()) {
+                this.splitQueuedBytes -= helper.getReassembledSize();
+                iterator.remove();
+            }
+        }
     }
 
     private void tryTick() {
@@ -558,6 +596,22 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
         if (maxQueuedBytes > 0 && totalQueuedBytes > maxQueuedBytes) {
             this.disconnect(RakDisconnectReason.QUEUE_TOO_LONG);
+            return;
+        }
+
+        // Drop stale incomplete reassemblies before enforcing the inbound split budget, so a peer that
+        // legitimately abandons a split packet does not count against a peer that is deliberately holding one.
+        this.evictExpiredSplitPackets();
+
+        int maxSplitQueuedBytes = this.channel.config().getOption(RakChannelOption.RAK_MAX_SPLIT_QUEUED_BYTES);
+        if (maxSplitQueuedBytes > 0 && this.splitQueuedBytes > maxSplitQueuedBytes) {
+            this.disconnect(RakDisconnectReason.SPLIT_QUEUE_TOO_LONG);
+            return;
+        }
+
+        int maxOrderingQueuedBytes = this.channel.config().getOption(RakChannelOption.RAK_MAX_ORDERING_QUEUED_BYTES);
+        if (maxOrderingQueuedBytes > 0 && this.orderingQueuedBytes > maxOrderingQueuedBytes) {
+            this.disconnect(RakDisconnectReason.ORDERING_QUEUE_TOO_LONG);
             return;
         }
 

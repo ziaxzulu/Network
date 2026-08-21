@@ -56,6 +56,14 @@ public interface RakChannelConfig extends ChannelConfig {
 
     int getMaxQueuedBytes();
 
+    void setMaxSplitQueuedBytes(int maxSplitQueuedBytes);
+
+    int getMaxSplitQueuedBytes();
+
+    void setMaxOrderingQueuedBytes(int maxOrderingQueuedBytes);
+
+    int getMaxOrderingQueuedBytes();
+
     /**
      * Returns the sender-side recovery policy for this session.
      */

@@ -184,10 +184,33 @@ public class RakChannelOption<T> extends ChannelOption<T> {
             valueOf(RakChannelOption.class, "RAK_TIME_BETWEEN_SEND_CONNECTION_ATTEMPTS_MS");
 
     /**
+     * The maximum number of connection attempts the client will make before failing when the server
+     * repeatedly denies the connection for a transient reason (already connected, no free incoming
+     * connections or the IP recently connected / is being rate limited).
+     */
+    public static final ChannelOption<Integer> RAK_MAX_CONNECTION_ATTEMPTS =
+            valueOf(RakChannelOption.class, "RAK_MAX_CONNECTION_ATTEMPTS");
+
+    /**
      * Maximum amount of bytes that can be queued in a single RakNet session.
      */
     public static final ChannelOption<Integer> RAK_MAX_QUEUED_BYTES =
             valueOf(RakChannelOption.class, "RAK_MAX_QUEUED_BYTES");
+
+    /**
+     * Maximum amount of payload bytes that may be retained across in-progress split packet reassemblies
+     * in a single RakNet session. The session is closed if this is exceeded. A value of 0 disables the limit.
+     */
+    public static final ChannelOption<Integer> RAK_MAX_SPLIT_QUEUED_BYTES =
+            valueOf(RakChannelOption.class, "RAK_MAX_SPLIT_QUEUED_BYTES");
+
+    /**
+     * Maximum amount of payload bytes that may be buffered across all ordering channels while waiting for a
+     * missing ordered packet in a single RakNet session. The session is closed if this is exceeded.
+     * A value of 0 disables the limit.
+     */
+    public static final ChannelOption<Integer> RAK_MAX_ORDERING_QUEUED_BYTES =
+            valueOf(RakChannelOption.class, "RAK_MAX_ORDERING_QUEUED_BYTES");
 
     /**
      * Sender-side recovery policy for a RakNet session. Defaults to {@link RakRecoveryMode#LEGACY}. When set on a
