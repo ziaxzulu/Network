@@ -19,8 +19,10 @@ package org.cloudburstmc.netty.channel.raknet.packet;
 import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.internal.ObjectPool;
 
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.RandomAccess;
 
 import static org.cloudburstmc.netty.channel.raknet.RakConstants.*;
 
@@ -29,7 +31,8 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
     private static final ObjectPool<RakDatagramPacket> RECYCLER = ObjectPool.newPool(RakDatagramPacket::new);
 
     private final ObjectPool.Handle<RakDatagramPacket> handle;
-    private final List<EncapsulatedPacket> packets = new ArrayList<>();
+    private final List<EncapsulatedPacket> packets = new PacketList();
+    private int size = RAKNET_DATAGRAM_HEADER_SIZE;
     private byte flags = FLAG_VALID | FLAG_NEEDS_B_AND_AS;
     private long sendTime;
     private long nextSend;
@@ -78,7 +81,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
     }
 
     public boolean tryAddPacket(EncapsulatedPacket packet, int mtu) {
-        if (this.getSize() + packet.getSize() > mtu - RAKNET_DATAGRAM_HEADER_SIZE) {
+        if (this.size + packet.getSize() > mtu - RAKNET_DATAGRAM_HEADER_SIZE) {
             return false;
         }
 
@@ -100,6 +103,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
             packet.release();
         }
         this.packets.clear();
+        this.size = RAKNET_DATAGRAM_HEADER_SIZE;
         this.flags = FLAG_VALID | FLAG_NEEDS_B_AND_AS;
         this.sendTime = 0;
         this.nextSend = 0;
@@ -123,11 +127,7 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
     }
 
     public int getSize() {
-        int size = RAKNET_DATAGRAM_HEADER_SIZE;
-        for (EncapsulatedPacket packet : this.packets) {
-            size += packet.getSize();
-        }
-        return size;
+        return this.size;
     }
 
     public List<EncapsulatedPacket> getPackets() {
@@ -300,5 +300,52 @@ public class RakDatagramPacket extends AbstractReferenceCounted {
                 ", retransmissionPending=" + retransmissionPending +
                 ", recoveryProbe=" + recoveryProbe +
                 '}';
+    }
+
+    /** Keeps the cached datagram size correct for callers that mutate the exposed packet list. */
+    private final class PacketList extends AbstractList<EncapsulatedPacket> implements RandomAccess {
+        private final ArrayList<EncapsulatedPacket> delegate = new ArrayList<>();
+
+        @Override
+        public EncapsulatedPacket get(int index) {
+            return this.delegate.get(index);
+        }
+
+        @Override
+        public int size() {
+            return this.delegate.size();
+        }
+
+        @Override
+        public void add(int index, EncapsulatedPacket packet) {
+            this.delegate.add(index, packet);
+            RakDatagramPacket.this.size += packet.getSize();
+            this.modCount++;
+        }
+
+        @Override
+        public EncapsulatedPacket set(int index, EncapsulatedPacket packet) {
+            EncapsulatedPacket replaced = this.delegate.set(index, packet);
+            RakDatagramPacket.this.size += packet.getSize() - replaced.getSize();
+            return replaced;
+        }
+
+        @Override
+        public EncapsulatedPacket remove(int index) {
+            EncapsulatedPacket removed = this.delegate.remove(index);
+            RakDatagramPacket.this.size -= removed.getSize();
+            this.modCount++;
+            return removed;
+        }
+
+        @Override
+        public void clear() {
+            if (this.delegate.isEmpty()) {
+                return;
+            }
+            this.delegate.clear();
+            RakDatagramPacket.this.size = RAKNET_DATAGRAM_HEADER_SIZE;
+            this.modCount++;
+        }
     }
 }

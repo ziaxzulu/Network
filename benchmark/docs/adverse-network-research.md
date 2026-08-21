@@ -324,7 +324,10 @@ but not its complete state machine:
   service at most eight rotating sessions per activation. The per-interval quota
   services every registered session once without bunching multiple shard timers
   at the same phase. This preserves I/O opportunities between bounded scheduler
-  activations while replacing one fixed-rate task per session. An idle or
+  activations while replacing one fixed-rate task per session. Datagram size is
+  maintained as packets enter or leave the datagram rather than rescanning the
+  packet list on every congestion-control query, and the event-loop-confined
+  original-send path reuses its failure-rollback snapshot. An idle or
   application-limited sender has burst
   capacity `max(2*MTU, min(8*MTU, pacingRate*capturedSendQuantum + MTU))`.
   While work remains continuously queued, one delayed activation may retain

@@ -1066,11 +1066,25 @@ final class RakModelCongestionController {
     }
 
     SendState captureSendState(RakDatagramPacket datagram) {
-        return new SendState(this.pacingTokens, this.pacingUpdatedAtMillis, this.firstSendTimeMillis,
-                this.deliveredTimeMillis,
-                datagram.getDeliveredBytesAtSend(), datagram.getDeliveredTimeAtSend(), datagram.getFirstSendTime(),
-                datagram.getModelSendTime(), datagram.getModelTxInFlight(), datagram.isModelSampleValid(),
-                datagram.isModelAppLimited(), datagram.isModelLossClassified(), this.continuouslyBacklogged);
+        SendState state = new SendState();
+        this.captureSendState(datagram, state);
+        return state;
+    }
+
+    void captureSendState(RakDatagramPacket datagram, SendState state) {
+        state.pacingTokens = this.pacingTokens;
+        state.pacingUpdatedAtMillis = this.pacingUpdatedAtMillis;
+        state.firstSendTimeMillis = this.firstSendTimeMillis;
+        state.deliveredTimeMillis = this.deliveredTimeMillis;
+        state.deliveredBytesAtSend = datagram.getDeliveredBytesAtSend();
+        state.deliveredTimeAtSend = datagram.getDeliveredTimeAtSend();
+        state.packetFirstSendTime = datagram.getFirstSendTime();
+        state.modelSendTime = datagram.getModelSendTime();
+        state.modelTxInFlight = datagram.getModelTxInFlight();
+        state.modelSampleValid = datagram.isModelSampleValid();
+        state.modelAppLimited = datagram.isModelAppLimited();
+        state.modelLossClassified = datagram.isModelLossClassified();
+        state.continuouslyBacklogged = this.continuouslyBacklogged;
     }
 
     void restoreSendState(RakDatagramPacket datagram, SendState state) {
@@ -1169,39 +1183,21 @@ final class RakModelCongestionController {
     }
 
     static final class SendState {
-        private final double pacingTokens;
-        private final long pacingUpdatedAtMillis;
-        private final long firstSendTimeMillis;
-        private final long deliveredTimeMillis;
-        private final long deliveredBytesAtSend;
-        private final long deliveredTimeAtSend;
-        private final long packetFirstSendTime;
-        private final long modelSendTime;
-        private final int modelTxInFlight;
-        private final boolean modelSampleValid;
-        private final boolean modelAppLimited;
-        private final boolean modelLossClassified;
-        private final boolean continuouslyBacklogged;
+        private double pacingTokens;
+        private long pacingUpdatedAtMillis;
+        private long firstSendTimeMillis;
+        private long deliveredTimeMillis;
+        private long deliveredBytesAtSend;
+        private long deliveredTimeAtSend;
+        private long packetFirstSendTime;
+        private long modelSendTime;
+        private int modelTxInFlight;
+        private boolean modelSampleValid;
+        private boolean modelAppLimited;
+        private boolean modelLossClassified;
+        private boolean continuouslyBacklogged;
 
-        private SendState(double pacingTokens, long pacingUpdatedAtMillis, long firstSendTimeMillis,
-                          long deliveredTimeMillis,
-                          long deliveredBytesAtSend, long deliveredTimeAtSend, long packetFirstSendTime,
-                          long modelSendTime, int modelTxInFlight, boolean modelSampleValid,
-                          boolean modelAppLimited, boolean modelLossClassified,
-                          boolean continuouslyBacklogged) {
-            this.pacingTokens = pacingTokens;
-            this.pacingUpdatedAtMillis = pacingUpdatedAtMillis;
-            this.firstSendTimeMillis = firstSendTimeMillis;
-            this.deliveredTimeMillis = deliveredTimeMillis;
-            this.deliveredBytesAtSend = deliveredBytesAtSend;
-            this.deliveredTimeAtSend = deliveredTimeAtSend;
-            this.packetFirstSendTime = packetFirstSendTime;
-            this.modelSendTime = modelSendTime;
-            this.modelTxInFlight = modelTxInFlight;
-            this.modelSampleValid = modelSampleValid;
-            this.modelAppLimited = modelAppLimited;
-            this.modelLossClassified = modelLossClassified;
-            this.continuouslyBacklogged = continuouslyBacklogged;
+        SendState() {
         }
     }
 

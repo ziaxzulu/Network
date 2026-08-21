@@ -66,6 +66,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
 
     // Reliability, Ordering, Sequencing and datagram indexes
     private RakSlidingWindow slidingWindow;
+    private RakSlidingWindow.ModelSendState originalSendRollbackState;
     private RakRecoveryMode recoveryMode = RakRecoveryMode.LEGACY;
     private RakBoundedRecovery boundedRecovery;
     private Queue<PendingRetransmission> pendingRetransmissions;
@@ -119,6 +120,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.recoveryMode = this.channel.config().getRecoveryMode();
         int flushInterval = captureFlushInterval(this.channel.config());
         this.slidingWindow = new RakSlidingWindow(mtu, this.recoveryMode, flushInterval);
+        this.originalSendRollbackState = this.slidingWindow.newModelSendState();
         this.boundedRecovery = this.recoveryMode.usesBoundedRecovery()
                 ? new RakBoundedRecovery(this.clock) : null;
         this.recoveryMetrics.initialize(this.getMetrics(), this.slidingWindow, this.currentTimeMillis());
@@ -288,6 +290,7 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         if (this.slidingWindow != null) {
             this.slidingWindow.close();
         }
+        this.originalSendRollbackState = null;
     }
 
     private void initOutgoingPacketWeights() {
@@ -1097,9 +1100,17 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         int oldIndex = datagram.getSequenceIndex();
         int oldWriteIndex = this.datagramWriteIndex;
         long oldSendOrdinalCounter = this.datagramSendOrdinal;
-        RakRecoveryMetrics.SendState oldRecoveryMetricsState = this.recoveryMetrics.captureSendState();
-        RakSlidingWindow.ModelSendState originalModelSendState = oldIndex == -1
-                ? this.slidingWindow.captureModelSendState(datagram) : null;
+        RakRecoveryMetrics.SendState oldRecoveryMetricsState = sendType == RakDatagramSendType.ORIGINAL
+                ? null : this.recoveryMetrics.captureSendState();
+        RakSlidingWindow.ModelSendState originalModelSendState = null;
+        if (oldIndex == -1) {
+            if (this.originalSendRollbackState == null) {
+                // Test harnesses and pre-activation integration paths may install the window directly.
+                this.originalSendRollbackState = this.slidingWindow.newModelSendState();
+            }
+            originalModelSendState = this.originalSendRollbackState;
+            this.slidingWindow.captureModelSendState(datagram, originalModelSendState);
+        }
         datagram.setSequenceIndex(this.datagramWriteIndex++);
         datagram.setSendOrdinal(this.datagramSendOrdinal++);
         if (oldIndex == -1 || this.recoveryMode.usesBoundedRecovery()) {
@@ -1163,7 +1174,9 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 if (this.boundedRecovery != null) {
                     this.boundedRecovery.refreshProbeDeadline(this.slidingWindow, sent.values());
                 }
-                this.recoveryMetrics.restoreSendState(oldRecoveryMetricsState);
+                if (oldRecoveryMetricsState != null) {
+                    this.recoveryMetrics.restoreSendState(oldRecoveryMetricsState);
+                }
                 this.datagramWriteIndex = oldWriteIndex;
                 this.datagramSendOrdinal = oldSendOrdinalCounter;
                 if (datagram.refCnt() > 0) {
@@ -1174,7 +1187,9 @@ public class RakSessionCodec extends ChannelDuplexHandler {
                 this.modelDatagramSamples.remove(datagram.getSequenceIndex());
                 this.modelSampleExpiries.remove(unreliableExpiry);
                 this.slidingWindow.onUnreliableSendFailed(unreliableSample);
-                this.recoveryMetrics.restoreSendState(oldRecoveryMetricsState);
+                if (oldRecoveryMetricsState != null) {
+                    this.recoveryMetrics.restoreSendState(oldRecoveryMetricsState);
+                }
                 this.datagramWriteIndex = oldWriteIndex;
                 this.datagramSendOrdinal = oldSendOrdinalCounter;
                 if (oldIndex == -1 && datagram.refCnt() > 0) {

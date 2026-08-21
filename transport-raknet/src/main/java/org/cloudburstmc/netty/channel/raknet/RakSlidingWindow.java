@@ -470,6 +470,19 @@ public class RakSlidingWindow {
                 : new ModelSendState(this.modelController.captureSendState(datagram));
     }
 
+    /** Allocates one reusable rollback snapshot for an event-loop-confined send path. */
+    public ModelSendState newModelSendState() {
+        return this.modelController == null ? ModelSendState.EMPTY
+                : new ModelSendState(new RakModelCongestionController.SendState());
+    }
+
+    /** Captures model state into a reusable event-loop-confined rollback snapshot. */
+    public void captureModelSendState(RakDatagramPacket datagram, ModelSendState state) {
+        if (this.modelController != null) {
+            this.modelController.captureSendState(datagram, state.controllerState);
+        }
+    }
+
     /** Restores a state captured by {@link #captureModelSendState(RakDatagramPacket)}. */
     public void restoreModelSendState(RakDatagramPacket datagram, ModelSendState state) {
         if (this.modelController != null && state.controllerState != null) {
