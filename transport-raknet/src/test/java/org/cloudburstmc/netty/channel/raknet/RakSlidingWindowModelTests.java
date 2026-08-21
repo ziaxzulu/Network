@@ -1145,6 +1145,49 @@ public class RakSlidingWindowModelTests {
     }
 
     @Test
+    public void hardLossDuringPathDrainCannotMakeTheProbeFloorPermanent() {
+        RakModelCongestionController controller = learnedController(5L);
+        long now = completeModelRound(controller, 1_001L, 1, 0, 100L, 100D);
+        now = completeModelRound(controller, now, 1, 0, 100L, 100D);
+        Assertions.assertEquals(2D * MTU, controller.getCongestionWindow(),
+                "the fixture must enter the intentional two-MTU path drain");
+
+        now = completeModelRound(controller, now, 10, 8, 100L, 100D);
+        now = completeModelRound(controller, now, 1, 0, 100L, 100D);
+        Assertions.assertEquals(1L, controller.getHardLossResponseCount(),
+                "hard loss remains actionable while path-delay evidence is suppressed");
+        Assertions.assertTrue(controller.getInflightLimit() >= 6D * MTU,
+                () -> "an artificial probe flight cannot install a bootstrap-deadlocking cap: "
+                        + controller.getInflightLimit());
+
+        now += 100L;
+        now = completeModelRound(controller, now, 1, 0, 100L, 100D);
+        completeModelRound(controller, now, 1, 0, 100L, 100D);
+        Assertions.assertEquals(100L, controller.getMinimumRttMillis(),
+                "the fixture must accept the stable replacement path");
+        Assertions.assertTrue(controller.getCongestionWindow() >= 6D * MTU,
+                () -> "accepted-path discovery must restart above the probe floor: "
+                        + controller.getCongestionWindow());
+    }
+
+    @Test
+    public void acceptedPathRestartsInitialWindowAfterSelfClockedProbeFloor() {
+        RakModelCongestionController controller = learnedController(5L);
+        controller.onPersistentCongestion();
+        Assertions.assertEquals(2D * MTU, controller.getCongestionWindow(),
+                "persistent congestion itself must retain the two-MTU safety collapse");
+
+        acceptStablePathStep(controller, 1_001L, 100L);
+
+        Assertions.assertEquals(0L, controller.getLossResponseCount());
+        Assertions.assertFalse(controller.isPersistentCongestion(),
+                "delivered path-validation samples prove forward progress");
+        Assertions.assertTrue(controller.getCongestionWindow() >= 9D * MTU,
+                () -> "a clean accepted path must restart with a useful initial window: "
+                        + controller.getCongestionWindow());
+    }
+
+    @Test
     public void continuousDelayQualifiedLossCutsExactlyOnceUntilTwoLossFreeClearWindows() {
         RakModelCongestionController controller = learnedController(5L);
         long now = 1_001L;

@@ -428,7 +428,15 @@ final class RakModelCongestionController {
                         ? Math.min(this.cwnd, signalPeakInFlight) : this.cwnd;
                 this.lossRecoveryCwnd = Math.max(peakBound, signalMaximumCwnd);
                 double lossBeta = hardSignal ? HARD_LOSS_BETA : DELAY_LOSS_BETA;
-                this.cwnd = Math.max(this.minimumCwnd, peakBound * lossBeta);
+                double responseBasis = peakBound;
+                if (this.startup || this.pathState == PathState.DRAIN || this.pathState == PathState.SAMPLE) {
+                    // A discovery flight can be held at two MTUs by the model itself. Turning that artificial
+                    // flight into a finite loss cap prevents the packet-timed startup rounds needed to discover
+                    // the replacement path. Keep the ordinary beta response, but apply it to at least the
+                    // standards-sized initial window while discovery owns the small flight.
+                    responseBasis = Math.max(responseBasis, this.initialCwnd);
+                }
+                this.cwnd = Math.max(this.minimumCwnd, responseBasis * lossBeta);
                 this.inflightLimit = this.cwnd;
                 if (hardSignal) {
                     this.startup = false;
@@ -765,6 +773,7 @@ final class RakModelCongestionController {
         this.minimumRttUsesLowFlightEnvelope = this.pathProbeUsesLowFlightEnvelope;
         // The new propagation delay changes the BDP. Retain the bandwidth seed and any loss cap, but restart
         // full-bandwidth discovery so a clean-handshake sample cannot declare the impaired path full prematurely.
+        this.cwnd = Math.max(this.cwnd, Math.min(this.initialCwnd, this.inflightLimit));
         this.startup = true;
         this.fullBandwidthBytesPerMillis = 0D;
         this.fullBandwidthRounds = 0;
