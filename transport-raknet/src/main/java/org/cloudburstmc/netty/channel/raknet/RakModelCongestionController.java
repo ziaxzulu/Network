@@ -856,8 +856,11 @@ final class RakModelCongestionController {
 
     private void enterRejectedPathCooldown(long nowMillis, long rttSampleMillis) {
         this.pathState = PathState.REJECTED_COOLDOWN;
-        this.pathCooldownUntilMillis = saturatingAdd(nowMillis, scaledAndClamped(rttSampleMillis,
-                PATH_COOLDOWN_RTT_MULTIPLIER, PATH_COOLDOWN_MIN_MILLIS, PATH_COOLDOWN_MAX_MILLIS));
+        // The candidate survived the suspicion phase and a deliberate drain before the known baseline disproved
+        // it. Repeating that drain on the shorter retry cooldown can keep a shallow, queued path at two MTUs for
+        // most of its useful time. Wait one complete validation horizon; a genuinely lower RTT still takes the
+        // immediate minimum-RTT branch above and cancels this cooldown.
+        this.pathCooldownUntilMillis = saturatingAdd(nowMillis, pathProbeTimeoutMillis(rttSampleMillis));
         this.pathProbeDeadlineMillis = -1L;
         this.pathLowFlightSinceMillis = -1L;
         this.resetPathSuspicion();

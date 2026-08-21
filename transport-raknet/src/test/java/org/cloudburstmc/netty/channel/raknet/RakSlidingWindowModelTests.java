@@ -1199,15 +1199,27 @@ public class RakSlidingWindowModelTests {
                 "the fixture must enter the intentional two-MTU path drain");
 
         now = completeModelRound(controller, now, 1, 0, 5L, 5D);
+        long rejectedAt = now;
         double restoredWindow = controller.getCongestionWindow();
         Assertions.assertTrue(restoredWindow > 2D * MTU,
                 "a baseline RTT observation must reject the queued-delay candidate and restore the window");
 
         now = completeModelRound(controller, now, 1, 0, 100L, 100D);
-        completeModelRound(controller, now, 1, 0, 100L, 100D);
+        now = completeModelRound(controller, now, 1, 0, 100L, 100D);
         Assertions.assertTrue(controller.getCongestionWindow() > 2D * MTU,
                 () -> "a rejected queued-delay candidate must not immediately trigger another probe drain: "
                         + controller.getCongestionWindow() + " after restoring " + restoredWindow);
+
+        now = completeModelRound(controller, rejectedAt + 1_000L, 1, 0, 100L, 100D);
+        completeModelRound(controller, now, 1, 0, 100L, 100D);
+        Assertions.assertTrue(controller.getCongestionWindow() > 2D * MTU,
+                "a disproved candidate must remain rate-limited for one complete validation horizon");
+
+        controller.transmissionAllowance(rejectedAt + 2_001L, 0);
+        now = completeModelRound(controller, rejectedAt + 2_002L, 1, 0, 100L, 100D);
+        completeModelRound(controller, now, 1, 0, 100L, 100D);
+        Assertions.assertEquals(2D * MTU, controller.getCongestionWindow(),
+                "cooldown expiry must still permit a later stable replacement-path probe");
     }
 
     @Test
