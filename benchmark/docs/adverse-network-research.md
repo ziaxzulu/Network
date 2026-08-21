@@ -319,13 +319,16 @@ but not its complete state machine:
   once over eight rounds through gains 1.25, 0.75, then 1.0. At session
   activation the controller captures the same fixed interval used by the
   scheduled send task (`RAK_FLUSH_INTERVAL` with auto-flush, otherwise the
-  10 ms maintenance tick). An idle or application-limited sender has burst
+  10 ms maintenance tick). That task uses fixed-delay scheduling so a stalled
+  shared parent loop coalesces missed opportunities instead of replaying a
+  fixed-rate catch-up tick for every session. An idle or application-limited sender has burst
   capacity `max(2*MTU, min(8*MTU, pacingRate*capturedSendQuantum + MTU))`.
   While work remains continuously queued, one delayed activation may retain
   at most two send quanta of credit, still under the same absolute eight-MTU
   ceiling; a drained sender immediately returns to the one-quantum bound. The
   0.75 drain gain is custom. Startup and path-transition pacing retain a
-  progress floor of `2*MTU/capturedSendQuantum`.
+  progress floor of `initialWindow/capturedSendQuantum`; the congestion
+  window and eight-MTU burst ceiling remain independent bounds.
   BBR draft-06 specifies a 0.90 `ProbeDown` pacing gain. This is a simplified
   capacity probe, not BBRv3 `Startup`, `Drain`, or full `ProbeBW`.
 - **Loss response.** Completed packet-timed rounds feed independent HARD and
@@ -361,7 +364,11 @@ retain HARD precedence. While a DELAY hold remains active, its finite
 beta-reduced flight is also the model target floor: aging the pre-response
 delivery samples out of the short bandwidth filter cannot silently apply a
 second reduction. Deliberate path validation and persistent-congestion
-handling may still drain below that floor.
+handling may still drain below that floor. A DELAY response also uses at least
+the standards-sized initial window as its beta basis, so a response first
+observed after the delivery model has self-clocked below that range cannot
+turn the accidental small flight into a permanent cap. HARD loss outside
+discovery continues to use its smaller observed-flight basis.
 Rearming is deliberately asymmetric. A HARD hold needs two complete,
 disjoint, actionable clear buckets; a generic clear bucket is either 128
 packets or 64 loss-free packets, and stable non-inflated sub-hard random loss

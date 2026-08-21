@@ -155,8 +155,11 @@ public class RakSessionCodec extends ChannelDuplexHandler {
         this.reliableDatagramQueue = new BitQueue(512);
         this.splitPackets = new RoundRobinArray<>(256);
 
-        // After session is fully initialized, start the configured auto-flush cadence or the 10 ms maintenance tick.
-        this.tickFuture = ctx.channel().eventLoop().scheduleAtFixedRate(this::tryTick, 0, flushInterval, TimeUnit.MILLISECONDS);
+        // After session is fully initialized, start the configured auto-flush cadence or the 10 ms maintenance
+        // tick. A delayed parent loop must coalesce missed opportunities instead of replaying fixed-rate catch-up
+        // ticks for every session; the model pacer already grants bounded credit for delayed activations.
+        this.tickFuture = ctx.channel().eventLoop().scheduleWithFixedDelay(
+                this::tryTick, 0, flushInterval, TimeUnit.MILLISECONDS);
 
         ctx.fireChannelActive(); // fire channel active on rakPipeline()
     }
