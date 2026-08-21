@@ -636,11 +636,21 @@ final class RakModelCongestionController {
                 this.minimumRttMillis = rttSampleMillis;
                 this.minimumRttTimestampMillis = nowMillis;
             }
+            if (probing) {
+                // A return to the known RTT rejects this drained candidate. Rate-limit another deliberate drain;
+                // otherwise ordinary queue oscillation can hold a healthy shallow path at two MTUs indefinitely.
+                this.enterRejectedPathCooldown(
+                        nowMillis, Math.max(rttSampleMillis, this.pathSuspectRttMillis));
+                return;
+            }
+            if (this.pathState == PathState.COOLDOWN || this.pathState == PathState.REJECTED_COOLDOWN) {
+                return;
+            }
             this.resetPathTransition(true);
             return;
         }
 
-        if (this.pathState == PathState.COOLDOWN) {
+        if (this.pathState == PathState.COOLDOWN || this.pathState == PathState.REJECTED_COOLDOWN) {
             return;
         }
         if (this.pathState == PathState.STEADY) {
@@ -795,7 +805,8 @@ final class RakModelCongestionController {
             } else {
                 this.failPathProbe(nowMillis);
             }
-        } else if (this.pathState == PathState.COOLDOWN && nowMillis >= this.pathCooldownUntilMillis) {
+        } else if ((this.pathState == PathState.COOLDOWN || this.pathState == PathState.REJECTED_COOLDOWN)
+                && nowMillis >= this.pathCooldownUntilMillis) {
             if (!this.isPathDelayEvidenceActionable()) {
                 this.invalidateLossEvidenceForPathTransition();
             }
@@ -838,6 +849,17 @@ final class RakModelCongestionController {
         if (!completedAttempt) {
             this.pathSuspectRttMillis = rttSampleMillis;
         }
+        this.resetPathSuspicion();
+        this.resetPathStepCandidate();
+        this.pathProbeUsesLowFlightEnvelope = false;
+    }
+
+    private void enterRejectedPathCooldown(long nowMillis, long rttSampleMillis) {
+        this.pathState = PathState.REJECTED_COOLDOWN;
+        this.pathCooldownUntilMillis = saturatingAdd(nowMillis, scaledAndClamped(rttSampleMillis,
+                PATH_COOLDOWN_RTT_MULTIPLIER, PATH_COOLDOWN_MIN_MILLIS, PATH_COOLDOWN_MAX_MILLIS));
+        this.pathProbeDeadlineMillis = -1L;
+        this.pathLowFlightSinceMillis = -1L;
         this.resetPathSuspicion();
         this.resetPathStepCandidate();
         this.pathProbeUsesLowFlightEnvelope = false;
@@ -899,7 +921,8 @@ final class RakModelCongestionController {
     }
 
     private boolean isPathDelayEvidenceActionable() {
-        return this.pathLossSuppressionExhausted || this.pathState == PathState.STEADY;
+        return this.pathLossSuppressionExhausted || this.pathState == PathState.STEADY
+                || this.pathState == PathState.REJECTED_COOLDOWN;
     }
 
     private void invalidateLossEvidenceForPathTransition() {
@@ -1113,7 +1136,8 @@ final class RakModelCongestionController {
         SUSPECT,
         DRAIN,
         SAMPLE,
-        COOLDOWN
+        COOLDOWN,
+        REJECTED_COOLDOWN
     }
 
     private enum LossState {
