@@ -28,10 +28,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Coalesces session maintenance onto one allocation-stable task per event loop and interval. */
+/** Coalesces session maintenance onto bounded, allocation-stable tasks per event loop and interval. */
 final class RakSessionTicker {
+    static final int MAX_SESSIONS_PER_COORDINATOR = 8;
     private static final InternalLogger log = InternalLoggerFactory.getInstance(RakSessionTicker.class);
-    private static final ConcurrentMap<Key, Coordinator> COORDINATORS = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Key, CoordinatorGroup> GROUPS = new ConcurrentHashMap<>();
 
     private RakSessionTicker() {
     }
@@ -41,31 +42,30 @@ final class RakSessionTicker {
         Objects.requireNonNull(task, "task");
         Key key = new Key(eventLoop, intervalMillis);
         while (true) {
-            Coordinator coordinator = COORDINATORS.computeIfAbsent(key, Coordinator::new);
-            Registration registration = coordinator.register(task);
+            CoordinatorGroup group = GROUPS.computeIfAbsent(key, CoordinatorGroup::new);
+            Registration registration = group.register(task);
             if (registration != null) {
                 return registration;
             }
-            COORDINATORS.remove(key, coordinator);
+            GROUPS.remove(key, group);
         }
     }
 
     static int coordinatorCount(EventLoop eventLoop, int intervalMillis) {
-        return COORDINATORS.containsKey(new Key(eventLoop, intervalMillis)) ? 1 : 0;
+        CoordinatorGroup group = GROUPS.get(new Key(eventLoop, intervalMillis));
+        return group == null ? 0 : group.coordinatorCount();
     }
 
     interface Registration {
         void cancel();
     }
 
-    private static final class Coordinator implements Runnable {
+    private static final class CoordinatorGroup {
         private final Key key;
-        private final CopyOnWriteArrayList<RegistrationImpl> registrations = new CopyOnWriteArrayList<>();
-        private ScheduledFuture<?> future;
+        private final CopyOnWriteArrayList<Coordinator> coordinators = new CopyOnWriteArrayList<>();
         private boolean retired;
-        private int firstRegistration;
 
-        private Coordinator(Key key) {
+        private CoordinatorGroup(Key key) {
             this.key = key;
             key.eventLoop.terminationFuture().addListener(ignored -> this.retire());
         }
@@ -74,16 +74,33 @@ final class RakSessionTicker {
             if (this.retired) {
                 return null;
             }
-            RegistrationImpl registration = new RegistrationImpl(this, task);
-            this.registrations.add(registration);
-            if (this.future == null) {
+            Coordinator coordinator = null;
+            for (Coordinator candidate : this.coordinators) {
+                if (candidate.registrations.size() < MAX_SESSIONS_PER_COORDINATOR) {
+                    coordinator = candidate;
+                    break;
+                }
+            }
+            if (coordinator == null) {
+                coordinator = new Coordinator();
+                this.coordinators.add(coordinator);
+            }
+
+            RegistrationImpl registration = new RegistrationImpl(this, coordinator, task);
+            coordinator.registrations.add(registration);
+            if (coordinator.future == null) {
                 try {
-                    this.future = this.key.eventLoop.scheduleAtFixedRate(
-                            this, 0, this.key.intervalMillis, TimeUnit.MILLISECONDS);
+                    coordinator.future = this.key.eventLoop.scheduleAtFixedRate(
+                            coordinator, 0, this.key.intervalMillis, TimeUnit.MILLISECONDS);
                 } catch (RuntimeException | Error throwable) {
-                    this.registrations.remove(registration);
-                    this.retired = true;
-                    COORDINATORS.remove(this.key, this);
+                    coordinator.registrations.remove(registration);
+                    if (coordinator.registrations.isEmpty()) {
+                        this.coordinators.remove(coordinator);
+                    }
+                    if (this.coordinators.isEmpty()) {
+                        this.retired = true;
+                        GROUPS.remove(this.key, this);
+                    }
                     throw throwable;
                 }
             }
@@ -91,10 +108,21 @@ final class RakSessionTicker {
         }
 
         private synchronized void unregister(RegistrationImpl registration) {
-            this.registrations.remove(registration);
-            if (this.registrations.isEmpty()) {
-                this.retire();
+            Coordinator coordinator = registration.coordinator;
+            coordinator.registrations.remove(registration);
+            if (!coordinator.registrations.isEmpty()) {
+                return;
             }
+            coordinator.retire();
+            this.coordinators.remove(coordinator);
+            if (this.coordinators.isEmpty()) {
+                this.retired = true;
+                GROUPS.remove(this.key, this);
+            }
+        }
+
+        private synchronized int coordinatorCount() {
+            return this.coordinators.size();
         }
 
         private synchronized void retire() {
@@ -102,12 +130,28 @@ final class RakSessionTicker {
                 return;
             }
             this.retired = true;
+            for (Coordinator coordinator : this.coordinators) {
+                coordinator.retire();
+            }
+            this.coordinators.clear();
+            GROUPS.remove(this.key, this);
+        }
+    }
+
+    private static final class Coordinator implements Runnable {
+        private final CopyOnWriteArrayList<RegistrationImpl> registrations = new CopyOnWriteArrayList<>();
+        private ScheduledFuture<?> future;
+        private int firstRegistration;
+
+        private Coordinator() {
+        }
+
+        private void retire() {
             if (this.future != null) {
                 this.future.cancel(false);
                 this.future = null;
             }
             this.registrations.clear();
-            COORDINATORS.remove(this.key, this);
         }
 
         @Override
@@ -131,11 +175,13 @@ final class RakSessionTicker {
     }
 
     private static final class RegistrationImpl implements Registration {
+        private final CoordinatorGroup group;
         private final Coordinator coordinator;
         private final Runnable task;
         private final AtomicBoolean cancelled = new AtomicBoolean();
 
-        private RegistrationImpl(Coordinator coordinator, Runnable task) {
+        private RegistrationImpl(CoordinatorGroup group, Coordinator coordinator, Runnable task) {
+            this.group = group;
             this.coordinator = coordinator;
             this.task = task;
         }
@@ -143,7 +189,7 @@ final class RakSessionTicker {
         @Override
         public void cancel() {
             if (this.cancelled.compareAndSet(false, true)) {
-                this.coordinator.unregister(this);
+                this.group.unregister(this);
             }
         }
     }

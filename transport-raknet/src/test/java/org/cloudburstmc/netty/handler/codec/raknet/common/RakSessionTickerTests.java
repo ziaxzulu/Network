@@ -72,4 +72,28 @@ public class RakSessionTickerTests {
             eventLoop.shutdownGracefully(0, 0, TimeUnit.MILLISECONDS).syncUninterruptibly();
         }
     }
+
+    @Test
+    public void ninthSessionStartsASecondBoundedCoordinator() {
+        DefaultEventLoop eventLoop = new DefaultEventLoop();
+        RakSessionTicker.Registration[] registrations =
+                new RakSessionTicker.Registration[RakSessionTicker.MAX_SESSIONS_PER_COORDINATOR + 1];
+        try {
+            for (int i = 0; i < registrations.length; i++) {
+                registrations[i] = RakSessionTicker.register(eventLoop, 10, () -> { });
+            }
+            Assertions.assertEquals(2, RakSessionTicker.coordinatorCount(eventLoop, 10));
+
+            registrations[registrations.length - 1].cancel();
+            registrations[registrations.length - 1] = null;
+            Assertions.assertEquals(1, RakSessionTicker.coordinatorCount(eventLoop, 10));
+        } finally {
+            for (RakSessionTicker.Registration registration : registrations) {
+                if (registration != null) {
+                    registration.cancel();
+                }
+            }
+            eventLoop.shutdownGracefully(0, 0, TimeUnit.MILLISECONDS).syncUninterruptibly();
+        }
+    }
 }
