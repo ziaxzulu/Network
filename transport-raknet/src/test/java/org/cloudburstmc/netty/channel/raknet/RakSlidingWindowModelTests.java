@@ -1371,6 +1371,29 @@ public class RakSlidingWindowModelTests {
     }
 
     @Test
+    public void delayResponseCannotFreezeAnAlreadySelfClockedSubInitialFlight() {
+        RakModelCongestionController controller = learnedController(5L);
+        long now = 1_001L;
+        for (int round = 0; round < 2_000; round++) {
+            now = completeModelRound(controller, now, 1, 0, 5L, 5D);
+        }
+        Assertions.assertTrue(controller.getCongestionWindow() < 5D * MTU,
+                () -> "the fixture must age the learned bandwidth into a small self-clocked flight: "
+                        + controller.getCongestionWindow());
+
+        for (int round = 0; round < 3; round++) {
+            now = completeModelRound(controller, now, 125, 6, 5L, 10D);
+        }
+
+        Assertions.assertEquals(1L, controller.getDelayLossResponseCount());
+        Assertions.assertTrue(controller.isLossResponseHeld());
+        Assertions.assertTrue(controller.getInflightLimit() >= 9D * MTU,
+                () -> "a DELAY hold cannot permanently cap the already-small flight at "
+                        + controller.getInflightLimit());
+        Assertions.assertEquals(controller.getInflightLimit(), controller.getCongestionWindow(), 0.001D);
+    }
+
+    @Test
     public void delayHoldNeeds512ConsecutiveCleanPacketsAcrossLossAndPathBoundaries() {
         RakModelCongestionController controller = learnedController(5L);
         long now = 1_001L;

@@ -429,11 +429,14 @@ final class RakModelCongestionController {
                 this.lossRecoveryCwnd = Math.max(peakBound, signalMaximumCwnd);
                 double lossBeta = hardSignal ? HARD_LOSS_BETA : DELAY_LOSS_BETA;
                 double responseBasis = peakBound;
-                if (this.startup || this.pathState == PathState.DRAIN || this.pathState == PathState.SAMPLE) {
+                if (!hardSignal || this.startup
+                        || this.pathState == PathState.DRAIN || this.pathState == PathState.SAMPLE) {
                     // A discovery flight can be held at two MTUs by the model itself. Turning that artificial
                     // flight into a finite loss cap prevents the packet-timed startup rounds needed to discover
-                    // the replacement path. Keep the ordinary beta response, but apply it to at least the
-                    // standards-sized initial window while discovery owns the small flight.
+                    // the replacement path. A DELAY response has the same problem after the short delivery filter
+                    // self-clocks below its useful range: its long-lived HOLD would make that accidental small
+                    // flight permanent. Keep the ordinary beta response, but apply these cases to at least the
+                    // standards-sized initial window. HARD loss outside discovery keeps its smaller observed basis.
                     responseBasis = Math.max(responseBasis, this.initialCwnd);
                 }
                 this.cwnd = Math.max(this.minimumCwnd, responseBasis * lossBeta);
