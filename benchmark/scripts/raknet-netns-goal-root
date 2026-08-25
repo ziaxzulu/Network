@@ -21,7 +21,6 @@ state_root="/var/lib/raknet-netns-benchmark"
 runs_root="$state_root/runs"
 staging_root="$state_root/staging"
 mode_file="$state_root/goal-mode"
-recovery_mode_file="$state_root/recovery-mode"
 result_owner="zulu"
 result_group="zulu"
 benchmark_user="$result_owner"
@@ -79,18 +78,6 @@ if [[ "$(stat -c %a "$mode_file")" != "644" || "$(stat -c %s "$mode_file")" -gt 
   echo "Goal mode file must be mode 0644 and no larger than 32 bytes" >&2
   exit 69
 fi
-if [[ ! -f "$recovery_mode_file" || -L "$recovery_mode_file" ]]; then
-  echo "Recovery mode file must be a regular non-symlink file: $recovery_mode_file" >&2
-  exit 69
-fi
-if [[ "$(stat -c %U:%G "$recovery_mode_file")" != "$result_owner:$result_group" ]]; then
-  echo "Recovery mode file must be owned by $result_owner:$result_group" >&2
-  exit 69
-fi
-if [[ "$(stat -c %a "$recovery_mode_file")" != "644" || "$(stat -c %s "$recovery_mode_file")" -gt 32 ]]; then
-  echo "Recovery mode file must be mode 0644 and no larger than 32 bytes" >&2
-  exit 69
-fi
 if ! runuser --user "$result_owner" -- test -d "$candidate_distribution/lib"; then
   echo "Candidate benchmark distribution is missing: $candidate_distribution" >&2
   echo "Run ./gradlew --no-daemon :benchmark:installDist as $result_owner first" >&2
@@ -106,16 +93,6 @@ case "$mode" in
     exit 64
     ;;
 esac
-recovery_mode="$(<"$recovery_mode_file")"
-case "$recovery_mode" in
-  legacy|bounded|model_based)
-    ;;
-  *)
-    echo "Unsupported recovery mode in $recovery_mode_file" >&2
-    exit 64
-    ;;
-esac
-
 install -d -o root -g root -m 0755 "$runs_root"
 install -d -o root -g root -m 0755 "$staging_root"
 exec 9>"$state_root/goal.lock"
@@ -214,7 +191,7 @@ cd "$install_root"
 jq -n \
   --arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg mode "$mode" \
-  --arg recoveryMode "$recovery_mode" \
+  --arg recoveryMode "model_based" \
   --arg candidateRevision "$candidate_revision" \
   --arg candidateSource "$candidate_distribution" \
   --arg benchmarkUser "$benchmark_user" \
@@ -251,7 +228,6 @@ run_campaign() {
       --blackhole-after 5s \
       --direction server-to-client \
       --reliability reliable_ordered \
-      --recovery-mode "$recovery_mode" \
       "$@"
 }
 

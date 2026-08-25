@@ -394,7 +394,7 @@ write_suite_aggregates() {
     --argjson stabilityThreshold "$stability_threshold_pct" \
     --argjson minimumProbeResponsesPerIteration 10 \
     --argjson minimumProbeResponseRate 0.5 \
-    --arg expectedProbeSemantics "UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples" '
+    --arg expectedProbeSemantics "RELIABLE_ORDERED/HIGH through the weighted scheduler; RTT includes ordering and loss recovery" '
     def median:
       if length == 0 then 0
       else sort as $s | $s[(length - 1) / 2 | floor]
@@ -449,7 +449,7 @@ write_suite_aggregates() {
       + (if ($rows | length) < 3 then ["insufficient-iterations"] else [] end)
       + (if $throughputSpread > $stabilityThreshold then ["throughput-spread"] else [] end)
       + (if ($p99Complete | not) then ["missing-probe-p99"] else [] end)
-      + (if (($first.probeReliability // null) != "UNRELIABLE") or (($first.probePriority // null) != "HIGH") or (($first.probeSemantics // null) != $expectedProbeSemantics) then ["invalid-probe-transport-provenance"] else [] end)
+      + (if (($first.probeReliability // null) != "RELIABLE_ORDERED") or (($first.probePriority // null) != "HIGH") or (($first.probeSemantics // null) != $expectedProbeSemantics) then ["invalid-probe-transport-provenance"] else [] end)
       + (if ($probeAckSpilloverComplete | not) then ["invalid-probe-ack-spillover"] else [] end)
       + (if $probeAckSpillover != null and $probeAckSpillover > 0 then ["probe-ack-spillover"] else [] end)
       + (if $minimumProbeResponses < $minimumProbeResponsesPerIteration then ["insufficient-probe-responses"] else [] end)
@@ -632,7 +632,7 @@ write_suite_aggregates() {
     echo
     echo "## Aggregate Stability"
     echo
-    echo "- Stability threshold: exact \`UNRELIABLE/HIGH\` probe provenance, zero active-window ACK spillover, positive delivered throughput, at least \`3\` measured iterations, at least \`10\` matching probe responses and \`50%\` bounded return in every iteration, complete p99 RTT, and at most \`$stability_threshold_pct%\` relative spread for delivered throughput or available p99 probe RTT."
+    echo "- Stability threshold: exact \`RELIABLE_ORDERED/HIGH\` probe provenance, zero active-window ACK spillover, positive delivered throughput, at least \`3\` measured iterations, at least \`10\` matching probe responses and \`50%\` bounded return in every iteration, complete p99 RTT, and at most \`$stability_threshold_pct%\` relative spread for delivered throughput or available p99 probe RTT."
     echo "- Aggregate JSONL: \`$suite_aggregate_jsonl\`"
     echo "- Aggregate CSV: \`$suite_aggregate_csv\`"
     echo

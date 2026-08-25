@@ -7,9 +7,9 @@ user from a root-owned, read-only staged distribution; it never runs as root or
 as the obsolete `rakbench` service account.
 
 The passwordless launcher accepts no arguments. A small `zulu`-owned goal-mode
-file selects one of six root-owned scenario definitions, while a second fixed
-selection file chooses the transport recovery algorithm (`legacy`, `bounded`,
-or `model_based`). Recovery defaults to `legacy`.
+file selects one of six root-owned scenario definitions. The transport
+controller is fixed to bounded recovery plus the delivery model; there is no
+runtime controller selection.
 
 | Mode | Purpose |
 | --- | --- |
@@ -44,9 +44,8 @@ sudo visudo -cf /etc/sudoers
 The installer does not edit sudoers. It installs the reviewed scripts into
 `/usr/local/libexec/raknet-netns-benchmark`, replaces the existing
 `/usr/local/sbin/raknet-netns-pilot` launcher, validates the existing `zulu`
-user and group, and creates `/var/lib/raknet-netns-benchmark/goal-mode` plus
-`/var/lib/raknet-netns-benchmark/recovery-mode`. It does not create, modify, or
-remove the old `rakbench` account if one already exists.
+user and group, and creates `/var/lib/raknet-netns-benchmark/goal-mode`. It does
+not create, modify, or remove the old `rakbench` account if one already exists.
 
 Keep the existing exact authorization:
 
@@ -66,35 +65,18 @@ invoke the fixed launcher:
 cd /home/zulu/development/ziax/Network
 ./gradlew --no-daemon :benchmark:installDist
 printf '%s\n' pilot > /var/lib/raknet-netns-benchmark/goal-mode
-printf '%s\n' legacy > /var/lib/raknet-netns-benchmark/recovery-mode
 sudo -n /usr/local/sbin/raknet-netns-pilot
 ```
 
-For a candidate campaign using the bounded recovery implementation, change only
-the recovery selection before invoking the same fixed launcher:
-
-```bash
-printf '%s\n' bounded > /var/lib/raknet-netns-benchmark/recovery-mode
-sudo -n /usr/local/sbin/raknet-netns-pilot
-```
-
-The model-based controller is selected through the same fixed, argument-free
-launcher; this does not expand the sudoers entry:
-
-```bash
-printf '%s\n' model_based > /var/lib/raknet-netns-benchmark/recovery-mode
-sudo -n /usr/local/sbin/raknet-netns-pilot
-```
-
-Use one explicit mode consistently for each side of a pairwise comparison. The
-launcher records the selected value in the goal manifest; each
-campaign plan, case manifest, and Java timeline repeats it so analysis can
-reject missing, mixed, or mislabeled results.
+For artifact-schema compatibility, the launcher records `model_based` in the
+historical `recoveryMode` provenance field. Each campaign plan, case manifest,
+and Java timeline repeats that fixed value so analysis can reject missing or
+mislabeled results; it is not a selectable runtime mode.
 
 Results are readable by `zulu` below
 `/var/lib/raknet-netns-benchmark/runs/netns-goal-<mode>-*`. Each run records the
-candidate Git revision, the exact staged-jar hashes, the selected scenario
-mode, and the selected recovery mode.
+candidate Git revision, the exact staged-jar hashes, and the selected scenario
+mode.
 Worker `timeline.jsonl` files are flushed continuously at 100-250 ms cadence;
 qdisc evidence includes millisecond apply bounds and one-second `tc -s`
 snapshots. Transition runs also record the independently scheduled blackhole and
@@ -102,16 +84,15 @@ path-restoration epochs. This preserves pre-failure retry, queue, direct-memory,
 CPU, recovery, and peer-lifecycle evidence even when a worker does not reach its
 final summary.
 Timeline schema 2 adds fixed `all`, `healthy`, and `affected` congestion-model
-aggregates. In `model_based` runs these include delivery and pacing rates,
-minimum RTT, recent loss, packet round, startup/persistent-congestion state, and
-NACK hint/reordering/validation counters. Additive schema-2 fields also retain
-the cohort total of cumulative hard-loss and delay-qualified loss responses,
+aggregates. These include delivery and pacing rates, minimum RTT, recent loss,
+packet round, startup/persistent-congestion state, and the cohort total of
+cumulative hard-loss and delay-qualified loss responses,
 with a separate observed-peer count for each counter. Per-field observed-peer
 counts and the shared oldest/latest model-snapshot epochs make partial or stale
 cohort coverage explicit. The counters identify controller reductions rather
 than raw lost datagrams and are cleared from live peer gauge state at the
-terminal recovery callback. Non-model and receiver-worker values are
-explicitly null with a reason in `metricAvailability`.
+terminal recovery callback. Receiver-worker values are explicitly null with a
+reason in `metricAvailability`.
 Server workers also record aggregate and maximum event-loop pending tasks plus
 non-blocking scheduling-lag probes. At most one probe is outstanding per event
 loop, so a stalled loop cannot make the diagnostic build an unbounded task

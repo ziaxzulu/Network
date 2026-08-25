@@ -150,12 +150,12 @@ jq -c -s \
   --argjson maxNackOutPerSecond "$max_nack_out_s" \
   --argjson minimumProbeResponsesPerIteration "$minimum_probe_responses_per_iteration" \
   --argjson minimumProbeResponseRate "$minimum_probe_response_rate" \
-  --arg expectedProbeSemantics "UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples" \
+  --arg expectedProbeSemantics "RELIABLE_ORDERED/HIGH through the weighted scheduler; RTT includes ordering and loss recovery" \
   --argjson allowUnstable "$allow_unstable_json" '
   def n($value): ($value // 0) | tonumber;
   def curve_row: ((.benchmarkName // "") | startswith("curve-"));
   def probe_evidence_available($row):
-    (($row.probeReliability // null) == "UNRELIABLE")
+    (($row.probeReliability // null) == "RELIABLE_ORDERED")
     and (($row.probePriority // null) == "HIGH")
     and (($row.probeSemantics // null) == $expectedProbeSemantics)
     and (($row.probeAckSpillover | type) == "number")
@@ -173,7 +173,7 @@ jq -c -s \
     + (if n($row.measuredIterations) < $minIterations then ["insufficient-iterations"] else [] end)
     + (if n($row.deliveredGbps) <= 0 then ["zero-delivery"] else [] end)
     + (if n($row.disconnects) > 0 then ["disconnects"] else [] end)
-    + (if (($row.probeReliability // null) != "UNRELIABLE") or (($row.probePriority // null) != "HIGH") or (($row.probeSemantics // null) != $expectedProbeSemantics) then ["invalid-probe-transport-provenance"] else [] end)
+    + (if (($row.probeReliability // null) != "RELIABLE_ORDERED") or (($row.probePriority // null) != "HIGH") or (($row.probeSemantics // null) != $expectedProbeSemantics) then ["invalid-probe-transport-provenance"] else [] end)
     + (if $row.probeAckSpillover == null then ["missing-probe-ack-spillover"] elif (($row.probeAckSpillover | type) != "number") or $row.probeAckSpillover < 0 or (($row.probeAckSpillover | floor) != $row.probeAckSpillover) then ["invalid-probe-ack-spillover"] elif $row.probeAckSpillover > 0 then ["probe-ack-spillover"] else [] end)
     + (if (($row.probeRttP99Millis | type) != "number") then ["missing-probe-p99"] else [] end)
     + (if (($row.minimumProbeResponses | type) != "number") or $row.minimumProbeResponses < $minimumProbeResponsesPerIteration then ["insufficient-probe-responses"] else [] end)

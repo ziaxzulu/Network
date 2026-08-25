@@ -452,7 +452,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("affectedUndeliveredServerGbps")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.has("affectedServerDatagramsOutPerSecond")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("probeReliability").asText()
-                .equals("UNRELIABLE")));
+                .equals("RELIABLE_ORDERED")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("probePriority").asText()
                 .equals("HIGH")));
         Assertions.assertTrue(aggregateRows.stream().allMatch(row -> row.path("probesSent").asInt() == 10));
@@ -490,8 +490,8 @@ public class BenchmarkKitTests {
         Path input = output.resolve("suite-aggregate.jsonl");
         String common = "\"summaryKind\":\"aggregate\",\"case\":\"curve\",\"clients\":1,"
                 + "\"payloadSize\":1200,\"reliability\":\"RELIABLE_ORDERED\","
-                + "\"probeReliability\":\"UNRELIABLE\",\"probePriority\":\"HIGH\","
-                + "\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\",\"measuredIterations\":3,"
+                + "\"probeReliability\":\"RELIABLE_ORDERED\",\"probePriority\":\"HIGH\","
+                + "\"probeSemantics\":\"RELIABLE_ORDERED/HIGH through the weighted scheduler; RTT includes ordering and loss recovery\",\"measuredIterations\":3,"
                 + "\"disconnects\":0,\"maxQueuedBytes\":0,\"sentToDeliveredBytesRatio\":1,"
                 + "\"nackOutPerSecond\":0,\"unstable\":false,\"unstableReasons\":[],";
         Files.writeString(input,
@@ -523,7 +523,7 @@ public class BenchmarkKitTests {
         JsonNode capacity = readJsonLines(output.resolve("bandwidth-capacity.jsonl")).get(0);
         Assertions.assertEquals("curve-valid",
                 capacity.path("selectedCandidate").path("benchmarkName").asText());
-        Assertions.assertEquals("UNRELIABLE", capacity.path("probeReliability").asText());
+        Assertions.assertEquals("RELIABLE_ORDERED", capacity.path("probeReliability").asText());
         Assertions.assertEquals("HIGH", capacity.path("probePriority").asText());
         Assertions.assertEquals("curve-valid",
                 capacity.path("bestObservedCandidate").path("benchmarkName").asText(),
@@ -2566,7 +2566,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("5ms", manifest.path("jitter").asText());
         Assertions.assertEquals("2%", manifest.path("loss").asText());
         Assertions.assertEquals("both", manifest.path("direction").asText());
-        Assertions.assertEquals("legacy", manifest.path("recoveryMode").asText());
+        Assertions.assertEquals("model_based", manifest.path("recoveryMode").asText());
         Assertions.assertTrue(manifest.path("packetLimit").isNull());
         Assertions.assertTrue(manifest.path("globalPacketLimit").isNull());
         Assertions.assertTrue(manifest.path("maxQueuedBytes").isNull());
@@ -2579,17 +2579,17 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(root.resolve("benchmark/build/install/benchmark").toString(),
                 manifest.path("benchmarkDistribution").asText());
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--clients 10"));
-        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--recovery-mode legacy"));
+        Assertions.assertFalse(manifest.path("serverArgs").asText().contains("--recovery-mode"));
         Assertions.assertTrue(manifest.path("serverArgs").asText()
                 .contains("--resource-safety-max-aggregate-queued-bytes 402653184"));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText()
                 .contains("--resource-safety-max-direct-memory-used-bytes 805306368"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--external-impairment-at-epoch-ms "));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--clients 8"));
-        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode legacy"));
+        Assertions.assertFalse(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode"));
         Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--external-impairment-at-epoch-ms "));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--clients 2"));
-        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--recovery-mode legacy"));
+        Assertions.assertFalse(manifest.path("affectedReceiverArgs").asText().contains("--recovery-mode"));
         Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--external-impairment-at-epoch-ms "));
 
         String readme = Files.readString(output.resolve("README.md"), StandardCharsets.UTF_8);
@@ -2750,12 +2750,9 @@ public class BenchmarkKitTests {
                 StandardCharsets.UTF_8);
         Assertions.assertTrue(launcher.contains("This privileged goal launcher does not accept arguments"));
         Assertions.assertTrue(launcher.contains("pilot|transition|long-hold|cap-sweep|cohort-sweep|all"));
-        Assertions.assertTrue(launcher.contains("recovery_mode_file=\"$state_root/recovery-mode\""));
-        Assertions.assertTrue(launcher.contains("legacy|bounded|model_based"));
-        Assertions.assertTrue(launcher.contains("stat -c %U:%G \"$recovery_mode_file\""));
-        Assertions.assertTrue(launcher.contains("stat -c %a \"$recovery_mode_file\""));
-        Assertions.assertTrue(launcher.contains("stat -c %s \"$recovery_mode_file\""));
-        Assertions.assertTrue(launcher.contains("--recovery-mode \"$recovery_mode\""));
+        Assertions.assertFalse(launcher.contains("recovery_mode_file"));
+        Assertions.assertFalse(launcher.contains("--recovery-mode"));
+        Assertions.assertTrue(launcher.contains("--arg recoveryMode \"model_based\""));
         Assertions.assertTrue(launcher.contains("require_trusted_path \"$launcher_path\""));
         Assertions.assertTrue(launcher.contains("flock -n 9"));
         Assertions.assertTrue(launcher.contains("timeout --signal=TERM --kill-after=30s"));
@@ -2796,14 +2793,9 @@ public class BenchmarkKitTests {
         Assertions.assertFalse(installer.contains("benchmark_home"));
         Assertions.assertFalse(installer.contains("rakbench"));
         Assertions.assertFalse(installer.contains("/etc/sudoers"));
-        Assertions.assertTrue(installer.contains("recovery_mode_file=\"$state_root/recovery-mode\""));
-        Assertions.assertTrue(installer.contains("printf 'legacy\\n' >\"$recovery_mode_file\""));
-        Assertions.assertTrue(installer.indexOf("if [[ -L \"$recovery_mode_file\" ]]")
-                < installer.indexOf("elif [[ ! -e \"$recovery_mode_file\" ]]"));
+        Assertions.assertFalse(installer.contains("recovery_mode_file"));
         Assertions.assertTrue(installer.contains(
-                "Select bounded recovery: printf '%s\\\\n' bounded > $recovery_mode_file"));
-        Assertions.assertTrue(installer.contains(
-                "Select model-based recovery: printf '%s\\\\n' model_based > $recovery_mode_file"));
+                "Transport controller: bounded recovery + delivery model (fixed)"));
 
         String documentation = Files.readString(root.resolve("benchmark/docs/netns-autonomous-goal.md"),
                 StandardCharsets.UTF_8);
@@ -2812,9 +2804,7 @@ public class BenchmarkKitTests {
         Assertions.assertTrue(documentation.contains(
                 "zulu ALL=(root) NOPASSWD: /usr/local/sbin/raknet-netns-pilot \"\""));
         Assertions.assertTrue(documentation.contains(
-                "printf '%s\\n' bounded > /var/lib/raknet-netns-benchmark/recovery-mode"));
-        Assertions.assertTrue(documentation.contains(
-                "printf '%s\\n' model_based > /var/lib/raknet-netns-benchmark/recovery-mode"));
+                "controller is fixed to bounded recovery plus the delivery model"));
     }
 
     @Test
@@ -2873,8 +2863,8 @@ public class BenchmarkKitTests {
                 + "\"probeRttP95Millis\":9,\"probeRttP99Millis\":10,\"maxQueuedBytes\":4096}";
         Files.writeString(server.resolve("summary.json"),
                 "{\"runId\":\"server-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"server\",\"recoveryMode\":\"model_based\","
-                        + "\"probeReliability\":\"UNRELIABLE\",\"probePriority\":\"HIGH\","
-                        + "\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\","
+                        + "\"probeReliability\":\"RELIABLE_ORDERED\",\"probePriority\":\"HIGH\","
+                        + "\"probeSemantics\":\"RELIABLE_ORDERED/HIGH through the weighted scheduler; RTT includes ordering and loss recovery\","
                         + "\"startAtEpochMillis\":1000,\"impairmentLatencyMillis\":0,"
                         + "\"impairmentJitterMillis\":0,\"impairmentLossPercent\":0,"
                         + "\"environment\":{\"gitRevision\":\"test-revision\"},\"iterations\":["
@@ -2889,8 +2879,8 @@ public class BenchmarkKitTests {
                 + "{\"id\":1,\"impaired\":true,\"bulkReceivedBytes\":100000}]}";
         Files.writeString(receiver.resolve("summary.json"),
                 "{\"runId\":\"receiver-run\",\"scenario\":\"multi-client-fanout\",\"role\":\"client\",\"recoveryMode\":\"model_based\","
-                        + "\"probeReliability\":\"UNRELIABLE\",\"probePriority\":\"HIGH\","
-                        + "\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\","
+                        + "\"probeReliability\":\"RELIABLE_ORDERED\",\"probePriority\":\"HIGH\","
+                        + "\"probeSemantics\":\"RELIABLE_ORDERED/HIGH through the weighted scheduler; RTT includes ordering and loss recovery\","
                         + "\"startAtEpochMillis\":1000,\"iterations\":["
                         + receiverIteration.formatted(1) + "," + receiverIteration.formatted(2) + ","
                         + receiverIteration.formatted(3) + "]}\n",
@@ -2924,7 +2914,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(5.0D, summary.path("externalImpairment").path("lossPercent").asDouble(), 0.001D);
         Assertions.assertEquals(10_000,
                 summary.path("externalImpairment").path("limitPackets").asInt());
-        Assertions.assertEquals("UNRELIABLE", summary.path("aggregate").path("probeReliability").asText());
+        Assertions.assertEquals("RELIABLE_ORDERED", summary.path("aggregate").path("probeReliability").asText());
         Assertions.assertTrue(summary.path("aggregate").path("probeTransportProvenanceValid").asBoolean());
         Assertions.assertTrue(summary.path("aggregate").path("recoveryModeProvenanceValid").asBoolean());
         Assertions.assertEquals("model_based", summary.path("aggregate").path("recoveryMode").asText());
@@ -3048,7 +3038,7 @@ public class BenchmarkKitTests {
         Files.createDirectories(missingReceiver);
         Files.writeString(missingReceiver.resolve("summary.json"),
                 Files.readString(receiver.resolve("summary.json"), StandardCharsets.UTF_8)
-                        .replace(",\"probeSemantics\":\"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples\"", ""),
+                        .replace(",\"probeSemantics\":\"RELIABLE_ORDERED/HIGH through the weighted scheduler; RTT includes ordering and loss recovery\"", ""),
                 StandardCharsets.UTF_8);
         ProcessResult missingReceiverResult = runProcess(root, Duration.ofSeconds(10),
                 "bash",
@@ -3179,7 +3169,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("severe", plan.path("profiles").get(4).path("profile").asText());
         Assertions.assertEquals("blackhole", plan.path("profiles").get(5).path("profile").asText());
         Assertions.assertEquals(10_000, plan.path("parameters").path("netemLimitPackets").asInt());
-        Assertions.assertEquals("legacy", plan.path("parameters").path("recoveryMode").asText());
+        Assertions.assertEquals("model_based", plan.path("parameters").path("recoveryMode").asText());
         Assertions.assertTrue(Files.exists(output.resolve("cases/01-perfect/manifest.json")));
         Assertions.assertTrue(Files.exists(output.resolve("cases/06-blackhole/manifest.json")));
 
@@ -3212,7 +3202,6 @@ public class BenchmarkKitTests {
                 "--blackhole-after", "100ms",
                 "--blackhole-duration", "200ms",
                 "--direction", "both",
-                "--recovery-mode", "model_based",
                 "--packet-limit", "100",
                 "--global-packet-limit", "200",
                 "--max-queued-bytes", "4096",
@@ -3250,9 +3239,9 @@ public class BenchmarkKitTests {
                 manifest.path("resourceSafetyMaxAggregateQueuedBytes").asLong());
         Assertions.assertEquals(805_306_368L,
                 manifest.path("resourceSafetyMaxDirectMemoryUsedBytes").asLong());
-        Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--recovery-mode model_based"));
-        Assertions.assertTrue(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode model_based"));
-        Assertions.assertTrue(manifest.path("affectedReceiverArgs").asText().contains("--recovery-mode model_based"));
+        Assertions.assertFalse(manifest.path("serverArgs").asText().contains("--recovery-mode"));
+        Assertions.assertFalse(manifest.path("healthyReceiverArgs").asText().contains("--recovery-mode"));
+        Assertions.assertFalse(manifest.path("affectedReceiverArgs").asText().contains("--recovery-mode"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--packet-limit 100"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--global-packet-limit 200"));
         Assertions.assertTrue(manifest.path("serverArgs").asText().contains("--max-queued-bytes 4096"));
@@ -4562,7 +4551,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("true", rows.get(0).get("batched"));
         Assertions.assertEquals("4", rows.get(0).get("logical_packets_received"));
         Assertions.assertTrue(rows.get(0).containsKey("delivered_logical_packets_s"));
-        Assertions.assertEquals("UNRELIABLE", rows.get(0).get("probe_reliability"));
+        Assertions.assertEquals("RELIABLE_ORDERED", rows.get(0).get("probe_reliability"));
         Assertions.assertEquals("HIGH", rows.get(0).get("probe_priority"));
         Assertions.assertEquals("10", rows.get(0).get("probes_sent"));
         Assertions.assertEquals("10", rows.get(0).get("probes_acked"));
@@ -4619,7 +4608,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals("curve-250_0mbps", capacity.path("selectedCandidate").path("benchmarkName").asText());
         Assertions.assertEquals(0.25D, capacity.path("selectedCandidate").path("deliveredGbps").asDouble(), 0.000001D);
         Assertions.assertEquals("curve-250_0mbps", capacity.path("bestObservedCandidate").path("benchmarkName").asText());
-        Assertions.assertEquals("UNRELIABLE", capacity.path("probeReliability").asText());
+        Assertions.assertEquals("RELIABLE_ORDERED", capacity.path("probeReliability").asText());
         Assertions.assertEquals("HIGH", capacity.path("probePriority").asText());
         Assertions.assertEquals(10, capacity.path("minimumProbeResponsesPerIteration").asInt());
         Assertions.assertEquals(0.5D, capacity.path("minimumProbeResponseRate").asDouble(), 0.000001D);
@@ -4635,7 +4624,7 @@ public class BenchmarkKitTests {
         Assertions.assertEquals(1, rows.size());
         Assertions.assertEquals("true", rows.get(0).get("selected"));
         Assertions.assertEquals("curve-250_0mbps", rows.get(0).get("selected_benchmark"));
-        Assertions.assertEquals("UNRELIABLE", rows.get(0).get("probe_reliability"));
+        Assertions.assertEquals("RELIABLE_ORDERED", rows.get(0).get("probe_reliability"));
         Assertions.assertEquals("HIGH", rows.get(0).get("probe_priority"));
         Assertions.assertEquals("1.0", rows.get(0).get("selected_probe_response_rate"));
         Assertions.assertTrue(Files.readString(directory.resolve("bandwidth-capacity.md"), StandardCharsets.UTF_8)
@@ -5585,7 +5574,7 @@ public class BenchmarkKitTests {
                 esac
 
                 cat >"$artifact/summary.json" <<JSON
-                {"runId":"$run_id","scenario":"$scenario","probeReliability":"UNRELIABLE","probePriority":"HIGH","probeSemantics":"UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples","impairmentLatencyMillis":$impairment_latency,"impairmentJitterMillis":$impairment_jitter,"impairmentLossPercent":$impairment_loss,"iterations":[$iterations]}
+                {"runId":"$run_id","scenario":"$scenario","probeReliability":"RELIABLE_ORDERED","probePriority":"HIGH","probeSemantics":"RELIABLE_ORDERED/HIGH through the weighted scheduler; RTT includes ordering and loss recovery","impairmentLatencyMillis":$impairment_latency,"impairmentJitterMillis":$impairment_jitter,"impairmentLossPercent":$impairment_loss,"iterations":[$iterations]}
                 JSON
                 printf 'mock benchmark wrote %s\\n' "$artifact"
                 """;

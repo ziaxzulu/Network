@@ -32,7 +32,7 @@ global_packet_limit=""
 max_queued_bytes=""
 workers=""
 reliability="reliable_ordered"
-recovery_mode="legacy"
+recovery_mode="model_based"
 resource_safety_max_aggregate_queued_bytes="402653184"
 resource_safety_max_direct_memory_used_bytes="805306368"
 namespace_prefix=""
@@ -89,8 +89,6 @@ Options:
   --max-queued-bytes N              Optional per-session RAK_MAX_QUEUED_BYTES override.
   --workers N                       Optional benchmark worker count.
   --reliability MODE                Reliability mode. Default: reliable_ordered.
-  --recovery-mode legacy|bounded|model_based
-                                    RakNet recovery algorithm. Default: legacy.
   --resource-safety-max-aggregate-queued-bytes N
                                     Fail if cohort queue exceeds N. Default: 402653184 (384 MiB).
   --resource-safety-max-direct-memory-used-bytes N
@@ -232,10 +230,6 @@ while [[ $# -gt 0 ]]; do
       reliability="$2"
       shift 2
       ;;
-    --recovery-mode)
-      recovery_mode="$2"
-      shift 2
-      ;;
     --resource-safety-max-aggregate-queued-bytes)
       resource_safety_max_aggregate_queued_bytes="$2"
       shift 2
@@ -343,16 +337,6 @@ case "$direction" in
     exit 2
     ;;
 esac
-recovery_mode="${recovery_mode,,}"
-case "$recovery_mode" in
-  legacy|bounded|model_based)
-    ;;
-  *)
-    echo "--recovery-mode must be legacy, bounded, or model_based" >&2
-    exit 2
-    ;;
-esac
-
 if [[ "$case_type" == "curve" && "$clients_set" == false ]]; then
   clients="1"
 fi
@@ -589,7 +573,6 @@ common_worker_args=(
   --probe-interval "$probe_interval"
   --payload-size "$payload_size"
   --reliability "$reliability"
-  --recovery-mode "$recovery_mode"
   --resource-safety-max-aggregate-queued-bytes "$resource_safety_max_aggregate_queued_bytes"
   --resource-safety-max-direct-memory-used-bytes "$resource_safety_max_direct_memory_used_bytes"
 )
@@ -726,7 +709,7 @@ cat >"$report" <<EOF
 - External blackhole at epoch ms: \`$(if [[ "$case_type" == "blackhole" ]]; then echo "$blackhole_at_ms"; else echo "not scheduled"; fi)\`
 - External recovery at epoch ms: \`$(if [[ "$recovery_at_ms" -gt 0 ]]; then echo "$recovery_at_ms"; else echo "not scheduled"; fi)\`
 - Direction: \`$direction\`
-- Recovery mode: \`$recovery_mode\`
+- Transport controller: \`bounded recovery + delivery model\`
 - Resource safety aggregate queue threshold: \`$resource_safety_max_aggregate_queued_bytes bytes\`
 - Resource safety direct-memory threshold: \`$resource_safety_max_direct_memory_used_bytes bytes\`
 - Netem queue limit: \`$netem_limit packets\`

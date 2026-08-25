@@ -98,7 +98,7 @@ public class BenchmarkTimelineTests {
 
     @Test
     public void testModelBasedTelemetryIsAggregatedByFixedCohortWithExplicitAvailability() {
-        BenchmarkConfig config = timelineConfig(null, "model_based");
+        BenchmarkConfig config = timelineConfig(null);
         BenchmarkRunResult result = new BenchmarkRunResult(
                 config, EnvironmentInfo.capture(), 1_000_000L, 1_000_000_000L);
         PeerStats healthy = peer(0, false, 100L);
@@ -151,7 +151,7 @@ public class BenchmarkTimelineTests {
 
     @Test
     public void testModelBasedTelemetryReportsPartialPeerCoverageExplicitly() {
-        BenchmarkConfig config = timelineConfig(null, "model_based");
+        BenchmarkConfig config = timelineConfig(null);
         BenchmarkRunResult result = new BenchmarkRunResult(
                 config, EnvironmentInfo.capture(), 1_000_000L, 1_000_000_000L);
         PeerStats available = peer(0, true, 100L);
@@ -188,7 +188,7 @@ public class BenchmarkTimelineTests {
 
     @Test
     public void testModelLossResponseCohortTotalsSaturate() {
-        BenchmarkConfig config = timelineConfig(null, "model_based");
+        BenchmarkConfig config = timelineConfig(null);
         BenchmarkRunResult result = new BenchmarkRunResult(
                 config, EnvironmentInfo.capture(), 1_000_000L, 1_000_000_000L);
         PeerStats first = peer(0, true, 100L);
@@ -214,7 +214,7 @@ public class BenchmarkTimelineTests {
 
     @Test
     public void testAutomaticSampleTimestampFollowsConcurrentModelSnapshot() {
-        BenchmarkConfig config = timelineConfig(null, "model_based");
+        BenchmarkConfig config = timelineConfig(null);
         BenchmarkRunResult result = new BenchmarkRunResult(config, EnvironmentInfo.capture());
         PeerStats peer = peer(0, true, 100L);
         java.util.concurrent.atomic.AtomicLong observedAt = new java.util.concurrent.atomic.AtomicLong();
@@ -292,9 +292,10 @@ public class BenchmarkTimelineTests {
                 sample.metricAvailability().usefulDeliveryCounters());
         Assertions.assertTrue(sample.metricAvailability().unavailableFields()
                 .contains("cohort.usefulReceivedBytes"));
-        Assertions.assertEquals("not-configured-recovery-mode",
+        Assertions.assertEquals("available",
                 sample.metricAvailability().congestionModelState());
-        Assertions.assertNull(sample.all().congestionModel());
+        Assertions.assertNotNull(sample.all().congestionModel());
+        Assertions.assertEquals(0, sample.all().congestionModel().observedPeers());
         Assertions.assertTrue(sample.runtime().heapUsedBytes() > 0L);
     }
 
@@ -595,10 +596,6 @@ public class BenchmarkTimelineTests {
     }
 
     private static BenchmarkConfig timelineConfig(Path output) {
-        return timelineConfig(output, "legacy");
-    }
-
-    private static BenchmarkConfig timelineConfig(Path output, String recoveryMode) {
         List<String> arguments = new java.util.ArrayList<>(List.of(
                 "baseline-bandwidth",
                 "--role", "server",
@@ -609,8 +606,7 @@ public class BenchmarkTimelineTests {
                 "--external-blackhole-at-epoch-ms", "1000400",
                 "--external-recovery-at-epoch-ms", "1000600",
                 "--timeline-sample-interval", "200ms",
-                "--run-id", "timeline-unit",
-                "--recovery-mode", recoveryMode
+                "--run-id", "timeline-unit"
         ));
         if (output != null) {
             arguments.add("--out");

@@ -224,16 +224,14 @@ Cloudflare's death-spiral bug is a warning that any controller depends on the
 exact meaning and timing of send, acknowledgement, idle, and recovery
 callbacks.
 
-## Selected experimental implementation
+## Selected implementation
 
-There are now two opt-in sender policies beside the default
-`RakRecoveryMode.LEGACY`. `BOUNDED` retains the loss-based window while bounding
-NACK and PTO recovery. `MODEL_BASED` reuses those recovery invariants and adds
-an experimental delivery model and sender pacer. Applications select either
-through `RakChannelOption.RAK_RECOVERY_MODE`. Neither option changes a RakNet
-packet or handshake, so both remain wire-compatible with existing peers.
+RakNet now has one sender policy: bounded NACK/PTO recovery combined with the
+delivery model and sender pacer. There is no channel option or legacy runtime
+branch. The implementation does not change a RakNet packet or handshake, so it
+remains wire-compatible with existing peers.
 
-### Recovery foundation shared with `BOUNDED`
+### Bounded recovery foundation
 
 The model does not bypass the earlier safety work:
 
@@ -246,7 +244,7 @@ The model does not bypass the earlier safety work:
   hole;
 - a PTO selects at most one oldest attempt and retires that physical attempt
   from flight without treating the timeout itself as congestion loss; a
-  validated NACK still classifies the attempt exactly once. Consecutive
+  NACK still classifies the attempt exactly once. Consecutive
   no-progress PTOs back off to at most eight seconds, the third due probe
   invokes the persistent no-progress reset, and sub-10% timer jitter reduces
   cohort synchronization; and
@@ -256,32 +254,20 @@ The model does not bypass the earlier safety work:
 These are recovery invariants, not evidence that the selected congestion model
 is effective.
 
-### Why a RakNet NACK needs a reordering window
+### Why a RakNet NACK recovers immediately without collapsing the path
 
-A RakNet receiver emits a NACK when it observes a sequence gap. Under variable
-delay, a later datagram can overtake an earlier one, so the gap proves only
-that the earlier datagram has not arrived *yet*. Treating every NACK as
-immediate physical loss converts ordinary jitter into spurious retransmission,
-false loss samples, repeated window reduction, and avoidable reliable traffic.
+A RakNet receiver emits a NACK when it observes a sequence gap. For
+latency-sensitive reliable-ordered game traffic, waiting 50-200 ms to validate
+that hint directly extends head-of-line blocking. A NACK therefore makes the
+missing datagram immediately eligible for bounded retransmission. A late ACK
+can still cancel queued recovery before handoff.
 
-`MODEL_BASED` therefore keeps the NACK as a prompt recovery hint but delays the
-loss declaration. The validation window is one quarter of filtered minimum
-RTT, clamped to 50-200 ms. The attempt becomes eligible no earlier than both
-`NACK time + window` and `attempt send time + minRTT + window`; a late ACK
-before that deadline cancels recovery and is recorded as resolved reordering.
-Before a model minRTT exists, the calculation uses the smoothed RTT estimate.
-Before either estimate exists, it uses a 50 ms window and a 200 ms RTT
-reference for the attempt-age leg, so the initial deadline is the later of
-`NACK time + 50 ms` and `attempt send time + 250 ms`.
-
-The one-quarter-minRTT starting point is borrowed from
-[RFC 8985 RACK](https://www.rfc-editor.org/rfc/rfc8985.html), which explicitly
-uses a bounded reordering window to reduce spurious loss detection. RakNet does
-not have TCP SACK/DSACK, so this prototype does **not** copy RACK's DSACK-driven
-adaptation or claim equivalent loss inference. The 50 ms floor is a deliberate
-starting guard against the observed case where a clean low-latency handshake
-was followed by a much more jittery path; real campaigns must calibrate the
-latency/retransmission tradeoff.
+The controller separates recovery urgency from congestion response. It records
+the loss once, but an isolated lost packet does not reduce the congestion
+window. Window reduction requires aggregate hard-loss or delay-qualified loss
+evidence; repeated backed-off PTOs without progress still invoke the two-MTU
+persistent-congestion reset. This accepts an occasional duplicate transmission
+to avoid imposing an artificial recovery delay on a good client.
 
 ### Delivery-rate, pacing, minRTT, and BDP model
 
@@ -486,26 +472,23 @@ persistent-congestion conformance.
 
 ### Observability and current status
 
-Existing recovery callbacks expose send reason, attempt, ACK progress,
-congestion window, physical flight, RTT, timeout, and lifecycle. Model sessions
-add filtered delivery rate, pacing rate, minRTT, recent round loss, packet
-round, startup, and persistent-congestion state, plus counts and delays for
-NACK hints, late-ACK reordering resolutions, and validated loss. Exporters must
-aggregate per-channel state into fixed cohorts rather than peer labels.
+Recovery callbacks expose send reason, attempt, ACK progress, congestion
+window, physical flight, RTT, timeout, and lifecycle. Controller state adds
+filtered delivery rate, pacing rate, minRTT, recent round loss, packet round,
+startup, and persistent-congestion state. Exporters must aggregate per-channel
+state into fixed cohorts rather than peer labels.
 
 Deterministic transport tests exercise rate sampling, pacing bounds,
-long-running phase-shifted periodic loss, reordering transitions, capacity
+long-running phase-shifted periodic loss, immediate NACK recovery, capacity
 step-up, idle restart, path-step rejection/acceptance, persistent no-progress,
-callback failure rollback, and buffer ownership. They validate invariants only. No
-external-qdisc A/B campaign has yet established `MODEL_BASED` throughput,
-fairness, amplification, queue bounds, CPU cost, handover recovery, or
-disappearance behavior. Benchmark-mode/provenance integration and repeated
-real campaigns are still required before any performance claim or default-mode
-change.
+callback failure rollback, and buffer ownership. They validate invariants only.
+Historical external-qdisc campaigns are useful clues, but the single-controller
+candidate still requires repeated good-path and path-transition campaigns before
+production performance claims.
 
 ### What was deliberately not implemented
 
-`MODEL_BASED` is deliberately not called BBR. It does not implement the BBRv3
+The controller is deliberately not called BBR. It does not implement the BBRv3
 state machine, `Drain`, the complete `ProbeBW` phases, standard `ProbeRTT`, ACK
 aggregation compensation, ECN, loss-bound undo, policer handling, or the
 draft's full validation envelope. It also does not add QUIC acknowledgement
@@ -550,26 +533,28 @@ put on the wire and therefore cannot be recovered by NACK or PTO. The RakNet
 [reference implementation](https://github.com/facebookarchive/RakNet/blob/1a169895a900c9fc4841c556e16514182b75faf8/Source/ReliabilityLayer.cpp#L3880-L3903)
 instead derives the scheduling floor from the actual least-weighted queue entry
 and advances the selected priority on every nonempty enqueue. That prerequisite
-was repaired before `MODEL_BASED` was added, and benchmark probes were moved
-outside the workload's ordered stream. The sender now stores those monotonic
-weights in four FIFO priority lanes and selects the least-weighted lane head,
+was repaired before the delivery model was added. The current benchmark probe
+intentionally shares the reliable-ordered path so its RTT includes recovery and
+head-of-line effects. The sender now stores those monotonic weights in four FIFO
+priority lanes and selects the least-weighted lane head,
 preserving the repaired scheduling rule without a binary-heap operation for
 every queued packet. New campaigns must preserve both controls before recovery
 or congestion-control conclusions are drawn.
 
 The benchmark requires the same launcher-recorded source revision and staged
-distribution manifest for both sides of the A/B comparison and records
-`legacy`, `bounded`, or `model_based` in the goal manifest, campaign plan, case
+distribution manifest for both sides of a comparison. For compatibility with
+the existing artifact schema, it records the fixed value `model_based` in the
+historical `recoveryMode` field of the goal manifest, campaign plan, case
 manifest, every server and receiver timeline record, CSV, JSON, and Markdown
 output. Every
 merged worker must report the same composite revision. The fail-closed analyzer
-treats the explicitly selected pair of recovery modes as the only intentional
-configuration difference and rejects missing, mixed, stale, partial, or
-mislabeled candidate evidence. Because the temporary jar stage is removed after
+treats the explicitly selected historical comparison labels as provenance and
+rejects missing, mixed, stale, partial, or mislabeled candidate evidence.
+Because the temporary jar stage is removed after
 execution, this is reconciliation within the root-owned launcher/evidence trust
 boundary rather than post-run cryptographic attestation of the executed
 classpath. The trusted launcher must still be reinstalled before external
-`model_based` campaigns; until then, model runs remain development evidence.
+campaigns using this build; until then, runs remain development evidence.
 
 ## What not to copy blindly from QUIC
 

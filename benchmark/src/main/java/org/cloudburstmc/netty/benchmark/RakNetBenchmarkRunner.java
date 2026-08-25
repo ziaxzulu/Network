@@ -434,7 +434,6 @@ public final class RakNetBenchmarkRunner {
                         ch.pipeline().addLast(new ServerProbeAckHandler(assignedPeer, probeTracker));
                     }
                 });
-        configureServerRecoveryMode(bootstrap, config);
         if (config.packetLimit() > 0) {
             bootstrap.option(RakChannelOption.RAK_PACKET_LIMIT, config.packetLimit());
         }
@@ -491,18 +490,9 @@ public final class RakNetBenchmarkRunner {
                         ch.pipeline().addLast(new ClientReceiverHandler(peer, connectedLatch));
                     }
                 });
-        configureClientRecoveryMode(bootstrap, config);
         Channel channel = bootstrap.connect(serverAddress).awaitUninterruptibly().channel();
         channel.closeFuture().addListener(ignored -> peer.addDisconnect());
         return new ClientConnection(channel, blackhole, impairment);
-    }
-
-    static void configureServerRecoveryMode(ServerBootstrap bootstrap, BenchmarkConfig config) {
-        bootstrap.option(RakChannelOption.RAK_RECOVERY_MODE, config.recoveryMode());
-    }
-
-    static void configureClientRecoveryMode(Bootstrap bootstrap, BenchmarkConfig config) {
-        bootstrap.option(RakChannelOption.RAK_RECOVERY_MODE, config.recoveryMode());
     }
 
     private static boolean shouldInstallBlackhole(BenchmarkCase benchmarkCase, PeerStats peer) {

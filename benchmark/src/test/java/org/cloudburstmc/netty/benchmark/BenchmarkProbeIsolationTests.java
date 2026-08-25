@@ -49,7 +49,7 @@ public class BenchmarkProbeIsolationTests {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @Test
-    public void probeAndAckDoNotConsumeBulkReliabilityOrOrderingIndices() throws Exception {
+    public void probeAndAckShareReliableOrderedIndicesWithGameTraffic() throws Exception {
         RakSessionCodec codec = codec();
         List<RakMessage> messages = new ArrayList<>();
         List<EncapsulatedPacket> packets = new ArrayList<>();
@@ -66,16 +66,20 @@ public class BenchmarkProbeIsolationTests {
             messages.add(probe);
             EncapsulatedPacket encodedProbe = encode(codec, probe);
             packets.add(encodedProbe);
-            Assertions.assertEquals(RakReliability.UNRELIABLE, encodedProbe.getReliability());
-            assertWriteIndices(codec, 1, 1);
+            Assertions.assertEquals(RakReliability.RELIABLE_ORDERED, encodedProbe.getReliability());
+            Assertions.assertEquals(1, encodedProbe.getReliabilityIndex());
+            Assertions.assertEquals(1, encodedProbe.getOrderingIndex());
+            assertWriteIndices(codec, 2, 2);
 
             RakMessage ack = BenchmarkMessages.probeAck(
                     BenchmarkPayload.probeAck(UnpooledByteBufAllocator.DEFAULT, 2L, 3L));
             messages.add(ack);
             EncapsulatedPacket encodedAck = encode(codec, ack);
             packets.add(encodedAck);
-            Assertions.assertEquals(RakReliability.UNRELIABLE, encodedAck.getReliability());
-            assertWriteIndices(codec, 1, 1);
+            Assertions.assertEquals(RakReliability.RELIABLE_ORDERED, encodedAck.getReliability());
+            Assertions.assertEquals(2, encodedAck.getReliabilityIndex());
+            Assertions.assertEquals(2, encodedAck.getOrderingIndex());
+            assertWriteIndices(codec, 3, 3);
 
             RakMessage secondBulk = BenchmarkMessages.bulk(
                     BenchmarkPayload.bulk(UnpooledByteBufAllocator.DEFAULT, 64, 4L),
@@ -83,10 +87,10 @@ public class BenchmarkProbeIsolationTests {
             messages.add(secondBulk);
             EncapsulatedPacket encodedSecondBulk = encode(codec, secondBulk);
             packets.add(encodedSecondBulk);
-            Assertions.assertEquals(1, encodedSecondBulk.getReliabilityIndex());
-            Assertions.assertEquals(1, encodedSecondBulk.getOrderingIndex());
+            Assertions.assertEquals(3, encodedSecondBulk.getReliabilityIndex());
+            Assertions.assertEquals(3, encodedSecondBulk.getOrderingIndex());
             Assertions.assertEquals(0, encodedSecondBulk.getOrderingChannel());
-            assertWriteIndices(codec, 2, 2);
+            assertWriteIndices(codec, 4, 4);
         } finally {
             packets.forEach(EncapsulatedPacket::release);
             messages.forEach(RakMessage::release);
@@ -168,7 +172,7 @@ public class BenchmarkProbeIsolationTests {
     }
 
     @Test
-    public void receiverUsesBestEffortHighPriorityProbeAcknowledgements() {
+    public void receiverUsesReliableOrderedHighPriorityProbeAcknowledgements() {
         PeerStats peer = new PeerStats(0, false);
         EmbeddedChannel channel = new EmbeddedChannel(new ClientReceiverHandler(peer, new CountDownLatch(1)));
         try {
@@ -182,7 +186,7 @@ public class BenchmarkProbeIsolationTests {
                 Assertions.assertEquals(BenchmarkPayload.PROBE_ACK, BenchmarkPayload.type(ack.content()));
                 Assertions.assertEquals(42L, BenchmarkPayload.sequence(ack.content()));
                 Assertions.assertEquals(123L, BenchmarkPayload.timestampNanos(ack.content()));
-                Assertions.assertEquals(RakReliability.UNRELIABLE, ack.reliability());
+                Assertions.assertEquals(RakReliability.RELIABLE_ORDERED, ack.reliability());
                 Assertions.assertEquals(RakPriority.HIGH, ack.priority());
             } finally {
                 ack.release();
@@ -242,7 +246,7 @@ public class BenchmarkProbeIsolationTests {
     }
 
     @Test
-    public void artifactsDescribeBestEffortProbeSemanticsSeparatelyFromWorkloadReliability() throws Exception {
+    public void artifactsDescribeReliableOrderedProbeSemantics() throws Exception {
         Path output = Files.createTempDirectory("raknet-probe-isolation-output");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
                 "baseline-bandwidth",
@@ -276,21 +280,21 @@ public class BenchmarkProbeIsolationTests {
         Path directory = new BenchmarkResultWriter().write(result).toPath();
         JsonNode summary = JSON.readTree(Files.readString(
                 directory.resolve("summary.json"), StandardCharsets.UTF_8));
-        Assertions.assertEquals("UNRELIABLE", summary.path("probeReliability").asText());
+        Assertions.assertEquals("RELIABLE_ORDERED", summary.path("probeReliability").asText());
         Assertions.assertEquals("HIGH", summary.path("probePriority").asText());
-        Assertions.assertTrue(summary.path("probeSemantics").asText().contains("non-ordering"));
+        Assertions.assertTrue(summary.path("probeSemantics").asText().contains("loss recovery"));
         Assertions.assertEquals(10, summary.path("minimumProbeResponsesPerIteration").asInt());
         Assertions.assertEquals(0.5D, summary.path("minimumProbeResponseRate").asDouble(), 0.000001D);
 
         String report = Files.readString(directory.resolve("report.md"), StandardCharsets.UTF_8);
         Assertions.assertTrue(report.contains("applies to bulk/batch traffic only"));
-        Assertions.assertTrue(report.contains("Probe transport: `UNRELIABLE/HIGH"));
+        Assertions.assertTrue(report.contains("Probe transport: `RELIABLE_ORDERED/HIGH"));
         Assertions.assertTrue(Files.readString(directory.resolve("latency.hdr"), StandardCharsets.UTF_8)
-                .contains("Probe transport: UNRELIABLE/HIGH best-effort non-ordering"));
+                .contains("Probe transport: RELIABLE_ORDERED/HIGH through the weighted scheduler"));
     }
 
     @Test
-    public void bestEffortProbeCensoringFailsClosedAndPreservesSpilloverProvenance() throws Exception {
+    public void probeCoverageFailsClosedAndPreservesSpilloverProvenance() throws Exception {
         Path output = Files.createTempDirectory("raknet-probe-censoring-output");
         BenchmarkConfig config = BenchmarkConfig.parse(new String[]{
                 "bandwidth-latency-curve",

@@ -186,17 +186,13 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                 configuredEpoch(this.config.externalRecoveryAtEpochMillis()),
                 relativeMillis(epochMillis, this.config.externalRecoveryAtEpochMillis()),
                 resourceSafetyPolicy(),
-                this.capabilities.availability(this.benchmarkManagedBlackholeCounterStatus,
-                        this.config.recoveryMode().usesModelBasedCongestionControl()),
+                this.capabilities.availability(this.benchmarkManagedBlackholeCounterStatus),
                 runtime,
                 all.toSnapshot(this.capabilities, this.benchmarkManagedBlackholeCounters,
-                        this.config.recoveryMode().usesModelBasedCongestionControl(),
                         this.allQueueHighWater, this.allBytesInFlightHighWater),
                 healthy.toSnapshot(this.capabilities, this.benchmarkManagedBlackholeCounters,
-                        this.config.recoveryMode().usesModelBasedCongestionControl(),
                         this.healthyQueueHighWater, this.healthyBytesInFlightHighWater),
                 affected.toSnapshot(this.capabilities, this.benchmarkManagedBlackholeCounters,
-                        this.config.recoveryMode().usesModelBasedCongestionControl(),
                         this.affectedQueueHighWater, this.affectedBytesInFlightHighWater)
         );
         this.result.addTimelineRecord(sample);
@@ -385,8 +381,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
             this.transport = transport;
         }
 
-        BenchmarkTimeline.MetricAvailability availability(String benchmarkManagedBlackholeCounterStatus,
-                                                           boolean modelBased) {
+        BenchmarkTimeline.MetricAvailability availability(String benchmarkManagedBlackholeCounterStatus) {
             boolean benchmarkManagedBlackholeCounters = "available".equals(benchmarkManagedBlackholeCounterStatus);
             List<String> unavailable = new ArrayList<>();
             if (!this.usefulSend) {
@@ -405,7 +400,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                         "cohort.retransmittedBytes", "cohort.staleDatagrams", "cohort.nackIn", "cohort.nackOut",
                         "cohort.currentQueuedBytes", "cohort.currentBytesInFlight", "cohort.recoveryState");
             }
-            if (!this.transport || !modelBased) {
+            if (!this.transport) {
                 unavailable.add("cohort.congestionModel");
             }
             if (!benchmarkManagedBlackholeCounters) {
@@ -418,10 +413,8 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                     this.transport ? "available" : "unavailable-on-receiver-worker",
                     this.transport ? "available" : "unavailable-on-receiver-worker",
                     this.transport ? "available" : "unavailable-on-receiver-worker",
-                    !this.transport ? "unavailable-on-receiver-worker"
-                            : modelBased ? "available" : "not-configured-recovery-mode",
-                    !this.transport ? "unavailable-on-receiver-worker"
-                            : modelBased ? "available" : "not-configured-recovery-mode",
+                    this.transport ? "available" : "unavailable-on-receiver-worker",
+                    this.transport ? "available" : "unavailable-on-receiver-worker",
                     benchmarkManagedBlackholeCounterStatus,
                     Collections.unmodifiableList(unavailable)
             );
@@ -620,7 +613,6 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
 
         private BenchmarkTimeline.Cohort toSnapshot(Capabilities capabilities,
                                                     boolean benchmarkManagedBlackholeCounters,
-                                                    boolean modelBased,
                                                     long queueHighWater, long bytesInFlightHighWater) {
             boolean transport = capabilities.transport;
             long retransmittedDatagrams = this.nackRetransmittedDatagrams + this.timeoutRetransmittedDatagrams;
@@ -675,7 +667,7 @@ final class BenchmarkTimelineRecorder implements AutoCloseable {
                     recoveryObserved && this.maxSmoothedRtt >= 0.0D ? this.maxSmoothedRtt : null,
                     recoveryObserved && this.maxRttVariance >= 0.0D ? this.maxRttVariance : null,
                     recoveryObserved && this.maxRetransmissionTimeout >= 0L ? this.maxRetransmissionTimeout : null,
-                    capabilities.transport && modelBased ? new BenchmarkTimeline.CongestionModel(
+                    capabilities.transport ? new BenchmarkTimeline.CongestionModel(
                             this.congestionModelPeers,
                             this.deliveryRatePeers,
                             this.pacingRatePeers,

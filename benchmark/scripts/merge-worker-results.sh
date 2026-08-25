@@ -213,7 +213,7 @@ jq -s \
   --argjson externalRecoveryAtEpochMillis "$external_recovery_at_epoch_json" \
   --argjson minimumProbeResponsesPerIteration 10 \
   --argjson minimumProbeResponseRate 0.5 \
-  --arg expectedProbeSemantics "UNRELIABLE/HIGH best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples" \
+  --arg expectedProbeSemantics "RELIABLE_ORDERED/HIGH through the weighted scheduler; RTT includes ordering and loss recovery" \
   --arg netemEvidenceDir "$netem_evidence_dir" \
   --arg outputRoot "$output_root" '
   def median:
@@ -278,7 +278,7 @@ jq -s \
   (($recovery_modes | all(. == "legacy" or . == "bounded" or . == "model_based"))
     and (($recovery_modes | unique | length) == 1)) as $recovery_mode_provenance_valid |
   ($probe_transport_sources | all(
-    (.probeReliability // null) == "UNRELIABLE"
+    (.probeReliability // null) == "RELIABLE_ORDERED"
     and (.probePriority // null) == "HIGH"
     and (.probeSemantics // null) == $expectedProbeSemantics
   )) as $probe_transport_provenance_valid |

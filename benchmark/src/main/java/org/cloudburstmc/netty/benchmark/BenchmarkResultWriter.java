@@ -297,7 +297,7 @@ public final class BenchmarkResultWriter {
                 .append(MIN_PROBE_RESPONSES_PER_ITERATION)
                 .append(" returned probes or less than ")
                 .append(format(MIN_PROBE_RESPONSE_RATE * 100.0D))
-                .append("% bounded probe return in any iteration, any active-window ACK spillover, missing p99, or available spread above 10% should be treated as unstable and repeated with longer duration or less host contention. Probe RTT is conditional on uncontaminated best-effort probe return.\n");
+                .append("% bounded probe return in any iteration, any active-window ACK spillover, missing p99, or available spread above 10% should be treated as unstable and repeated with longer duration or less host contention. Probe RTT includes reliable ordering and loss recovery.\n");
         return summary.toString();
     }
 

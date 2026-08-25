@@ -75,7 +75,7 @@ Benchmark implications:
 
 ## Baseline Matrix
 
-Run each baseline with at least `3` measured iterations after warmup. Probe requests and ACKs must have the recorded exact `UNRELIABLE/HIGH` best-effort, non-ordering semantics. Treat a run as unstable when it has zero delivered throughput, fewer than `3` measured iterations, fewer than `10` matching probe responses in any iteration, less than `50%` matching probe return in any iteration, any foreign/late/duplicate ACK spillover, missing p99 RTT, delivered throughput spread above `10%`, or available p99 RTT spread above `10%`. Missing or partial p99 evidence is `null`/unavailable and cannot win stable or best-observed latency ranking.
+Run each baseline with at least `3` measured iterations after warmup. Probe requests and ACKs must have the recorded exact `RELIABLE_ORDERED/HIGH` semantics so RTT includes ordering and loss recovery. Treat a run as unstable when it has zero delivered throughput, fewer than `3` measured iterations, fewer than `10` matching probe responses in any iteration, less than `50%` matching probe return in any iteration, any foreign/late/duplicate ACK spillover, missing p99 RTT, delivered throughput spread above `10%`, or available p99 RTT spread above `10%`. Missing or partial p99 evidence is `null`/unavailable and cannot win stable or best-observed latency ranking.
 
 ### 1. Best-Case Bandwidth
 

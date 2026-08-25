@@ -26,13 +26,12 @@ import java.util.Objects;
 /**
  * Defines the transport semantics of benchmark workload and telemetry messages.
  *
- * <p>Probe traffic is deliberately best effort and uses the regular high-priority scheduler rather than the immediate
- * bypass. It must never allocate a reliable or ordering index. Missing probes are therefore absent from the RTT
- * histogram rather than retransmitted, while weighted priority scheduling keeps probes timely without starving the
- * normal-priority workload.</p>
+ * <p>Probe traffic uses the same reliable-ordered recovery path as latency-sensitive game traffic and the regular
+ * high-priority scheduler rather than an immediate bypass. Its RTT therefore includes ordering and loss recovery,
+ * while weighted priority scheduling keeps probes timely without starving the normal-priority workload.</p>
  */
 final class BenchmarkMessages {
-    static final RakReliability PROBE_RELIABILITY = RakReliability.UNRELIABLE;
+    static final RakReliability PROBE_RELIABILITY = RakReliability.RELIABLE_ORDERED;
     static final RakPriority PROBE_PRIORITY = RakPriority.HIGH;
 
     private BenchmarkMessages() {
@@ -56,7 +55,7 @@ final class BenchmarkMessages {
 
     static String probeSemantics() {
         return PROBE_RELIABILITY.name() + "/" + PROBE_PRIORITY.name()
-                + " best-effort non-ordering through the weighted scheduler; lost probes are omitted from RTT samples";
+                + " through the weighted scheduler; RTT includes ordering and loss recovery";
     }
 
     private static RakMessage workload(ByteBuf payload, RakReliability workloadReliability) {

@@ -24,7 +24,7 @@ global_packet_limit=""
 max_queued_bytes=""
 workers=""
 reliability="reliable_ordered"
-recovery_mode="legacy"
+recovery_mode="model_based"
 resource_safety_max_aggregate_queued_bytes="402653184"
 resource_safety_max_direct_memory_used_bytes="805306368"
 campaign_run_user=""
@@ -66,8 +66,6 @@ Options:
   --max-queued-bytes N              Optional per-session queue cap.
   --workers N                       Optional benchmark worker count.
   --reliability MODE                Reliability mode. Default: reliable_ordered.
-  --recovery-mode legacy|bounded|model_based
-                                    RakNet recovery algorithm. Default: legacy.
   --resource-safety-max-aggregate-queued-bytes N
                                     Fail if cohort queue exceeds N. Default: 402653184 (384 MiB).
   --resource-safety-max-direct-memory-used-bytes N
@@ -184,10 +182,6 @@ while [[ $# -gt 0 ]]; do
       reliability="$2"
       shift 2
       ;;
-    --recovery-mode)
-      recovery_mode="$2"
-      shift 2
-      ;;
     --resource-safety-max-aggregate-queued-bytes)
       resource_safety_max_aggregate_queued_bytes="$2"
       shift 2
@@ -240,15 +234,6 @@ for safety_name in resource_safety_max_aggregate_queued_bytes resource_safety_ma
     exit 2
   fi
 done
-recovery_mode="${recovery_mode,,}"
-case "$recovery_mode" in
-  legacy|bounded|model_based)
-    ;;
-  *)
-    echo "--recovery-mode must be legacy, bounded, or model_based" >&2
-    exit 2
-    ;;
-esac
 if [[ ! -x "$runner" ]]; then
   echo "Netns worker runner is missing or not executable: $runner" >&2
   exit 2
@@ -431,7 +416,7 @@ fi
 
 echo "Netns pilot campaign: $output_root"
 echo "Profiles: ${normalized_profiles[*]}"
-echo "Recovery mode: $recovery_mode"
+echo "Transport controller: bounded recovery + delivery model"
 if ! "$execute"; then
   echo "Dry-run only. Re-run this command with sudo and --execute after reviewing campaign-plan.json."
 fi
@@ -468,7 +453,6 @@ for profile in "${normalized_profiles[@]}"; do
     --loss "$loss"
     --direction "$direction"
     --reliability "$reliability"
-    --recovery-mode "$recovery_mode"
     "${optional_args[@]}"
   )
   if [[ "$case_type" == "fairness" || "$case_type" == "blackhole" ]]; then
@@ -548,7 +532,7 @@ jq -s \
   echo "- Clients per case: \`$clients\`"
   echo "- Affected clients: \`$affected_clients\`"
   echo "- Offered rate: \`${per_client_mbps}Mbps/client\`"
-  echo "- Recovery mode: \`$recovery_mode\`"
+  echo "- Transport controller: \`bounded recovery + delivery model\`"
   echo
   if "$execute"; then
     echo "| Profile | Impairment | Delivered Gbps | Healthy Gbps | Affected Gbps | Healthy Mbps p50 | Probe p99 ms | Max queue bytes | Stable |"
