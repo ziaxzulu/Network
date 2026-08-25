@@ -53,7 +53,7 @@ public class DefaultChannelToServerProxyModelMetricsTests {
     }
 
     @Test
-    public void forwardsModelAndNackValidationMetricsWithoutChangingDimensions() {
+    public void forwardsModelMetricsWithoutChangingDimensions() {
         RecordingServerMetrics serverMetrics = new RecordingServerMetrics();
         NioDatagramChannel datagramChannel = new NioDatagramChannel();
         RakServerChannel parent = new RakServerChannel(datagramChannel);
@@ -63,10 +63,6 @@ public class DefaultChannelToServerProxyModelMetricsTests {
 
             proxy.rakCongestionModelState(100L, 12_000D, 15_000D, 200L, 0.05D, 7L,
                     true, false, 3L, 2L);
-            proxy.rakNackRecoveryHint(50L);
-            proxy.rakNackReorderingResolved(20L);
-            proxy.rakNackLossValidated(50L);
-
             Assertions.assertEquals(1, serverMetrics.modelStates);
             Assertions.assertEquals(12_000D, serverMetrics.deliveryRate);
             Assertions.assertEquals(15_000D, serverMetrics.pacingRate);
@@ -76,9 +72,6 @@ public class DefaultChannelToServerProxyModelMetricsTests {
             Assertions.assertTrue(serverMetrics.startup);
             Assertions.assertEquals(3L, serverMetrics.hardLossResponses);
             Assertions.assertEquals(2L, serverMetrics.delayLossResponses);
-            Assertions.assertEquals(1, serverMetrics.nackHints);
-            Assertions.assertEquals(1, serverMetrics.reorderedNacks);
-            Assertions.assertEquals(1, serverMetrics.validatedNacks);
         } finally {
             datagramChannel.unsafe().closeForcibly();
         }
@@ -94,9 +87,6 @@ public class DefaultChannelToServerProxyModelMetricsTests {
         private boolean startup;
         private long hardLossResponses;
         private long delayLossResponses;
-        private int nackHints;
-        private int reorderedNacks;
-        private int validatedNacks;
 
         @Override
         public void rakCongestionModelState(RakChildChannel channel, long observedAtMillis,
@@ -114,21 +104,6 @@ public class DefaultChannelToServerProxyModelMetricsTests {
             this.startup = startup;
             this.hardLossResponses = hardLossResponseCount;
             this.delayLossResponses = delayLossResponseCount;
-        }
-
-        @Override
-        public void rakNackRecoveryHint(RakChildChannel channel, long validationDelayMillis) {
-            this.nackHints++;
-        }
-
-        @Override
-        public void rakNackReorderingResolved(RakChildChannel channel, long observedDelayMillis) {
-            this.reorderedNacks++;
-        }
-
-        @Override
-        public void rakNackLossValidated(RakChildChannel channel, long observedDelayMillis) {
-            this.validatedNacks++;
         }
     }
 }

@@ -17,7 +17,6 @@
 package org.cloudburstmc.netty.channel.raknet;
 
 import io.netty.buffer.Unpooled;
-import org.cloudburstmc.netty.channel.raknet.config.RakRecoveryMode;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.junit.jupiter.api.Assertions;
@@ -28,7 +27,7 @@ public class RakSlidingWindowBoundedTests {
 
     @Test
     public void separatesLogicalOutstandingFromPhysicalFlight() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.BOUNDED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         RakDatagramPacket datagram = datagram(200);
         try {
             window.onReliableSend(datagram);
@@ -53,7 +52,7 @@ public class RakSlidingWindowBoundedTests {
 
     @Test
     public void appliesKarnAndDoesNotSampleRetransmittedAcknowledgements() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.BOUNDED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         RakDatagramPacket original = datagram(100);
         RakDatagramPacket retransmitted = datagram(100);
         try {
@@ -84,8 +83,8 @@ public class RakSlidingWindowBoundedTests {
     }
 
     @Test
-    public void reducesWindowOnlyOncePerNoProgressRecoveryEpoch() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.BOUNDED);
+    public void isolatedNacksDoNotCollapseWindowDuringRecoveryEpoch() {
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         RakDatagramPacket seed = datagram(100);
         RakDatagramPacket first = datagram(100);
         RakDatagramPacket second = datagram(100);
@@ -95,7 +94,8 @@ public class RakSlidingWindowBoundedTests {
             seed.setSendTime(0L);
             window.onReliableSend(seed);
             window.onAck(100L, seed, 1L);
-            Assertions.assertEquals(2_400.0D, window.getCongestionWindow());
+            double initialWindow = window.getCongestionWindow();
+            Assertions.assertEquals(12_000.0D, initialWindow);
 
             first.setSequenceIndex(1);
             first.setSendOrdinal(1L);
@@ -105,9 +105,9 @@ public class RakSlidingWindowBoundedTests {
             window.onReliableSend(second);
 
             Assertions.assertTrue(window.onBoundedLoss(first, 2L));
-            double reducedWindow = window.getCongestionWindow();
             Assertions.assertFalse(window.onBoundedLoss(second, 2L));
-            Assertions.assertEquals(reducedWindow, window.getCongestionWindow());
+            Assertions.assertEquals(initialWindow, window.getCongestionWindow(),
+                    "isolated packet loss must not slow an otherwise healthy path");
             Assertions.assertTrue(window.isInRecovery());
 
             window.onAck(200L, first, 3L);
@@ -125,11 +125,14 @@ public class RakSlidingWindowBoundedTests {
 
     @Test
     public void permitsOnlyOneCwndChargedProbe() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.BOUNDED);
-        RakDatagramPacket first = datagram(1_100);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
+        RakDatagramPacket first = datagram(1_160);
+        RakDatagramPacket blocker = datagram(1_160);
         RakDatagramPacket probe = datagram(100);
         try {
+            window.onPersistentCongestion();
             window.onReliableSend(first);
+            window.onReliableSend(blocker);
             window.onReliableSend(probe);
             window.onBoundedLoss(first, 1L);
             window.onBoundedLoss(probe, 1L);
@@ -145,6 +148,7 @@ public class RakSlidingWindowBoundedTests {
             Assertions.assertEquals(0, window.getRecoveryProbeBytes());
         } finally {
             first.release();
+            blocker.release();
             probe.release();
         }
     }

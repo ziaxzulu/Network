@@ -17,7 +17,6 @@
 package org.cloudburstmc.netty.handler.codec.raknet.common;
 
 import org.cloudburstmc.netty.channel.raknet.RakSlidingWindow;
-import org.cloudburstmc.netty.channel.raknet.config.RakRecoveryMode;
 import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -31,7 +30,7 @@ public class RakBoundedRecoveryTests {
     public void backsOffOnePtoToCapAndAckProgressResetsIt() {
         AtomicLong clock = new AtomicLong();
         RakBoundedRecovery recovery = new RakBoundedRecovery(clock::get, () -> 99L);
-        RakSlidingWindow window = new RakSlidingWindow(1_200, RakRecoveryMode.BOUNDED);
+        RakSlidingWindow window = new RakSlidingWindow(1_200);
         RakDatagramPacket datagram = RakDatagramPacket.newInstance();
         RakDatagramPacket acknowledgedLaterDatagram = RakDatagramPacket.newInstance();
         try {
@@ -86,7 +85,7 @@ public class RakBoundedRecoveryTests {
     @Test
     public void jitterIsAlwaysNonNegativeAndBelowTenPercent() {
         AtomicLong clock = new AtomicLong(10_000L);
-        RakSlidingWindow window = new RakSlidingWindow(1_200, RakRecoveryMode.BOUNDED);
+        RakSlidingWindow window = new RakSlidingWindow(1_200);
         RakDatagramPacket datagram = RakDatagramPacket.newInstance();
         try {
             window.onReliableSend(datagram);

@@ -57,7 +57,6 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
     private volatile SipHash sipHash;
     private volatile boolean proxyProtocol;
     private volatile RakServerThrottle throttle;
-    private volatile RakRecoveryMode recoveryMode = RakRecoveryMode.LEGACY;
 
     public DefaultRakServerConfig(RakServerChannel channel) {
         super(channel);
@@ -78,9 +77,8 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         return getOptions(
                 super.getOptions(),
                 RakChannelOption.RAK_GUID, RakChannelOption.RAK_MAX_CHANNELS, RakChannelOption.RAK_MAX_CONNECTIONS, RakChannelOption.RAK_SUPPORTED_PROTOCOLS, RakChannelOption.RAK_UNCONNECTED_MAGIC,
-                RakChannelOption.RAK_ADVERTISEMENT, RakChannelOption.RAK_HANDLE_PING, RakChannelOption.RAK_PACKET_LIMIT, RakChannelOption.RAK_GLOBAL_PACKET_LIMIT, RakChannelOption.RAK_SERVER_METRICS, 
-                RakChannelOption.RAK_IP_DONT_FRAGMENT, RakChannelOption.RAK_SERVER_COOKIE_MODE, RakChannelOption.RAK_SERVER_COOKIE_SECRET, RakChannelOption.RAK_PROXY_PROTOCOL, RakChannelOption.RAK_THROTTLE,
-                RakChannelOption.RAK_RECOVERY_MODE);
+                RakChannelOption.RAK_ADVERTISEMENT, RakChannelOption.RAK_HANDLE_PING, RakChannelOption.RAK_PACKET_LIMIT, RakChannelOption.RAK_GLOBAL_PACKET_LIMIT, RakChannelOption.RAK_SERVER_METRICS,
+                RakChannelOption.RAK_IP_DONT_FRAGMENT, RakChannelOption.RAK_SERVER_COOKIE_MODE, RakChannelOption.RAK_SERVER_COOKIE_SECRET, RakChannelOption.RAK_PROXY_PROTOCOL, RakChannelOption.RAK_THROTTLE);
     }
 
     @SuppressWarnings("unchecked")
@@ -137,9 +135,6 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
         if (option == RakChannelOption.RAK_THROTTLE) {
             return (T) this.getThrottle();
         }
-        if (option == RakChannelOption.RAK_RECOVERY_MODE) {
-            return (T) this.recoveryMode;
-        }
         return this.channel.parent().config().getOption(option);
     }
 
@@ -182,8 +177,6 @@ public class DefaultRakServerConfig extends DefaultChannelConfig implements RakS
             this.setProxyProtocol((Boolean) value);
         } else if (option == RakChannelOption.RAK_THROTTLE) {
             this.setThrottle((RakServerThrottle) value);
-        } else if (option == RakChannelOption.RAK_RECOVERY_MODE) {
-            this.recoveryMode = (RakRecoveryMode) value;
         } else {
             return this.channel.parent().config().setOption(option, value);
         }
