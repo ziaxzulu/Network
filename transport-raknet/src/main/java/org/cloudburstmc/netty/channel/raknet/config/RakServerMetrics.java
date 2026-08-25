@@ -197,27 +197,6 @@ public interface RakServerMetrics {
     }
 
     /**
-     * @param channel observed child channel
-     * @param validationDelayMillis delay before the hinted attempt may be declared lost
-     */
-    default void rakNackRecoveryHint(RakChildChannel channel, long validationDelayMillis) {
-    }
-
-    /**
-     * @param channel observed child channel
-     * @param observedDelayMillis time from the NACK hint to the resolving ACK
-     */
-    default void rakNackReorderingResolved(RakChildChannel channel, long observedDelayMillis) {
-    }
-
-    /**
-     * @param channel observed child channel
-     * @param observedDelayMillis time from the NACK hint to loss validation
-     */
-    default void rakNackLossValidated(RakChildChannel channel, long observedDelayMillis) {
-    }
-
-    /**
      * Signals that the channel's terminal recovery snapshot has been delivered. Exporters should remove the channel
      * from any map used to compute aggregate gauges.
      *

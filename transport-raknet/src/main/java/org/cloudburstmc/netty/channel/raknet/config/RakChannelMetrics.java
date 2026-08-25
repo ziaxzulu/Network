@@ -162,30 +162,6 @@ public interface RakChannelMetrics {
     }
 
     /**
-     * Records a NACK scheduled behind a reordering-validation delay in the experimental model mode.
-     *
-     * @param validationDelayMillis delay before the hinted attempt may be declared lost
-     */
-    default void rakNackRecoveryHint(long validationDelayMillis) {
-    }
-
-    /**
-     * Records a NACKed attempt acknowledged before its reordering-validation delay expired.
-     *
-     * @param observedDelayMillis time from the NACK hint to the resolving ACK
-     */
-    default void rakNackReorderingResolved(long observedDelayMillis) {
-    }
-
-    /**
-     * Records a NACK hint that survived validation and was declared lost.
-     *
-     * @param observedDelayMillis time from the NACK hint to loss validation
-     */
-    default void rakNackLossValidated(long observedDelayMillis) {
-    }
-
-    /**
      * Invoked after the terminal recovery snapshot when the session closes. Gauge exporters should remove any
      * channel-local state retained for this session.
      *

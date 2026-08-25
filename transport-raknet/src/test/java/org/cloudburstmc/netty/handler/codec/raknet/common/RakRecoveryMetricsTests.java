@@ -19,7 +19,6 @@ package org.cloudburstmc.netty.handler.codec.raknet.common;
 import org.cloudburstmc.netty.channel.raknet.RakSlidingWindow;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelMetrics;
 import org.cloudburstmc.netty.channel.raknet.config.RakDatagramSendType;
-import org.cloudburstmc.netty.channel.raknet.config.RakRecoveryMode;
 import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -74,9 +73,10 @@ public class RakRecoveryMetricsTests {
             Assertions.assertEquals(0, recovered.retransmittedInFlight);
             Assertions.assertEquals(400L, recovered.lastAckProgressAtMillis);
             Assertions.assertEquals(-1L, recovered.recoveryStartedAtMillis);
-            Assertions.assertEquals(300.0D, recovered.smoothedRtt);
-            Assertions.assertEquals(300.0D, recovered.rttVariance);
-            Assertions.assertEquals(1_830L, recovered.retransmissionTimeout);
+            Assertions.assertEquals(-1.0D, recovered.smoothedRtt,
+                    "Karn's algorithm excludes an ACK after retransmission from RTT sampling");
+            Assertions.assertEquals(-1.0D, recovered.rttVariance);
+            Assertions.assertEquals(1_000L, recovered.retransmissionTimeout);
         } finally {
             datagram.release();
         }
@@ -153,11 +153,12 @@ public class RakRecoveryMetricsTests {
         datagram.setSequenceIndex(1);
 
         try {
-            Assertions.assertEquals(1_200.0D, window.getCongestionWindow());
+            double initialWindow = window.getCongestionWindow();
+            Assertions.assertEquals(12_000.0D, initialWindow);
             Assertions.assertEquals(0.0D, window.getSlowStartThreshold());
             Assertions.assertEquals(-1.0D, window.getRTT());
             Assertions.assertEquals(-1.0D, window.getRttDeviation());
-            Assertions.assertEquals(2_000L, window.getRtoForRetransmission());
+            Assertions.assertEquals(1_000L, window.getRtoForRetransmission());
 
             window.onReliableSend(datagram);
             Assertions.assertEquals(datagram.getSize(), window.getUnackedBytes());
@@ -166,8 +167,9 @@ public class RakRecoveryMetricsTests {
             Assertions.assertEquals(0, window.getUnackedBytes());
             Assertions.assertEquals(100.0D, window.getRTT());
             Assertions.assertEquals(100.0D, window.getRttDeviation());
-            Assertions.assertEquals(630L, window.getRtoForRetransmission());
-            Assertions.assertEquals(2_400.0D, window.getCongestionWindow());
+            Assertions.assertEquals(530L, window.getRtoForRetransmission());
+            Assertions.assertEquals(initialWindow, window.getCongestionWindow(),
+                    "one delivery sample does not replace the model's standards-sized initial window");
         } finally {
             datagram.release();
         }
@@ -203,7 +205,7 @@ public class RakRecoveryMetricsTests {
     @Test
     public void attemptsStateRemovalWhenTerminalModelCallbackThrows() {
         RakRecoveryMetrics recovery = new RakRecoveryMetrics();
-        RakSlidingWindow window = new RakSlidingWindow(1_200, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(1_200);
         boolean[] closed = {false};
         RakChannelMetrics throwingMetrics = new RakChannelMetrics() {
             @Override
@@ -231,7 +233,7 @@ public class RakRecoveryMetricsTests {
     @Test
     public void unsampledModelStateUsesUnavailableSentinels() {
         RakRecoveryMetrics recovery = new RakRecoveryMetrics();
-        RakSlidingWindow window = new RakSlidingWindow(1_200, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(1_200);
         double[] deliveryRate = {Double.NaN};
         double[] pacingRate = {Double.NaN};
         long[] minimumRtt = {Long.MIN_VALUE};
@@ -257,7 +259,7 @@ public class RakRecoveryMetricsTests {
     @Test
     public void reportsCumulativeModelLossResponseCounts() {
         RakRecoveryMetrics recovery = new RakRecoveryMetrics();
-        RakSlidingWindow window = new RakSlidingWindow(1_200, RakRecoveryMode.MODEL_BASED) {
+        RakSlidingWindow window = new RakSlidingWindow(1_200) {
             @Override
             public long getModelHardLossResponseCount() {
                 return 3L;

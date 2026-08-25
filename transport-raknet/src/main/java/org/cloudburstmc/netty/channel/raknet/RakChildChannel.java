@@ -25,7 +25,6 @@ import io.netty.util.concurrent.Promise;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultChannelToServerProxyMetrics;
 import org.cloudburstmc.netty.channel.raknet.config.DefaultRakSessionConfig;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelConfig;
-import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
 import org.cloudburstmc.netty.handler.codec.raknet.common.*;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakChildDatagramHandler;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerOnlineInitialHandler;
@@ -62,9 +61,6 @@ public class RakChildChannel extends AbstractChannel implements RakChannel {
         this.config.setGuid(guid);
         this.config.setMtu(mtu);
         this.parentCleanupPromise = parent.eventLoop().newPromise();
-        // ServerBootstrap child options are applied after this internal RakNet pipeline becomes active. Copy the
-        // server's explicit default now so recovery mode is fixed before RakSessionCodec initializes.
-        this.config.setRecoveryMode(parent.config().getOption(RakChannelOption.RAK_RECOVERY_MODE));
         // Allow user to configure the child channel before we initialize pipeline
         // This is not the same as bootstrap.childOption() as Bootstrap does not allow setting options per channel
         if (childConsumer != null) {

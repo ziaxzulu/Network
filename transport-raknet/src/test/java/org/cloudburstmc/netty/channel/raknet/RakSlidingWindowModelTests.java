@@ -17,7 +17,6 @@
 package org.cloudburstmc.netty.channel.raknet;
 
 import io.netty.buffer.Unpooled;
-import org.cloudburstmc.netty.channel.raknet.config.RakRecoveryMode;
 import org.cloudburstmc.netty.channel.raknet.packet.EncapsulatedPacket;
 import org.cloudburstmc.netty.channel.raknet.packet.RakDatagramPacket;
 import org.junit.jupiter.api.Assertions;
@@ -75,7 +74,7 @@ public class RakSlidingWindowModelTests {
 
     private static QuantizedSendResult simulateQuantizedShortRtt(boolean delayedActivations,
                                                                  boolean continuouslyBacklogged) {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED, 10L);
+        RakSlidingWindow window = new RakSlidingWindow(MTU, 10L);
         PriorityQueue<Delivery> deliveries = new PriorityQueue<>(Comparator
                 .comparingLong((Delivery value) -> value.at)
                 .thenComparingLong(value -> value.datagram.getSendOrdinal()));
@@ -168,7 +167,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void ackCompressedFlightCannotSampleFasterThanItWasSent() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> flight = new ArrayList<>();
         int flightBytes = 0;
         try {
@@ -254,7 +253,7 @@ public class RakSlidingWindowModelTests {
     }
 
     private static SimulationResult simulateMixedTraffic(int lossPhase) {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         PriorityQueue<MixedDelivery> deliveries = new PriorityQueue<>(Comparator.comparingLong(value -> value.at));
         Queue<RakDatagramPacket> pendingRetries = new ArrayDeque<>();
         long offeredCredit = 0L;
@@ -462,7 +461,7 @@ public class RakSlidingWindowModelTests {
     }
 
     private static CapacityStepResult simulateCapacityStepAndIdleRestart() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         PriorityQueue<Delivery> deliveries = new PriorityQueue<>(Comparator.comparingLong(value -> value.at));
         long offeredCredit = 0L;
         long nextLinkAvailable = 0L;
@@ -588,7 +587,7 @@ public class RakSlidingWindowModelTests {
                                                  double capacityBytesPerMillis,
                                                  PathRttPattern pathRttPattern,
                                                  LossPattern lossPattern) {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         PriorityQueue<Delivery> deliveries = new PriorityQueue<>(deliveryOrder());
         Queue<RakDatagramPacket> pendingRetries = new ArrayDeque<>();
         Set<Integer> receiverDelivered = new HashSet<>();
@@ -845,7 +844,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void persistentNoProgressCollapsesOnlyTheModelWindow() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         Assertions.assertEquals(10D * MTU, window.getCongestionWindow());
         window.onPersistentCongestion();
         Assertions.assertEquals(2D * MTU, window.getCongestionWindow());
@@ -1482,7 +1481,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void ackBeforeDelayedNackCannotCreateLossEvidence() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             for (int index = 0; index < 16; index++) {
@@ -1785,7 +1784,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void minimumRttAdaptsFromCleanHandshakeToStablePathStepAndBack() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 100L, 105L);
@@ -1814,7 +1813,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void shallowPostHandshakePathStepRequiresDrainedStableEvidence() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 5L);
@@ -1843,7 +1842,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void idleOneWayTenMillisecondPathStepReplacesElevatedHandshakeMinimum() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 11L);
@@ -1871,7 +1870,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void idleLowMillisecondPathStepToleratesAbsoluteNetemJitter() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 1L);
@@ -1898,7 +1897,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void busyLowMillisecondPathStepToleratesAbsoluteNetemJitterAfterDrain() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 1L);
@@ -1926,7 +1925,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void backloggedTwoMtuSenderCannotUseIdlePathAdmission() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 11L);
@@ -1952,7 +1951,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void idleHighRttVariationCannotMasqueradeAsAStablePathStep() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 60L);
@@ -1977,7 +1976,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void busyOneWayTenMillisecondDelayCannotUseIdlePathAdmission() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 11L);
@@ -2006,7 +2005,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void agedMinimumRttStillRequiresStableDrainedPathEvidence() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 5L);
@@ -2043,7 +2042,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void oldPreDrainAckCannotCancelProbeAndTimeoutRestoresBeforeCooldownRetry() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 5L);
@@ -2104,7 +2103,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void recoveryOnlyAdmissionAdvancesPathTimeoutAndRefreshesCachedWindow() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 5L);
@@ -2138,7 +2137,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void pathDeadlineSaturatesAtMaximumClockValue() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             long base = Long.MAX_VALUE - 1_000L;
@@ -2193,7 +2192,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void lostFirstCandidateDoesNotValidateOrPermanentlyBlockPathStep() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 5L);
@@ -2226,7 +2225,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void timedOutCandidateCannotValidateALaterRetry() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 5L);
@@ -2255,7 +2254,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void risingQueueDelayIsNotAcceptedAsAPropagationPathStep() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 100L, 200L);
@@ -2277,7 +2276,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void stableDeepQueueDuringAFullFlightCannotReplaceMinimumRtt() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 100L, 105L);
@@ -2319,7 +2318,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void oneAckBatchDelaySpikeCannotTriggerPathProbeOrCollapseWindow() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 5L);
@@ -2354,7 +2353,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void oneAckBatchWithDifferentSendSnapshotsCannotTriggerPathProbe() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             acknowledgeOne(window, packets, 0, 0L, 5L);
@@ -2394,7 +2393,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void retransmittedAcknowledgementCannotInflateDeliveryRateOrReceiveDoubleCredit() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             for (int i = 0; i < 6; i++) {
@@ -2432,7 +2431,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void idlePacerCannotAccumulateAnUnboundedCatchUpBurst() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             for (int i = 0; i < 10; i++) {
@@ -2461,7 +2460,7 @@ public class RakSlidingWindowModelTests {
 
     @Test
     public void explicitQueueDrainClearsBackloggedCatchUpCredit() {
-        RakSlidingWindow window = new RakSlidingWindow(MTU, RakRecoveryMode.MODEL_BASED);
+        RakSlidingWindow window = new RakSlidingWindow(MTU);
         List<RakDatagramPacket> packets = new ArrayList<>();
         try {
             for (int i = 0; i < 10; i++) {
