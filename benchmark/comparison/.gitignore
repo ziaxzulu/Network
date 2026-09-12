@@ -1,0 +1,6 @@
+.inputs/
+.gradle/
+build/
+artifacts/
+__pycache__/
+*.pyc

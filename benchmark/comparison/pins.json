@@ -1,0 +1,17 @@
+{
+  "benchmarkRevision": "082dcc803d5ac000e2fe3e92e1342585fb377fe5",
+  "candidateRepository": "teamziax/NetworkCompatible",
+  "candidateBranch": "nxs-dev",
+  "candidateRevision": "86b396686039c7da4e80a162d280700ca15af79b",
+  "raknetArtifact": "org.cloudburstmc.netty:netty-transport-raknet:1.1.0.CR1-20260820.174333-6",
+  "raknetSourceRevision": "508ed83c8a1fe1ce4287ad6d192c9d38bb0d2ffd",
+  "raknetSourcesSha256": "d733277503fcc6ac97b1fd0dbdc75b230c27e57b18a27d7512dd2820e9947805",
+  "raknetSourceVerification": "All 77 published Java sources match the unmodified upstream revision byte-for-byte",
+  "productionCatalogRevision": "db97168467838187c80d469be21d78d6b5e39113",
+  "productionRuntimeReadback": false,
+  "nettyVersion": "4.2.15.Final",
+  "javaVersion": 26,
+  "nativeBindingRevision": "d855d4f3e9995b7ad926e6c0d23d0095666b2570",
+  "libdatachannelRevision": "070e9ba5327dfac1d59ca4fab9bb991daed8faee",
+  "libjuiceRevision": "5498f67aff2092aa2bb868f74971ae7c076e5735"
+}
