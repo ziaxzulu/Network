@@ -10,6 +10,7 @@ import org.cloudburstmc.netty.signaling.ServerStatus;
 import org.cloudburstmc.netty.signaling.*;
 import org.cloudburstmc.netty.signaling.control.AssistedJoin;
 import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticHostPolicy;
+import org.cloudburstmc.netty.signaling.diagnostic.DiagnosticAdmissionCodec;
 import org.cloudburstmc.netty.signaling.diagnostic.NativeDiagnosticHostGate;
 
 import java.net.*;
@@ -29,6 +30,7 @@ public final class ProviderNativeBench {
         private final NativeProviderTransport transport;
         private final int family;
         private final InetSocketAddress bind;
+        private final boolean advertiseProbeCandidate = Boolean.getBoolean("providerAdvertiseProbeCandidate");
         private NativeDiagnosticHostGate diagnostics;
 
         LoopbackAssistedTransport(NativeProviderTransport transport, InetSocketAddress bind) {
@@ -43,7 +45,7 @@ public final class ProviderNativeBench {
                 JsonObject profile = original.profile();
                 profile.add("candidates", new JsonArray());
                 return new HostProfileSnapshot(profile, original.candidateRevision(), original.publicationVersion(),
-                        new JsonArray(), Set.of(family), original::requireCurrent);
+                        advertiseProbeCandidate ? original.probeCandidates() : new JsonArray(), Set.of(family), original::requireCurrent);
             });
         }
         @Override public CompletionStage<JsonObject> hostProfile() { return captureHostProfile().thenApply(HostProfileSnapshot::profile); }
@@ -69,15 +71,21 @@ public final class ProviderNativeBench {
                     try {
                         snapshot.requireCurrent();
                         var profile = snapshot.profile();
+                        var expected = new HashSet<DiagnosticHostPolicy.Endpoint>();
+                        expected.add(DiagnosticHostPolicy.Endpoint.assisted(family, snapshot.candidateRevision()));
+                        if (advertiseProbeCandidate) expected.add(new DiagnosticHostPolicy.Endpoint(family,
+                                DiagnosticAdmissionCodec.address(family, bind.getAddress().getHostAddress()),
+                                bind.getPort(), snapshot.candidateRevision()));
                         long remaining = deadlineNanos - System.nanoTime();
                         if (remaining <= 0 || remaining > TimeUnit.MINUTES.toNanos(5)
                                 || !policy.context().incarnation().equals(profile.getAsJsonObject("statelessAdmission").get("incarnation").getAsString())
-                                || !policy.endpoints().equals(Set.of(DiagnosticHostPolicy.Endpoint.assisted(family, snapshot.candidateRevision()))))
+                                || !policy.endpoints().equals(expected))
                             throw new IllegalStateException("Fixture diagnostic authority changed");
                         long expiry = Math.min(policy.expiresAt(), System.currentTimeMillis() + TimeUnit.NANOSECONDS.toMillis(remaining));
-                        var endpoint = policy.endpoints().iterator().next();
+                        var endpointExpiries = new HashMap<DiagnosticHostPolicy.Endpoint, Long>();
+                        policy.endpointExpiries().forEach((endpoint, deadline) -> endpointExpiries.put(endpoint, Math.min(expiry, deadline)));
                         var bounded = new DiagnosticHostPolicy(policy.context(), policy.keys(), policy.endpoints(), expiry,
-                                Map.of(endpoint, Math.min(expiry, policy.endpointExpiries().get(endpoint))));
+                                endpointExpiries);
                         diagnostics = transport.channel().installDiagnostics(bounded, diagnostics);
                         result.complete(null);
                     } catch (Throwable failure) { result.completeExceptionally(failure); }
