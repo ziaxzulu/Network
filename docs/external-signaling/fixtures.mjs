@@ -110,3 +110,13 @@ console.log('NXS canonical signing, stateless encryption, fleet examples, and fi
 
 assert(schema.$defs.heartbeat.required.includes('acceptingPlayers'));
 assert.equal(f.fleetExamples.heartbeat.acceptingPlayers, true);
+
+// Compact and legacy hosts share signatures, key/profile acknowledgements and leases.
+assert.deepEqual(schema.$defs.heartbeat.required, ['acceptingPlayers', 'capacity', 'clockUnixMillis']);
+for (const field of schema.$defs.heartbeat.required) assert(field in f.compactHeartbeat);
+for (const field of ['healthy', 'load', 'protocolVersion', 'checkInVersion', 'state', 'gameOutcomes', 'region']) {
+  assert(!(field in f.compactHeartbeat));
+}
+assert.equal(f.compactHeartbeat.appliedStateRevision, 1);
+assert.deepEqual(Object.keys(f.compactHeartbeat.serverStatus).sort(), ['name', 'level', 'maxPlayers', 'gameType'].sort());
+assert(f.compactHeartbeat.playerCount.sampledAt <= f.compactHeartbeat.clockUnixMillis);

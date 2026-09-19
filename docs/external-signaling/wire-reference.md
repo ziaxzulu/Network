@@ -216,17 +216,22 @@ endpoint alongside the runtime.
 
 ## `heartbeat`
 
-Required fields: `healthy,acceptingPlayers,capacity,load,protocolVersion,clockUnixMillis,
-checkInVersion,state,gameOutcomes`.
-Optional fields: `build,region,serverStatus,hostProfile,hostProfileRevision,
-installedKeyIds,keyRequestId,appliedStateRevision,extensions`.
+Required fields: `acceptingPlayers,capacity,clockUnixMillis`.
+Optional observations: `playerCount,build,serverStatus,gameOutcomes,extensions`.
+Legacy fields: `healthy,load,protocolVersion,checkInVersion,state,region`.
+Profile/key exchange: `hostProfile,hostProfileRevision,installedKeyIds,keyRequestId`.
+Compatibility acknowledgement: `appliedStateRevision`.
 
-- `healthy` is application health. `acceptingPlayers` is explicit willingness to accept new players; false while draining or closed. A serving host may pause acceptance and later report true without changing lifecycle. Neither field is derived from player counts. Report acceptance changes promptly.
+- `acceptingPlayers` is the host's willingness and ability to accept new players.
+  Set it false during a fault, pause or shutdown and true to resume. Keep counting
+  existing players while paused. Missing heartbeats independently expire routing.
+  Neither acceptance nor actual counts are derived from public listing values.
 - `capacity` is an integer from 0 to 1000000; `load` is a finite number from 0 to 1.
-- `state` is `serving`, `draining` or `closed`. A draining endpoint cannot resume
+- Legacy `state` is `serving`, `draining` or `closed`. A draining endpoint cannot resume
   serving in the same generation; a fresh endpoint requires recovery/completion.
 - `gameOutcomes` is `available` when the integration observes game acceptance and
-  rejection, otherwise `unavailable`.
+  rejection, otherwise `unavailable`. Send it with the initial profile and whenever
+  it changes. Omission preserves the value in this generation, initially unavailable.
 - Serving state is reported by the game server. The provider may stop routing
   players to it, but cannot command its listener. Only explicitly enabled assisted joins
   (players or connectivity checks) can be unsolicited, and those require WebSocket transport.
@@ -242,6 +247,33 @@ installedKeyIds,keyRequestId,appliedStateRevision,extensions`.
   routing capacity/load. Omitted or failed status publication does not refresh
   a previous status snapshot.
 
+### Compatibility defaults and compact heartbeats
+
+Discovery `limits.compactHeartbeats: true` advertises the simplified exchange.
+Without it, send all earlier fields. The Java client handles this automatically;
+applications can use `Health(acceptingPlayers, capacity, build, playerCount)`.
+Older constructors remain supported.
+
+Updated providers accept omitted `healthy` as true, `load` as zero,
+`protocolVersion` as the legacy string `nethernet`, `checkInVersion` as 1 and
+`state` as `serving`. They are compatibility defaults, not application observations.
+Explicit legacy values remain validated and honored. Compact hosts omit `state`;
+false acceptance does not become an irreversible legacy drain. `region` may be
+omitted because registration already supplies it. Keep `build` and Unix
+millisecond snapshot and player sample timestamps.
+
+A request without `state` also opts into a compact reply. Optional provider
+identity, placement and duplicate readiness metadata need not be repeated.
+Required response fields, profile/key acknowledgements and the legacy
+`desiredState` echo remain unchanged. An omitted state echoes `serving`, even
+when acceptance is false; providers never command the listener.
+
+Compact `serverStatus` carries `name,level,maxPlayers,gameType` and `players`
+when no actual `playerCount` is supplied. Providers own advertised `protocol`
+and `version`; legacy reports may still include them. Renew the remaining
+metadata together: omission does not refresh an old snapshot. Providers may
+ignore listing metadata when several hosts share a public endpoint.
+
 ### Actual player counts
 
 Optional `playerCount: {connectedPlayers, sampledAt}` reports the actual number of
@@ -249,7 +281,7 @@ players connected to this runtime, including existing players while it is draini
 `connectedPlayers` is an integer from 0 to 1000000; `sampledAt` is Unix milliseconds
 from the host clock. The heartbeat's admission `capacity` must come from the same
 observation. Count may exceed capacity after a capacity reduction. Capacity zero
-means no admission. `load` remains a separate health/load observation.
+means no admission. New integrations need not calculate the legacy `load` ratio.
 
 This count is independent of the public `serverStatus.players` and its advertised
 `maxPlayers`. A public/global override must never change the count or admission

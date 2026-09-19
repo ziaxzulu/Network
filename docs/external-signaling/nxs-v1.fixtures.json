@@ -121,5 +121,21 @@
       "acceptingPlayers": true,
       "appliedStateRevision": 0
     }
+  },
+  "compactHeartbeat": {
+    "capacity": 20,
+    "clockUnixMillis": 1788799970100,
+    "playerCount": {
+      "connectedPlayers": 3,
+      "sampledAt": 1788799970000
+    },
+    "serverStatus": {
+      "name": "Network listing",
+      "maxPlayers": 30000,
+      "gameType": 0,
+      "level": "world"
+    },
+    "acceptingPlayers": true,
+    "appliedStateRevision": 1
   }
 }

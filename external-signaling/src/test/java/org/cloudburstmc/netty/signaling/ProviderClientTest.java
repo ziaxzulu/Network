@@ -186,6 +186,49 @@ class ProviderClientTest {
     }
 
     @Test
+    void compactHeartbeatsNegotiateDefaultsAndPauseWithoutChangingGeneration(@TempDir Path path) throws Exception {
+        for (boolean compact : List.of(false, true)) try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            stub.compactHeartbeats = compact;
+            stub.checkInMillis = 60000;
+            var accepting = new java.util.concurrent.atomic.AtomicBoolean(true);
+            var transport = new FakeTransport();
+            transport.stateless = true;
+            ProviderClient client = new ProviderClient(
+                    new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Compact"),
+                    new ProviderStateStore(path.resolve(Boolean.toString(compact))), transport,
+                    () -> new ServerStatus("Game", 1234, "fixture", "world", 25000, 30, 0),
+                    () -> new ProviderClient.Health(accepting.get(), 20, "fixture",
+                            new ProviderClient.PlayerCount(3, System.currentTimeMillis())), message -> { });
+            try {
+                client.start().get(20, TimeUnit.SECONDS);
+                long generation = stub.generation;
+                for (String field : List.of("healthy", "load", "protocolVersion", "checkInVersion", "state")) {
+                    assertEquals(!compact, stub.lastHeartbeat.has(field), field);
+                }
+                for (String field : List.of("protocol", "version", "players")) {
+                    assertEquals(!compact, stub.lastHeartbeat.getAsJsonObject("serverStatus").has(field), field);
+                }
+                assertTrue(stub.lastHeartbeat.has("gameOutcomes"));
+                assertTrue(stub.lastHeartbeat.has("appliedStateRevision"));
+                accepting.set(false);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
+                assertEquals(!compact, stub.lastHeartbeat.has("gameOutcomes"));
+                assertEquals(3, stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt());
+                assertTrue(stub.lastHeartbeat.has("hostProfileRevision"));
+                assertFalse(stub.lastHeartbeat.has("hostProfile"));
+                accepting.set(true);
+                client.readiness().get(10, TimeUnit.SECONDS);
+                assertTrue(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
+                assertEquals(generation, stub.generation);
+            } finally {
+                client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            }
+            assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
+        }
+    }
+
+    @Test
     void usesProviderNeutralBearerAuthorizationWithoutPowOrPersistingTheToken(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             var config =

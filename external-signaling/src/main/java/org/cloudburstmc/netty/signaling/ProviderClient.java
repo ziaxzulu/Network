@@ -152,6 +152,13 @@ public final class ProviderClient implements AutoCloseable {
      */
     public record Health(boolean healthy, boolean acceptingPlayers, int capacity, double load, String protocolVersion, String build,
                          PlayerCount playerCount) {
+        /** Application observations; obsolete wire fields are supplied for older providers. */
+        public Health(boolean acceptingPlayers, int capacity, String build, PlayerCount playerCount) {
+            this(true, acceptingPlayers, capacity,
+                    playerCount == null ? 0 : Math.min(1, (double) playerCount.connectedPlayers() / Math.max(1, capacity)),
+                    "nethernet", build, playerCount);
+        }
+
         public Health {
             if (capacity < 0 || capacity > 1000000 || !Double.isFinite(load) || load < 0 || load > 1
                     || protocolVersion == null) {
@@ -218,6 +225,8 @@ public final class ProviderClient implements AutoCloseable {
     private boolean started;
     private boolean closed;
     private boolean scheduledCheckIns;
+    private boolean compactHeartbeats;
+    private Boolean lastReportedGameOutcomes;
     private long nextOutcomes;
     private long nextStatusUpdate;
     private long minUpdateIntervalMs = 1000;
@@ -386,6 +395,7 @@ public final class ProviderClient implements AutoCloseable {
             throw new IOException("Unsupported heartbeat interval");
         }
         JsonObject limits = discovery.getAsJsonObject("limits");
+        compactHeartbeats = new JsonPrimitive(true).equals(limits.get("compactHeartbeats"));
         if (limits.get("maxBodyBytes").getAsLong() < 1 || limits.get("maxBodyBytes").getAsLong() > 65536
                 || limits.get("clockSkewMs").getAsLong() < 0 || limits.get("clockSkewMs").getAsLong() > 60000) {
             throw new IOException("Unsupported provider limits");
@@ -803,8 +813,9 @@ public final class ProviderClient implements AutoCloseable {
                 body.add("keyRequestId", state.get("keyRequestId"));
             }
             Health health = healthSupplier.get();
-            body.addProperty("healthy", health.healthy());
-            body.addProperty("acceptingPlayers", health.acceptingPlayers() && installedKeyId != null && hostState.equals("serving"));
+            if (!compactHeartbeats) body.addProperty("healthy", health.healthy());
+            body.addProperty("acceptingPlayers", (!compactHeartbeats || health.healthy()) && health.acceptingPlayers()
+                    && installedKeyId != null && hostState.equals("serving"));
             JsonObject extensions = heartbeatExtensions.deepCopy();
             boolean diagnosticsAdvertised = diagnosticSnapshot != null && diagnosticInstallationCurrent(diagnosticSnapshot);
             if (profileSnapshot != null && profileSnapshot.candidateRevision() > 0) {
@@ -827,28 +838,39 @@ public final class ProviderClient implements AutoCloseable {
             if (!extensions.isEmpty()) body.add("extensions", extensions);
             ProtocolExtensions.validate(body);
             body.addProperty("capacity", health.capacity());
-            body.addProperty("load", health.load());
+            if (!compactHeartbeats) body.addProperty("load", health.load());
             if (health.playerCount() != null) {
                 body.add("playerCount", JSON.toJsonTree(health.playerCount()));
             }
-            body.addProperty("protocolVersion", health.protocolVersion());
+            if (!compactHeartbeats) body.addProperty("protocolVersion", health.protocolVersion());
             if (health.build() != null) body.addProperty("build", health.build());
-            if (config.region() != null) {
+            if (!compactHeartbeats && config.region() != null) {
                 body.addProperty("region", config.region());
             }
             snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1);
             body.addProperty("clockUnixMillis", snapshotClock);
-            body.addProperty("checkInVersion", 1);
-            body.addProperty("state", hostState);
+            if (!compactHeartbeats) {
+                body.addProperty("checkInVersion", 1);
+                body.addProperty("state", hostState);
+            }
             // Keep the v1 field for older providers; acknowledging an echo never controls the listener.
             body.addProperty("appliedStateRevision", appliedStateRevision);
-            body.addProperty("gameOutcomes", transport.supportsGameOutcomes() ? "available" : "unavailable");
+            boolean gameOutcomes = transport.supportsGameOutcomes();
+            if (!compactHeartbeats || body.has("hostProfile") || !Objects.equals(lastReportedGameOutcomes, gameOutcomes)) {
+                body.addProperty("gameOutcomes", gameOutcomes ? "available" : "unavailable");
+            }
             ServerStatus status = null;
             try {
                 status = currentStatus();
                 diagnostics.recovered(ProviderLog.Operation.SERVER_STATUS);
                 if (status != null) {
-                    body.add("serverStatus", JSON.toJsonTree(status));
+                    JsonObject listing = JSON.toJsonTree(status).getAsJsonObject();
+                    if (compactHeartbeats) {
+                        listing.remove("protocol");
+                        listing.remove("version");
+                        if (health.playerCount() != null) listing.remove("players");
+                    }
+                    body.add("serverStatus", listing);
                 }
             } catch (RuntimeException failure) {
                 diagnostics.failed(ProviderLog.Operation.SERVER_STATUS);
@@ -949,6 +971,7 @@ public final class ProviderClient implements AutoCloseable {
                     scheduledCheckIns ? minUpdateIntervalMs : intervalMs);
             lastReportedStatus = status;
             lastReportedHealth = health;
+            lastReportedGameOutcomes = gameOutcomes;
             lastHeartbeat = response.deepCopy();
             if (profileSnapshot != null) {
                 publishedProfileSnapshot = profileSnapshot;

@@ -229,6 +229,15 @@
             }
           },
           "additionalProperties": false
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "compactHeartbeats": {
+              "type": "boolean",
+              "description": "Accepts omitted legacy heartbeat fields, compact serverStatus, implicit check-in scheduling and compact replies. Without true, hosts send legacy fields."
+            }
+          }
         }
       }
     },
@@ -558,19 +567,15 @@
     "heartbeat": {
       "type": "object",
       "required": [
-        "healthy",
         "acceptingPlayers",
         "capacity",
-        "load",
-        "protocolVersion",
-        "clockUnixMillis",
-        "checkInVersion",
-        "state",
-        "gameOutcomes"
+        "clockUnixMillis"
       ],
       "properties": {
         "healthy": {
-          "type": "boolean"
+          "type": "boolean",
+          "default": true,
+          "deprecated": true
         },
         "capacity": {
           "type": "integer",
@@ -580,11 +585,15 @@
         "load": {
           "type": "number",
           "minimum": 0,
-          "maximum": 1
+          "maximum": 1,
+          "default": 0,
+          "deprecated": true
         },
         "protocolVersion": {
           "type": "string",
-          "maxLength": 128
+          "maxLength": 128,
+          "default": "nethernet",
+          "deprecated": true
         },
         "clockUnixMillis": {
           "type": "integer",
@@ -592,16 +601,21 @@
           "maximum": 9007199254740991
         },
         "checkInVersion": {
-          "const": 1
+          "const": 1,
+          "default": 1,
+          "deprecated": true
         },
         "state": {
-          "$ref": "#/$defs/hostState"
+          "$ref": "#/$defs/hostState",
+          "default": "serving",
+          "deprecated": true
         },
         "gameOutcomes": {
           "enum": [
             "available",
             "unavailable"
-          ]
+          ],
+          "description": "Report with the initial host profile and whenever this capability changes. Omission preserves the current generation value; initially unavailable."
         },
         "build": {
           "type": "string",
@@ -612,7 +626,8 @@
           "maxLength": 32
         },
         "serverStatus": {
-          "type": "object"
+          "type": "object",
+          "description": "In compact mode protocol/version are provider-owned and may be omitted; players may be omitted when playerCount is supplied. Renew all remaining metadata together."
         },
         "hostProfile": {
           "$ref": "#/$defs/hostProfile"
@@ -663,7 +678,10 @@
                   "closed"
                 ]
               }
-            }
+            },
+            "required": [
+              "state"
+            ]
           },
           "then": {
             "properties": {

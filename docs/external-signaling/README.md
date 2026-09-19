@@ -45,18 +45,24 @@ registration and recovery remain HTTPS. See [control transport](control-v1.md).
 Send a signed `heartbeat` immediately after startup and whenever its returned
 schedule says to check in. The request carries:
 
-- Health, admission capacity, load, optional actual player counts with sample time,
+- Acceptance, admission capacity, build, snapshot time, actual player counts with sample time,
   and independent optional public server status.
 - `hostProfile` when endpoint details change; otherwise `hostProfileRevision`.
 - `installedKeyIds`, listing installed admission epochs with the active one last.
-- Local `state` (`serving`, `draining` or `closed`) and whether the integration
-  can report game outcomes.
+- Whether the integration can report game outcomes, with the initial profile
+  and whenever that capability changes.
 
 The reply returns the accepted profile revision, readiness, lease/schedule
 and any admission-key updates. A host becomes routable only with
 a live lease, usable profile and acknowledged installed key.
 
-Report `healthy` and `acceptingPlayers` independently on every heartbeat. A healthy draining host reports false acceptance and continues reporting its actual remaining players. A serving host can pause and resume acceptance without changing lifecycle.
+Report `acceptingPlayers: false` to pause admission, including during a fault or
+shutdown. Keep reporting actual remaining players. Report true to resume.
+When discovery advertises `limits.compactHeartbeats: true`, omit the redundant
+health/load/version/state/check-in fields; otherwise retain the old wire shape.
+The Java client handles compatibility automatically. Applications supply
+`new ProviderClient.Health(acceptingPlayers, capacity, build, playerCount)`.
+See the [compatibility defaults](wire-reference.md#compatibility-defaults-and-compact-heartbeats).
 
 The game server owns its serving state. The provider may stop routing new
 players to it, but never sends a serve/drain/close instruction. Only explicitly
@@ -71,7 +77,7 @@ installed IDs. The provider cannot issue new tokens under that epoch before the
 acknowledgement. Retain older keys until their reported retirement deadlines.
 
 On orderly shutdown, stop accepting new joins and immediately heartbeat with
-`state: "draining"`. Do not wait for the periodic timer. A provider outage lets
+`acceptingPlayers: false`. Do not wait for the periodic timer. A provider outage lets
 routing leases expire; it does not by itself close established sessions.
 
 ## 3. Accept a stateless join and report the outcome
@@ -93,7 +99,8 @@ Send signed `outcomes` batches asynchronously, independently of heartbeat timing
 | An authenticated observed attempt fails before transport becomes usable | `ticket.failed`, with a bounded reason |
 | The game admits or rejects the player | `ticket.game_joined` or `ticket.game_rejected`, when the integration observes this boundary |
 
-Declare game-outcome support as `available` or `unavailable` in heartbeat. A
+Declare game-outcome support as `available` or `unavailable` with the first profile
+and when it changes. A
 transport connection never proves successful gameplay. Intermediate ICE, DTLS
 and SCTP stages are optional diagnostics in the same stream.
 
