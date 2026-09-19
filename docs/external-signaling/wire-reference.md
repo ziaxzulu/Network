@@ -359,7 +359,7 @@ Request: `{events:[{ticketId,stage,occurredAt,reason?}]}` with at most 100 event
 The ticket ID derives from the authenticated admission carrier, never from an
 unauthenticated packet. The provider scopes correlation to the signed instance.
 No provider-specific routing decision ID is required.
-When discovery advertises `org.nethernet.connectivity` version 1, events may also
+When discovery advertises `dev.opencollab.nxs.connectivity` version 1, events may also
 include the observed client `remoteAddress` (numeric IP) and `remotePort` (1–65535)
 as a pair. Use the actual transport observation; omit the pair when unavailable.
 Hosts omit these optional fields for older providers so the base outcome remains
@@ -520,6 +520,10 @@ what claiming an account means or require other providers to implement it.
 lowercase domain-style labels and have at most 128 characters. Each value is
 `{version:positiveInteger,critical:boolean,data:object}`.
 
+Extensions defined by this specification use `dev.opencollab.nxs.*`, including
+`dev.opencollab.nxs.connectivity` and `dev.opencollab.nxs.websocket`.
+Provider-specific extensions use the provider's own reverse-DNS namespace.
+
 Pass through or ignore unknown optional extensions; never execute them
 automatically. Reject unsupported critical extensions before sending credentials
 or publishing readiness. An optional extension cannot change the core protocol rules.
@@ -540,7 +544,7 @@ from these checks.
 
 ### Optional connectivity observation
 
-Provider discovery supplies STUN configuration through `org.nethernet.connectivity`:
+Provider discovery supplies STUN configuration through `dev.opencollab.nxs.connectivity`:
 
 ```json
 {"version":1,"critical":false,"data":{"stunServers":[{"host":"stun.cloudflare.com","port":3478}]}}
