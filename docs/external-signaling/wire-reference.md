@@ -366,8 +366,8 @@ No provider-specific routing decision ID is required.
 When discovery advertises `dev.opencollab.nxs.connectivity` version 1, events may also
 include the observed client `remoteAddress` (numeric IP) and `remotePort` (1–65535)
 as a pair. Use the actual transport observation; omit the pair when unavailable.
-Hosts omit these optional fields for older providers so the base outcome remains
-compatible. This reports the client endpoint, not a candidate publication command.
+Include these optional fields only when the provider advertises the connectivity
+extension. They report the client endpoint, not a candidate publication command.
 
 Required stages are `ticket.data_channels_open` and `ticket.failed` for observed
 transport attempts, plus `ticket.game_joined`/`ticket.game_rejected` when
