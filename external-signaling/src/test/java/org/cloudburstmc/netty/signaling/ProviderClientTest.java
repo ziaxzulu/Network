@@ -324,7 +324,7 @@ class ProviderClientTest {
         }
     }
 
-    static final class FakeTransport implements ProviderTransport {
+    static class FakeTransport implements ProviderTransport {
         final CompletableFuture<Void> closed = new CompletableFuture<>();
         final Queue<JsonObject> events = new ConcurrentLinkedQueue<>();
         volatile int installed, drains;
