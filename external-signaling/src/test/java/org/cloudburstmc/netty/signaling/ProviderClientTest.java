@@ -149,12 +149,12 @@ class ProviderClientTest {
                 assertEquals(sample.get().sampledAt(),
                         stub.lastHeartbeat.getAsJsonObject("playerCount").get("sampledAt").getAsLong());
                 assertEquals(20, stub.lastHeartbeat.get("capacity").getAsInt());
-                assertEquals(25000, stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt());
+                assertFalse(stub.lastHeartbeat.getAsJsonObject("serverStatus").has("players"));
                 assertTrue(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
                 accepting.set(false);
                 client.requestStatusRefresh();
                 eventually(() -> !stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
-                assertTrue(stub.lastHeartbeat.get("healthy").getAsBoolean());
+                assertFalse(stub.lastHeartbeat.has("healthy"));
                 accepting.set(true);
                 client.requestStatusRefresh();
                 eventually(() -> stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
@@ -167,35 +167,35 @@ class ProviderClientTest {
                 client.requestStatusRefresh();
                 eventually(() -> stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt()
                         == 4);
-                assertEquals(25000, stub.lastHeartbeat.getAsJsonObject("serverStatus").get("players").getAsInt());
+                assertFalse(stub.lastHeartbeat.getAsJsonObject("serverStatus").has("players"));
                 client.drain().get(10, TimeUnit.SECONDS);
                 assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
                 sample.set(new ProviderClient.PlayerCount(5, System.currentTimeMillis()));
                 client.requestStatusRefresh();
                 eventually(() -> stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt() == 5);
-                assertTrue(stub.lastHeartbeat.get("healthy").getAsBoolean());
+                assertFalse(stub.lastHeartbeat.has("healthy"));
                 assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
             } finally {
                 client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS);
             }
             assertTrue(stub.draining);
-            assertTrue(stub.lastHeartbeat.get("healthy").getAsBoolean());
+            assertFalse(stub.lastHeartbeat.has("healthy"));
             assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
             assertEquals(5, stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt());
         }
     }
 
     @Test
-    void compactHeartbeatsNegotiateDefaultsAndPauseWithoutChangingGeneration(@TempDir Path path) throws Exception {
-        for (boolean compact : List.of(false, true)) try (IndependentProviderStub stub = new IndependentProviderStub()) {
-            stub.compactHeartbeats = compact;
+    void heartbeatsUseTheStandardFormatAndPauseWithoutChangingGeneration(@TempDir Path path) throws Exception {
+        try (IndependentProviderStub stub = new IndependentProviderStub()) {
+            stub.desiredState = null;
             stub.checkInMillis = 60000;
             var accepting = new java.util.concurrent.atomic.AtomicBoolean(true);
             var transport = new FakeTransport();
             transport.stateless = true;
             ProviderClient client = new ProviderClient(
                     new ProviderClient.Configuration(URI.create(stub.origin), "nxs-admission-v1", "Compact"),
-                    new ProviderStateStore(path.resolve(Boolean.toString(compact))), transport,
+                    new ProviderStateStore(path), transport,
                     () -> new ServerStatus("Game", 1234, "fixture", "world", 25000, 30, 0),
                     () -> new ProviderClient.Health(accepting.get(), 20, "fixture",
                             new ProviderClient.PlayerCount(3, System.currentTimeMillis())), message -> { });
@@ -203,17 +203,17 @@ class ProviderClientTest {
                 client.start().get(20, TimeUnit.SECONDS);
                 long generation = stub.generation;
                 for (String field : List.of("healthy", "load", "protocolVersion", "checkInVersion", "state")) {
-                    assertEquals(!compact, stub.lastHeartbeat.has(field), field);
+                    assertFalse(stub.lastHeartbeat.has(field), field);
                 }
                 for (String field : List.of("protocol", "version", "players")) {
-                    assertEquals(!compact, stub.lastHeartbeat.getAsJsonObject("serverStatus").has(field), field);
+                    assertFalse(stub.lastHeartbeat.getAsJsonObject("serverStatus").has(field), field);
                 }
                 assertTrue(stub.lastHeartbeat.has("gameOutcomes"));
                 assertTrue(stub.lastHeartbeat.has("appliedStateRevision"));
                 accepting.set(false);
                 client.readiness().get(10, TimeUnit.SECONDS);
                 assertFalse(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
-                assertEquals(!compact, stub.lastHeartbeat.has("gameOutcomes"));
+                assertFalse(stub.lastHeartbeat.has("gameOutcomes"));
                 assertEquals(3, stub.lastHeartbeat.getAsJsonObject("playerCount").get("connectedPlayers").getAsInt());
                 assertTrue(stub.lastHeartbeat.has("hostProfileRevision"));
                 assertFalse(stub.lastHeartbeat.has("hostProfile"));
@@ -583,7 +583,7 @@ class ProviderClientTest {
                 stub.desiredRevision = 2;
                 client.readiness().get(10, TimeUnit.SECONDS);
                 assertEquals(0, host.drains, "Provider responses must not control the game listener");
-                assertEquals("serving", stub.lastHeartbeat.get("state").getAsString());
+                assertTrue(stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
             }
             assertEquals(0, host.admissions, "Stateless NXS has no per-join provider work");
             assertTrue(stub.appliedRevision < 2, "Host must not acknowledge an instruction it did not apply");
@@ -636,7 +636,7 @@ class ProviderClientTest {
     }
 
     @Test
-    void olderProviderReceivesOriginalOutcomeFields(@TempDir Path path) throws Exception {
+    void outcomesOmitUnadvertisedConnectivityMetadata(@TempDir Path path) throws Exception {
         try (IndependentProviderStub stub = new IndependentProviderStub()) {
             FakeTransport host = new FakeTransport();
             var client = new ProviderClient(

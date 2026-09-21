@@ -58,18 +58,17 @@ a live lease, usable profile and acknowledged installed key.
 
 Report `acceptingPlayers: false` to pause admission, including during a fault or
 shutdown. Keep reporting actual remaining players. Report true to resume.
-When discovery advertises `limits.compactHeartbeats: true`, omit the redundant
-health/load/version/state/check-in fields; otherwise retain the old wire shape.
-The Java client handles compatibility automatically. Applications supply
+Applications supply
 `new ProviderClient.Health(acceptingPlayers, capacity, build, playerCount)`.
-See the [compatibility defaults](wire-reference.md#compatibility-defaults-and-compact-heartbeats).
 
 The game server owns its serving state. The provider may stop routing new
 players to it, but never sends a serve/drain/close instruction. Only explicitly
 enabled assisted joins (players or connectivity checks) may be unsolicited, and
-those require WebSocket transport. Legacy
-`appliedStateRevision`/`desiredState` fields remain as compatibility acknowledgements
-and echoes; they do not control the listener.
+those require WebSocket transport.
+
+Some implementations may still send or accept historic fields not listed in this
+specification. Those fields will be removed soon; new implementations must not
+depend on them.
 
 For a replacement admission key, include a fresh `keyRequestId`. Save and install
 the returned key, then immediately heartbeat with the updated profile and

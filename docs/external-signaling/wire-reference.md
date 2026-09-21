@@ -57,8 +57,8 @@ requires proof that the instance owns its signing key.
 | `heartbeatIntervalMs` | 1000–30000 |
 | `leaseMs` | Advertised lease duration |
 
-`checkInVersion: 1` enables the provider to set the next check-in time in its
-response. A provider MUST advertise every limit it enforces, reject oversized
+The provider may set the next check-in time in its heartbeat response.
+A provider MUST advertise every limit it enforces, reject oversized
 bodies, and return errors as `{"code":"lowercase_machine_code"}` with an
 appropriate HTTP failure status. Clients limit response size before parsing.
 
@@ -218,61 +218,33 @@ endpoint alongside the runtime.
 
 Required fields: `acceptingPlayers,capacity,clockUnixMillis`.
 Optional observations: `playerCount,build,serverStatus,gameOutcomes,extensions`.
-Legacy fields: `healthy,load,protocolVersion,checkInVersion,state,region`.
 Profile/key exchange: `hostProfile,hostProfileRevision,installedKeyIds,keyRequestId`.
-Compatibility acknowledgement: `appliedStateRevision`.
 
 - `acceptingPlayers` is the host's willingness and ability to accept new players.
   Set it false during a fault, pause or shutdown and true to resume. Keep counting
   existing players while paused. Missing heartbeats independently expire routing.
   Neither acceptance nor actual counts are derived from public listing values.
-- `capacity` is an integer from 0 to 1000000; `load` is a finite number from 0 to 1.
-- Legacy `state` is `serving`, `draining` or `closed`. A draining endpoint cannot resume
-  serving in the same generation; a fresh endpoint requires recovery/completion.
+- `capacity` is an integer from 0 to 1000000.
 - `gameOutcomes` is `available` when the integration observes game acceptance and
   rejection, otherwise `unavailable`. Send it with the initial profile and whenever
   it changes. Omission preserves the value in this generation, initially unavailable.
-- Serving state is reported by the game server. The provider may stop routing
-  players to it, but cannot command its listener. Only explicitly enabled assisted joins
-  (players or connectivity checks) can be unsolicited, and those require WebSocket transport.
-- For compatibility with older v1 peers, send `appliedStateRevision: 0` initially.
-  Providers return `desiredState: {revision,state}` echoing the reported state,
-  with revision at least 1 and no lower than the submitted acknowledgement.
-  Hosts may acknowledge a matching state; they must not apply a remote command.
-  Updated providers also accept omission of the legacy acknowledgement.
+- The game server owns admission. The provider may stop routing players to it,
+  but cannot command its listener. Only explicitly enabled assisted joins
+  (players or connectivity checks) can be unsolicited, over WebSocket transport.
 - `clockUnixMillis` is an increasing snapshot clock within the generation and
   must be within 30000 milliseconds of provider time.
-- `region` cannot change authorized placement. `serverStatus` contains
-  `name,protocol,version,level,players,maxPlayers,gameType`; it is independent of
-  routing capacity/load. Omitted or failed status publication does not refresh
-  a previous status snapshot.
+- `serverStatus` carries `name,level,maxPlayers,gameType` and optional `players`.
+  When players is omitted, use the supplied actual `playerCount`; without either,
+  the listing is incomplete. Providers own advertised protocol and version.
+  Renew metadata together: omission does not refresh a previous snapshot.
+  Providers may ignore host listing metadata when several hosts share a public endpoint.
 
-### Compatibility defaults and compact heartbeats
+The reply returns the receipt, readiness, lease/schedule and profile/key
+acknowledgements. Registration already supplies identity and placement.
 
-Discovery `limits.compactHeartbeats: true` advertises the simplified exchange.
-Without it, send all earlier fields. The Java client handles this automatically;
-applications can use `Health(acceptingPlayers, capacity, build, playerCount)`.
-Older constructors remain supported.
-
-Updated providers accept omitted `healthy` as true, `load` as zero,
-`protocolVersion` as the legacy string `nethernet`, `checkInVersion` as 1 and
-`state` as `serving`. They are compatibility defaults, not application observations.
-Explicit legacy values remain validated and honored. Compact hosts omit `state`;
-false acceptance does not become an irreversible legacy drain. `region` may be
-omitted because registration already supplies it. Keep `build` and Unix
-millisecond snapshot and player sample timestamps.
-
-A request without `state` also opts into a compact reply. Optional provider
-identity, placement and duplicate readiness metadata need not be repeated.
-Required response fields, profile/key acknowledgements and the legacy
-`desiredState` echo remain unchanged. An omitted state echoes `serving`, even
-when acceptance is false; providers never command the listener.
-
-Compact `serverStatus` carries `name,level,maxPlayers,gameType` and `players`
-when no actual `playerCount` is supplied. Providers own advertised `protocol`
-and `version`; legacy reports may still include them. Renew the remaining
-metadata together: omission does not refresh an old snapshot. Providers may
-ignore listing metadata when several hosts share a public endpoint.
+Some implementations may still send or accept historic fields not listed in this
+specification. Those fields will be removed soon; new implementations must not
+depend on them.
 
 ### Actual player counts
 
@@ -281,7 +253,7 @@ players connected to this runtime, including existing players while it is draini
 `connectedPlayers` is an integer from 0 to 1000000; `sampledAt` is Unix milliseconds
 from the host clock. The heartbeat's admission `capacity` must come from the same
 observation. Count may exceed capacity after a capacity reduction. Capacity zero
-means no admission. New integrations need not calculate the legacy `load` ratio.
+means no admission.
 
 This count is independent of the public `serverStatus.players` and its advertised
 `maxPlayers`. A public/global override must never change the count or admission
@@ -373,9 +345,9 @@ checkIn: {version:1,afterMillis,nextCheckInAt,leaseExpiresAt,minUpdateIntervalMi
 ```
 
 Schedule timestamps are epoch milliseconds. `nextCheckInAt` precedes lease
-expiry. `checkInVersion: 1` requests scheduling; while an initial usable profile
-is unavailable the provider can omit `checkIn` and use its discovery cadence
-and `staleAfter` ISO8601 deadline. A draining/closed host is never routable.
+expiry. While an initial usable profile is unavailable the provider can omit
+`checkIn` and use its discovery cadence and `staleAfter` ISO8601 deadline.
+A host reporting `acceptingPlayers: false` is never routable.
 
 Readiness is a current provider observation; only the recorded `checkIn` or
 `staleAfter` grants a lease. Request replay returns that original grant. Hosts

@@ -303,20 +303,20 @@ class ProviderWebSocketTest {
     @Test
     void correctingAnInvalidHeartbeatDoesNotRequireRegistrationRecovery(@TempDir Path directory) throws Exception {
         try (Provider provider = new Provider()) {
-            AtomicReference<String> protocol = new AtomicReference<>("nethernet");
+            AtomicReference<String> build = new AtomicReference<>("fixture");
             ProviderClient client = client(provider, directory, ProviderClient.ControlTransport.AUTO,
                     new ProviderClientTest.FakeTransport(),
-                    () -> new ProviderClient.Health(true, true, 20, 0, protocol.get(), "fixture"));
+                    () -> new ProviderClient.Health(true, 20, build.get(), null));
             try {
                 client.start().get(20, TimeUnit.SECONDS);
-                protocol.set("x".repeat(129));
+                build.set("x".repeat(129));
                 ExecutionException rejected = assertThrows(ExecutionException.class,
                         () -> client.drain().get(10, TimeUnit.SECONDS));
                 assertEquals("Provider request failed: 400 invalid_heartbeat", rejected.getCause().getMessage());
                 assertFalse(Files.readString(directory.resolve("provider-state.json")).contains("pendingWebSocketOperation"));
-                protocol.set("nethernet-corrected");
+                build.set("corrected");
                 client.drain().get(10, TimeUnit.SECONDS);
-                assertEquals("nethernet-corrected", provider.stub.lastHeartbeat.get("protocolVersion").getAsString());
+                assertEquals("corrected", provider.stub.lastHeartbeat.get("build").getAsString());
                 assertEquals("websocket", client.lastControlCarrier());
                 assertEquals(1, provider.stub.generation);
             } finally { client.stop().toCompletableFuture().get(15, TimeUnit.SECONDS); }
@@ -337,7 +337,7 @@ class ProviderWebSocketTest {
                 assertEquals(2, provider.stub.generation, "Fresh signed operations require a recovered generation");
                 assertEquals(List.of(1L, 2L), provider.generations);
                 assertFalse(Files.readString(directory.resolve("provider-state.json")).contains("pendingWebSocketOperation"));
-                assertEquals("draining", provider.stub.lastHeartbeat.get("state").getAsString());
+                assertFalse(provider.stub.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
             } finally { client.stop().toCompletableFuture().get(15, TimeUnit.SECONDS); }
         }
     }
@@ -636,7 +636,7 @@ class ProviderWebSocketTest {
             if (rejectAfterDrop != null && droppedHeaders != null && Objects.equals(id, droppedHeaders.get("idempotency-key")))
                 return rejectAfterDrop;
             if (path.equals("/v1/nxs/heartbeat") && JsonParser.parseString(body).getAsJsonObject()
-                    .get("protocolVersion").getAsString().length() > 128)
+                    .get("build").getAsString().length() > 128)
                 return new Result(400, "{\"code\":\"invalid_heartbeat\"}");
             if (id != null && rejectNext != null) {
                 Result rejected = rejectNext;

@@ -105,18 +105,14 @@ assert.equal(f.fleetExamples.heartbeat.serverStatus.players, 25000);
 assert(f.fleetExamples.heartbeat.playerCount.sampledAt <= f.fleetExamples.heartbeat.clockUnixMillis);
 
 assert.deepEqual(Object.keys(f.fleetExamples.heartbeat.serverStatus).sort(),
-    ['name', 'protocol', 'version', 'level', 'players', 'maxPlayers', 'gameType'].sort());
+    ['name', 'level', 'players', 'maxPlayers', 'gameType'].sort());
 console.log('NXS canonical signing, stateless encryption, fleet examples, and fixture hashes verified.');
 
 assert(schema.$defs.heartbeat.required.includes('acceptingPlayers'));
 assert.equal(f.fleetExamples.heartbeat.acceptingPlayers, true);
 
-// Compact and legacy hosts share signatures, key/profile acknowledgements and leases.
+// The standard heartbeat examples contain only specified fields.
 assert.deepEqual(schema.$defs.heartbeat.required, ['acceptingPlayers', 'capacity', 'clockUnixMillis']);
-for (const field of schema.$defs.heartbeat.required) assert(field in f.compactHeartbeat);
-for (const field of ['healthy', 'load', 'protocolVersion', 'checkInVersion', 'state', 'gameOutcomes', 'region']) {
-  assert(!(field in f.compactHeartbeat));
+for (const field of Object.keys(f.fleetExamples.heartbeat)) {
+  assert(field in schema.$defs.heartbeat.properties);
 }
-assert.equal(f.compactHeartbeat.appliedStateRevision, 1);
-assert.deepEqual(Object.keys(f.compactHeartbeat.serverStatus).sort(), ['name', 'level', 'maxPlayers', 'gameType'].sort());
-assert(f.compactHeartbeat.playerCount.sampledAt <= f.compactHeartbeat.clockUnixMillis);

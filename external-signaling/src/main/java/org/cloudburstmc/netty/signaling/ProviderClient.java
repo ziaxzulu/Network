@@ -152,11 +152,9 @@ public final class ProviderClient implements AutoCloseable {
      */
     public record Health(boolean healthy, boolean acceptingPlayers, int capacity, double load, String protocolVersion, String build,
                          PlayerCount playerCount) {
-        /** Application observations; obsolete wire fields are supplied for older providers. */
+        /** Application observations without the obsolete health/load/version arguments. */
         public Health(boolean acceptingPlayers, int capacity, String build, PlayerCount playerCount) {
-            this(true, acceptingPlayers, capacity,
-                    playerCount == null ? 0 : Math.min(1, (double) playerCount.connectedPlayers() / Math.max(1, capacity)),
-                    "nethernet", build, playerCount);
+            this(true, acceptingPlayers, capacity, 0, "nethernet", build, playerCount);
         }
 
         public Health {
@@ -225,7 +223,6 @@ public final class ProviderClient implements AutoCloseable {
     private boolean started;
     private boolean closed;
     private boolean scheduledCheckIns;
-    private boolean compactHeartbeats;
     private Boolean lastReportedGameOutcomes;
     private long nextOutcomes;
     private long nextStatusUpdate;
@@ -395,7 +392,6 @@ public final class ProviderClient implements AutoCloseable {
             throw new IOException("Unsupported heartbeat interval");
         }
         JsonObject limits = discovery.getAsJsonObject("limits");
-        compactHeartbeats = new JsonPrimitive(true).equals(limits.get("compactHeartbeats"));
         if (limits.get("maxBodyBytes").getAsLong() < 1 || limits.get("maxBodyBytes").getAsLong() > 65536
                 || limits.get("clockSkewMs").getAsLong() < 0 || limits.get("clockSkewMs").getAsLong() > 60000) {
             throw new IOException("Unsupported provider limits");
@@ -733,8 +729,7 @@ public final class ProviderClient implements AutoCloseable {
                 || health.acceptingPlayers() != lastReportedHealth.acceptingPlayers()
                 || health.capacity() != lastReportedHealth.capacity()
                 || !Objects.equals(connectedPlayers(health), connectedPlayers(lastReportedHealth))
-                || !Objects.equals(health.protocolVersion(), lastReportedHealth.protocolVersion()) || !Objects.equals(
-                health.build(), lastReportedHealth.build());
+                || !Objects.equals(health.build(), lastReportedHealth.build());
     }
 
     private static Integer connectedPlayers(Health health) {
@@ -813,8 +808,7 @@ public final class ProviderClient implements AutoCloseable {
                 body.add("keyRequestId", state.get("keyRequestId"));
             }
             Health health = healthSupplier.get();
-            if (!compactHeartbeats) body.addProperty("healthy", health.healthy());
-            body.addProperty("acceptingPlayers", (!compactHeartbeats || health.healthy()) && health.acceptingPlayers()
+            body.addProperty("acceptingPlayers", health.healthy() && health.acceptingPlayers()
                     && installedKeyId != null && hostState.equals("serving"));
             JsonObject extensions = heartbeatExtensions.deepCopy();
             boolean diagnosticsAdvertised = diagnosticSnapshot != null && diagnosticInstallationCurrent(diagnosticSnapshot);
@@ -838,25 +832,16 @@ public final class ProviderClient implements AutoCloseable {
             if (!extensions.isEmpty()) body.add("extensions", extensions);
             ProtocolExtensions.validate(body);
             body.addProperty("capacity", health.capacity());
-            if (!compactHeartbeats) body.addProperty("load", health.load());
             if (health.playerCount() != null) {
                 body.add("playerCount", JSON.toJsonTree(health.playerCount()));
             }
-            if (!compactHeartbeats) body.addProperty("protocolVersion", health.protocolVersion());
             if (health.build() != null) body.addProperty("build", health.build());
-            if (!compactHeartbeats && config.region() != null) {
-                body.addProperty("region", config.region());
-            }
             snapshotClock = Math.max(System.currentTimeMillis(), snapshotClock + 1);
             body.addProperty("clockUnixMillis", snapshotClock);
-            if (!compactHeartbeats) {
-                body.addProperty("checkInVersion", 1);
-                body.addProperty("state", hostState);
-            }
-            // Keep the v1 field for older providers; acknowledging an echo never controls the listener.
+            // Temporary historic field; acknowledging an echo never controls the listener.
             body.addProperty("appliedStateRevision", appliedStateRevision);
             boolean gameOutcomes = transport.supportsGameOutcomes();
-            if (!compactHeartbeats || body.has("hostProfile") || !Objects.equals(lastReportedGameOutcomes, gameOutcomes)) {
+            if (body.has("hostProfile") || !Objects.equals(lastReportedGameOutcomes, gameOutcomes)) {
                 body.addProperty("gameOutcomes", gameOutcomes ? "available" : "unavailable");
             }
             ServerStatus status = null;
@@ -865,11 +850,9 @@ public final class ProviderClient implements AutoCloseable {
                 diagnostics.recovered(ProviderLog.Operation.SERVER_STATUS);
                 if (status != null) {
                     JsonObject listing = JSON.toJsonTree(status).getAsJsonObject();
-                    if (compactHeartbeats) {
-                        listing.remove("protocol");
-                        listing.remove("version");
-                        if (health.playerCount() != null) listing.remove("players");
-                    }
+                    listing.remove("protocol");
+                    listing.remove("version");
+                    if (health.playerCount() != null) listing.remove("players");
                     body.add("serverStatus", listing);
                 }
             } catch (RuntimeException failure) {

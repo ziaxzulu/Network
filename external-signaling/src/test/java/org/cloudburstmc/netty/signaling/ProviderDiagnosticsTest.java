@@ -142,7 +142,7 @@ class ProviderDiagnosticsTest {
                 client.drain().get(10, TimeUnit.SECONDS);
                 assertTrue(transport.disabled > disables);
                 assertFalse(f.provider.lastHeartbeat.has("extensions"));
-                assertEquals("draining", f.provider.lastHeartbeat.get("state").getAsString());
+                assertFalse(f.provider.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
             } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }
         }
     }
@@ -252,7 +252,6 @@ class ProviderDiagnosticsTest {
                 transport.empty = true; transport.revision++; transport.publicationVersion++;
                 await(() -> f.provider.heartbeats > replaced);
                 assertTrue(f.provider.lastHeartbeat.getAsJsonObject("hostProfile").getAsJsonArray("candidates").isEmpty());
-                assertEquals("serving", f.provider.lastHeartbeat.get("state").getAsString());
                 assertTrue(f.provider.lastHeartbeat.get("acceptingPlayers").getAsBoolean());
                 assertEquals(0, transport.drains);
             } finally { client.stop().toCompletableFuture().get(10, TimeUnit.SECONDS); }

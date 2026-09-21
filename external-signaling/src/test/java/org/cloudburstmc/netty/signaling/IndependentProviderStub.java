@@ -27,7 +27,6 @@ public final class IndependentProviderStub implements AutoCloseable {
     volatile int outcomeAttempts;
     volatile boolean loseCompletionResponse;
     volatile long checkInMillis;
-    volatile boolean compactHeartbeats;
     volatile int controlPolls;
     final List<JsonObject> events = new CopyOnWriteArrayList<>();
     long generation, sequence;
@@ -110,7 +109,6 @@ public final class IndependentProviderStub implements AutoCloseable {
             }
             d.add("operations", operations);
             JsonObject limits = new JsonObject();
-            if (compactHeartbeats) limits.addProperty("compactHeartbeats", true);
             limits.addProperty("heartbeatIntervalMs", 1000);
             if (checkInMillis > 0) {
                 limits.addProperty("checkInVersion", 1);
@@ -294,11 +292,7 @@ public final class IndependentProviderStub implements AutoCloseable {
         ok.addProperty("accepted", true);
         switch (path) {
             case "/example/heartbeat" -> {
-                if (!compactHeartbeats) for (String field : List.of("healthy", "load", "protocolVersion", "checkInVersion", "state", "gameOutcomes")) {
-                    if (!body.has(field)) throw new Failure(400, "legacy_heartbeat_field_required");
-                }
-                if (!body.has("appliedStateRevision")) throw new Failure(400, "legacy_state_field_required");
-                appliedRevision = body.get("appliedStateRevision").getAsLong();
+                if (body.has("appliedStateRevision")) appliedRevision = body.get("appliedStateRevision").getAsLong();
                 lastHeartbeat = body;
                 heartbeats++;
                 if (body.has("installedKeyIds")) {
@@ -330,10 +324,12 @@ public final class IndependentProviderStub implements AutoCloseable {
                 JsonArray retirements = heartbeatRetirements;
                 if (retirements != null) ok.add("retirements", retirements.deepCopy());
                 draining = !body.get("acceptingPlayers").getAsBoolean();
-                JsonObject desired = new JsonObject();
-                desired.addProperty("revision", desiredRevision);
-                desired.addProperty("state", desiredState);
-                ok.add("desiredState", desired);
+                if (desiredState != null) {
+                    JsonObject desired = new JsonObject();
+                    desired.addProperty("revision", desiredRevision);
+                    desired.addProperty("state", desiredState);
+                    ok.add("desiredState", desired);
+                }
                 ok.addProperty("hostProfileRevision", "example-profile-" + profileRevision);
                 ok.addProperty("routable", profileRevision > 0 && keyAcknowledgements > 0 && !draining);
                 JsonObject ready = new JsonObject();
@@ -343,7 +339,7 @@ public final class IndependentProviderStub implements AutoCloseable {
                 if (extensionMetadata != null) {
                     ok.add("extensions", extensionMetadata.deepCopy());
                 }
-                if (checkInMillis > 0 && (compactHeartbeats || body.has("checkInVersion"))) {
+                if (checkInMillis > 0) {
                     long now = System.currentTimeMillis();
                     JsonObject schedule = new JsonObject();
                     schedule.addProperty("version", 1);
