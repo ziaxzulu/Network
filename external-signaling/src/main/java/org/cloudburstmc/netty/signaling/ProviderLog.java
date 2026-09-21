@@ -25,6 +25,7 @@ final class ProviderLog {
         STATUS("Cannot update the signaling service. Retrying automatically.", "Signaling service updates have resumed."),
         EVENTS("Cannot send connection reports. Retrying automatically.", "Connection reports are being sent again."),
         SERVER_STATUS("Cannot read the server status. Retrying automatically.", "Server status is available again."),
+        CONNECTIVITY("Cannot read connection check results. Retrying automatically.", "Connection check results are available again."),
         WEBSOCKET("Lost the live connection to the signaling service. Reconnecting automatically.", "Reconnected to the signaling service."),
         STORAGE("Cannot save signaling settings. Signaling is stopping.", "Signaling settings can be saved again."),
         DRAIN("Could not tell the signaling service that the server is stopping.", ""),
@@ -54,6 +55,13 @@ final class ProviderLog {
         if (failures.remove(operation)) {
             sink.accept(new ProviderDiagnostic(ProviderDiagnostic.Level.INFO, operation.recovery));
         }
+    }
+
+    // Each failed player attempt matters, even when another player just failed too.
+    void assistedJoinFailed(org.cloudburstmc.netty.signaling.control.AssistedJoin join) {
+        sink.accept(new ProviderDiagnostic(join.diagnostic() ? ProviderDiagnostic.Level.DEBUG : ProviderDiagnostic.Level.WARN,
+                join.diagnostic() ? "An assisted connection check could not complete."
+                        : "A player could not connect using an assisted join."));
     }
 
     void detail(Operation operation, String detail) {
